@@ -10,6 +10,7 @@ import {
   FileJson,
   MessageSquareReply,
   MessageSquareText,
+  RefreshCw,
   Search,
   Smartphone,
   Star,
@@ -113,11 +114,31 @@ function RatingDistribution({ data }: { data: ReviewAppDetailPageData }) {
   );
 }
 
-function SyncPanel({ data }: { data: ReviewAppDetailPageData }) {
+function SyncPanel({
+  data,
+  fetching,
+  onFetch,
+}: {
+  data: ReviewAppDetailPageData;
+  fetching: boolean;
+  onFetch: () => void;
+}) {
+  const syncRunning = data.syncState?.status === "running";
+
   return (
     <Card className="rounded-lg">
-      <CardHeader>
+      <CardHeader className="flex items-center justify-between gap-3">
         <CardTitle className="text-base">Sync State</CardTitle>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={fetching || syncRunning}
+          onClick={onFetch}
+        >
+          {fetching ? <Spinner /> : <RefreshCw size={14} />}
+          Fetch reviews
+        </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 text-sm sm:grid-cols-2">
@@ -445,6 +466,7 @@ function CommentJsonDialog({ review }: { review: AndroidStoreReviewDto }) {
 
 export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData }) {
   const router = useRouter();
+  const [fetchingReviews, setFetchingReviews] = useState(false);
   const [search, setSearch] = useState("");
   const [ratingFilter, setRatingFilter] = useState("all");
   const [replyFilter, setReplyFilter] = useState("all");
@@ -475,6 +497,49 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       return matchesSearch && matchesRating && matchesReply;
     });
   }, [data.reviews, ratingFilter, replyFilter, search]);
+  async function fetchReviews() {
+    if (fetchingReviews) return;
+
+    setFetchingReviews(true);
+
+    try {
+      const response = await fetch("/api/review-fetch-runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeMappingId: data.app.mappingId,
+          triggerType: "manual",
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        ok?: boolean;
+        result?: {
+          hasMore?: boolean;
+          pagesFetched?: number;
+          reviewsFetched?: number;
+          reviewsUpserted?: number;
+        };
+      };
+
+      if (!response.ok || !payload.ok || !payload.result) {
+        throw new Error(payload.error ?? "Reviews could not be fetched.");
+      }
+
+      const moreText = payload.result.hasMore ? " More pages are available." : "";
+      toast.success(
+        `Fetched ${payload.result.reviewsFetched ?? 0} reviews, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
+      );
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Reviews could not be fetched.",
+      );
+    } finally {
+      setFetchingReviews(false);
+    }
+  }
+
   async function sendReply(review: AndroidStoreReviewDto) {
     if (replyingReviewId) return;
 
@@ -582,7 +647,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <RatingDistribution data={data} />
-        <SyncPanel data={data} />
+        <SyncPanel data={data} fetching={fetchingReviews} onFetch={fetchReviews} />
       </div>
 
       <div className="rounded-lg border bg-card">
