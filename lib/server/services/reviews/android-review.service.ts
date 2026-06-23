@@ -21,7 +21,7 @@ import {
 import { cleanText } from "@/lib/server/services/credentials/credential.shared";
 import type {
   AndroidStoreReviewDto,
-  ReplyConfigPageData,
+  ReplyConfigBasePageData,
   ReviewAppCard,
   ReviewAppDetailPageData,
   ReviewAppStats,
@@ -387,12 +387,12 @@ function templateDto(
   };
 }
 
-export async function getReplyConfigPageData(): Promise<ReplyConfigPageData> {
+export async function getReplyConfigPageData(): Promise<ReplyConfigBasePageData> {
   const apps = await getReviewAppCards();
   const templates = await getAndroidReviewReplyTemplates(
     apps.map((app) => app.mappingId),
   );
-  const templatesByMappingId: ReplyConfigPageData["templatesByMappingId"] = {};
+  const templatesByMappingId: ReplyConfigBasePageData["templatesByMappingId"] = {};
 
   for (const app of apps) {
     templatesByMappingId[app.mappingId] = RATINGS.map((rating) =>

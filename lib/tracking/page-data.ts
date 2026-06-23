@@ -159,7 +159,26 @@ export type ReviewReplyTemplateDto = {
   updatedBy: string | null;
 };
 
-export type ReplyConfigPageData = {
+export type ReplyStoreSummary = {
+  storeProfileId: string;
+  storeAccountName: string;
+  apps: ReviewAppCard[];
+  appCount: number;
+  reviewCount: number;
+  pendingReplyCount: number;
+  activeTemplateCount: number;
+  lastFetchedAt: string | null;
+};
+
+export type ReplyStoreListPageData = {
+  stores: ReplyStoreSummary[];
+};
+
+export type ReplyConfigBasePageData = {
   apps: ReviewAppCard[];
   templatesByMappingId: Record<string, ReviewReplyTemplateDto[]>;
+};
+
+export type ReplyConfigPageData = ReplyConfigBasePageData & {
+  store: ReplyStoreSummary;
 };
