@@ -1,0 +1,261 @@
+name: Discord Notifications
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+  repository_dispatch:
+    types:
+      - vercel.deployment.success
+      - vercel.deployment.error
+      - vercel.deployment.failed
+      - vercel.deployment.canceled
+      - vercel.deployment.promoted
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  notify-ci:
+    name: Notify CI result
+    if: github.event_name == 'workflow_run'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Send CI status to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          ACTOR: ${{ github.event.workflow_run.actor.login }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          EVENT_NAME: ${{ github.event.workflow_run.event }}
+
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "Missing DISCORD_WEBHOOK_URL"
+            exit 1
+          fi
+
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+
+          if [ "$CONCLUSION" = "success" ]; then
+            TITLE="✅ CI / Sonar Quality thành công"
+            COLOR=5763719
+            STATUS_TEXT="Thành công"
+          elif [ "$CONCLUSION" = "cancelled" ]; then
+            TITLE="⚪ CI / Sonar Quality đã bị hủy"
+            COLOR=9807270
+            STATUS_TEXT="Đã hủy"
+          else
+            TITLE="❌ CI / Sonar Quality thất bại: $CONCLUSION"
+            COLOR=15548997
+            STATUS_TEXT="Thất bại"
+          fi
+
+          PAYLOAD="$(jq -n \
+            --arg title "$TITLE" \
+            --arg status "$STATUS_TEXT" \
+            --arg repository "$REPOSITORY" \
+            --arg workflow "$WORKFLOW_NAME" \
+            --arg event "$EVENT_NAME" \
+            --arg branch "$BRANCH" \
+            --arg actor "$ACTOR" \
+            --arg commit "$SHORT_SHA" \
+            --arg run_url "$RUN_URL" \
+            --argjson color "$COLOR" \
+            '{
+              username: "GitHub CI/CD",
+              allowed_mentions: {
+                parse: []
+              },
+              embeds: [
+                {
+                  title: $title,
+                  url: $run_url,
+                  color: $color,
+                  fields: [
+                    {
+                      name: "Status",
+                      value: $status,
+                      inline: true
+                    },
+                    {
+                      name: "Repository",
+                      value: $repository,
+                      inline: true
+                    },
+                    {
+                      name: "Branch",
+                      value: $branch,
+                      inline: true
+                    },
+                    {
+                      name: "Workflow",
+                      value: $workflow,
+                      inline: true
+                    },
+                    {
+                      name: "Event",
+                      value: $event,
+                      inline: true
+                    },
+                    {
+                      name: "Actor",
+                      value: $actor,
+                      inline: true
+                    },
+                    {
+                      name: "Commit",
+                      value: $commit,
+                      inline: true
+                    },
+                    {
+                      name: "GitHub Actions",
+                      value: ("[Open workflow run](" + $run_url + ")"),
+                      inline: false
+                    }
+                  ]
+                }
+              ]
+            }'
+          )"
+
+          curl \
+            --fail-with-body \
+            --retry 3 \
+            --retry-all-errors \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL"
+
+  notify-vercel:
+    name: Notify Vercel result
+    if: github.event_name == 'repository_dispatch'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Send Vercel status to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPOSITORY: ${{ github.repository }}
+
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "Missing DISCORD_WEBHOOK_URL"
+            exit 1
+          fi
+
+          EVENT_TYPE="$(jq -r '.action // "vercel.deployment.unknown"' "$GITHUB_EVENT_PATH")"
+          ENVIRONMENT="$(jq -r '.client_payload.environment // "unknown"' "$GITHUB_EVENT_PATH")"
+          DEPLOYMENT_URL="$(jq -r '.client_payload.url // "N/A"' "$GITHUB_EVENT_PATH")"
+          DEPLOYMENT_NAME="$(jq -r '.client_payload.name // "unknown"' "$GITHUB_EVENT_PATH")"
+          DEPLOYMENT_TARGET="$(jq -r '.client_payload.target // "unknown"' "$GITHUB_EVENT_PATH")"
+
+          case "$EVENT_TYPE" in
+            *.success|*.promoted)
+              TITLE="✅ Vercel deployment thành công"
+              COLOR=5763719
+              STATUS_TEXT="Thành công"
+              ;;
+
+            *.canceled)
+              TITLE="⚪ Vercel deployment đã bị hủy"
+              COLOR=9807270
+              STATUS_TEXT="Đã hủy"
+              ;;
+
+            *)
+              TITLE="❌ Vercel deployment thất bại"
+              COLOR=15548997
+              STATUS_TEXT="Thất bại"
+              ;;
+          esac
+
+          if [[ "$DEPLOYMENT_URL" != "N/A" && "$DEPLOYMENT_URL" != http* ]]; then
+            DEPLOYMENT_URL="https://$DEPLOYMENT_URL"
+          fi
+
+          PAYLOAD="$(jq -n \
+            --arg title "$TITLE" \
+            --arg status "$STATUS_TEXT" \
+            --arg repository "$REPOSITORY" \
+            --arg event "$EVENT_TYPE" \
+            --arg environment "$ENVIRONMENT" \
+            --arg target "$DEPLOYMENT_TARGET" \
+            --arg name "$DEPLOYMENT_NAME" \
+            --arg deployment_url "$DEPLOYMENT_URL" \
+            --argjson color "$COLOR" \
+            '{
+              username: "Vercel Deploy",
+              allowed_mentions: {
+                parse: []
+              },
+              embeds: [
+                {
+                  title: $title,
+                  color: $color,
+                  fields: [
+                    {
+                      name: "Status",
+                      value: $status,
+                      inline: true
+                    },
+                    {
+                      name: "Repository",
+                      value: $repository,
+                      inline: true
+                    },
+                    {
+                      name: "Environment",
+                      value: $environment,
+                      inline: true
+                    },
+                    {
+                      name: "Target",
+                      value: $target,
+                      inline: true
+                    },
+                    {
+                      name: "Project",
+                      value: $name,
+                      inline: true
+                    },
+                    {
+                      name: "Event",
+                      value: $event,
+                      inline: false
+                    },
+                    {
+                      name: "Deployment",
+                      value: ("[Open deployment](" + $deployment_url + ")"),
+                      inline: false
+                    }
+                  ]
+                }
+              ]
+            }'
+          )"
+
+          curl \
+            --fail-with-body \
+            --retry 3 \
+            --retry-all-errors \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL"
