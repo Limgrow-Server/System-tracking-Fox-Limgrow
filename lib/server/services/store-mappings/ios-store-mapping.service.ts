@@ -30,6 +30,7 @@ const mappingStatusMap: Record<string, MappingStatus> = {
 
 function normalizeIosMappingPayload(payload: StoreMappingPayload) {
   return {
+    appId: nullableText(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
@@ -73,6 +74,7 @@ export async function iosStoreMappingExists(id: string) {
 export async function saveIosStoreMappingDto(input: {
   appIconUrl: string | null;
   appLink: string | null;
+  appId: string | null;
   appName: string;
   bundleId: string;
   id?: string;
@@ -99,6 +101,7 @@ export async function createIosStoreMapping(payload: StoreMappingPayload) {
     const mapping = await saveIosStoreMappingDto({
       appIconUrl: row.appIconUrl,
       appLink: row.appLink,
+      appId: row.appId,
       appName: row.appName,
       bundleId: row.bundleId!,
       status: row.status,
@@ -129,6 +132,7 @@ export async function updateIosStoreMapping(payload: StoreMappingPayload) {
     const mapping = await saveIosStoreMappingDto({
       appIconUrl: row.appIconUrl,
       appLink: row.appLink,
+      appId: row.appId,
       appName: row.appName,
       bundleId: row.bundleId!,
       id,

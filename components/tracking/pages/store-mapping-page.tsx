@@ -22,6 +22,7 @@ import type { StoreMapping } from "@/lib/tracking/types";
 type StoreMappingForm = {
   appIconUrl: string;
   appLink: string;
+  appId: string;
   storeAccountName: string;
   appName: string;
   platform: "android" | "ios";
@@ -80,6 +81,7 @@ function createEmptyForm(platform: StoreMappingPlatformFilter): StoreMappingForm
   return {
     appIconUrl: "",
     appLink: "",
+    appId: "",
     storeAccountName: "",
     appName: "",
     platform,
@@ -97,6 +99,7 @@ function formFromMapping(mapping: StoreMapping): StoreMappingForm {
   return {
     appIconUrl: value(mapping.app_icon_url),
     appLink: value(mapping.app_link),
+    appId: value(mapping.app_id),
     storeAccountName: mapping.store_account_name,
     appName: mapping.app_name,
     platform: mapping.platform,
@@ -347,6 +350,16 @@ export function StoreMappingPage({
                         onChange={(event) => updateField("appName", event.target.value)}
                         placeholder="Display app name"
                         required
+                        readOnly={drawerReadOnly}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="appId">App ID</Label>
+                      <Input
+                        id="appId"
+                        value={form.appId}
+                        onChange={(event) => updateField("appId", event.target.value)}
+                        placeholder={isAndroidForm ? "LA-001" : "1234567890"}
                         readOnly={drawerReadOnly}
                       />
                     </div>

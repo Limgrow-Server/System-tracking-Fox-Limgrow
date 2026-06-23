@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { upsertIosStoreProfile } from "@/lib/server/repositories/ios/store-profile.repository";
 
 type SaveIosStoreMappingInput = {
+  appId: string | null;
   appIconUrl: string | null;
   appLink: string | null;
   appName: string;
@@ -42,6 +43,7 @@ export async function saveIosStoreMapping(
   });
 
   const data = {
+    appId: input.appId,
     appIconUrl: input.appIconUrl,
     appLink: input.appLink,
     appName: input.appName,

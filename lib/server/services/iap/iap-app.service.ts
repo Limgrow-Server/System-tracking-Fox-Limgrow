@@ -37,7 +37,7 @@ export async function getIapAppCards(): Promise<IapAppCard[]> {
   }));
 
   return [...androidCards, ...iosCards].sort((a, b) =>
-    a.appName.localeCompare(b.appName)
+    a.appName.localeCompare(b.appName),
   );
 }
 
@@ -52,7 +52,7 @@ export async function getIapAppDetail(
     const mapping = await getAndroidMappingById(mappingId);
     if (!mapping) throw new Error("Android mapping not found");
 
-    appCard = {
+    const appCard: IapAppCard = {
       mappingId: mapping.id,
       platform: "android",
       appName: mapping.appName,
@@ -65,14 +65,17 @@ export async function getIapAppDetail(
 
     const rawTransactions = await getAndroidTransactionsByPackageAndProfile(
       mapping.packageName,
-      mapping.storeProfileId
+      mapping.storeProfileId,
     );
-    transactions = rawTransactions.map(iapAndroidToDto);
+    return {
+      appCard,
+      transactions: rawTransactions.map(iapAndroidToDto),
+    };
   } else if (platform === "ios") {
     const mapping = await getIosMappingById(mappingId);
     if (!mapping) throw new Error("iOS mapping not found");
 
-    appCard = {
+    const appCard: IapAppCard = {
       mappingId: mapping.id,
       platform: "ios",
       appName: mapping.appName,

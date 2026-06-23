@@ -1,6 +1,6 @@
 "use client";
 
-import { CredentialConfigs } from "@/components/tracking/pages/credential-configs";
+import { CredentialConfigs } from "@/components/tracking/pages/configs/credential-configs";
 import type { ConfigsPageData } from "@/lib/tracking/page-data";
 
 export type ConfigsPlatform = "android" | "ios";

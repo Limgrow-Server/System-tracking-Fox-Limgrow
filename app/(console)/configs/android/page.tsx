@@ -1,4 +1,4 @@
-import { ConfigsPage } from "@/components/tracking/pages/configs-page";
+import { ConfigsPage } from "@/components/tracking/pages/configs/configs-page";
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getAndroidConfigsPageData } from "@/lib/server/page-loaders/android/configs.loader";
 

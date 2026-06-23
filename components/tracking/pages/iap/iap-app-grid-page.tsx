@@ -29,6 +29,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { PageHeader } from "@/components/tracking/primitives";
 import { cn } from "@/lib/utils";
 import type { IapAppGridPageData } from "@/lib/tracking/page-data";
 import { PageHeader } from "../primitives";

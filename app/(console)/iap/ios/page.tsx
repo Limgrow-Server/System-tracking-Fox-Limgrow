@@ -1,4 +1,4 @@
-import { IosIapPage } from "@/components/tracking/pages/ios-iap-page";
+import { IosIapPage } from "@/components/tracking/pages/iap/ios-iap-page";
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getIosIapPageData } from "@/lib/server/page-loaders/ios/iap-verify.loader";
 

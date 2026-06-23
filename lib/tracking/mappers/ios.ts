@@ -18,6 +18,7 @@ export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): Store
     store_profile_id: mapping.storeProfileId,
     store_platform: "apple_app_store",
     store_account_name: mapping.storeAccountName,
+    app_id: mapping.appId,
     app_name: mapping.appName,
     app_icon_url: mapping.appIconUrl,
     app_link: mapping.appLink,

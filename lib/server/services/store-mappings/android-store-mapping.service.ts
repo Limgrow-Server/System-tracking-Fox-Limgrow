@@ -30,6 +30,7 @@ const mappingStatusMap: Record<string, MappingStatus> = {
 
 function normalizeAndroidMappingPayload(payload: StoreMappingPayload) {
   return {
+    appId: nullableText(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
@@ -73,6 +74,7 @@ export async function androidStoreMappingExists(id: string) {
 export async function saveAndroidStoreMappingDto(input: {
   appIconUrl: string | null;
   appLink: string | null;
+  appId: string | null;
   appName: string;
   id?: string;
   packageName: string;
@@ -99,6 +101,7 @@ export async function createAndroidStoreMapping(payload: StoreMappingPayload) {
     const mapping = await saveAndroidStoreMappingDto({
       appIconUrl: row.appIconUrl,
       appLink: row.appLink,
+      appId: row.appId,
       appName: row.appName,
       packageName: row.packageName!,
       status: row.status,
@@ -129,6 +132,7 @@ export async function updateAndroidStoreMapping(payload: StoreMappingPayload) {
     const mapping = await saveAndroidStoreMappingDto({
       appIconUrl: row.appIconUrl,
       appLink: row.appLink,
+      appId: row.appId,
       appName: row.appName,
       id,
       packageName: row.packageName!,

@@ -1,4 +1,4 @@
-import { AndroidIapPage } from "@/components/tracking/pages/android-iap-page";
+import { AndroidIapPage } from "@/components/tracking/pages/iap/android-iap-page";
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getAndroidIapPageData } from "@/lib/server/page-loaders/android/iap.loader";
 

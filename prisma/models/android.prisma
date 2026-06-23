@@ -36,7 +36,9 @@ model AndroidStoreMapping {
   replyTemplates   AndroidStoreReviewReplyTemplate[]
 
   @@unique([storeProfileId, appName], map: "android_store_mappings_profile_app_name_key")
+  @@unique([storeProfileId, appId], map: "android_store_mappings_profile_app_id_key")
   @@unique([packageName], map: "android_store_mappings_package_key")
+  @@index([appId, status], map: "android_store_mappings_app_id_status_idx")
   @@index([packageName, status], map: "android_store_mappings_package_status_idx")
   @@index([storeAccountName], map: "android_store_mappings_store_name_idx")
   @@map("android_store_mappings")
