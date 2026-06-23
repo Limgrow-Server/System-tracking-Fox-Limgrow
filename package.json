@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:debug": "next dev --inspect",
+    "prebuild": "prisma generate --schema prisma",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
