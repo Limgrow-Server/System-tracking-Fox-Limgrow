@@ -421,21 +421,6 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         </span>
       </nav>
 
-      <PageHeader
-        eyebrow="Google Play"
-        title={data.store.storeAccountName}
-        description="Configure shared store contact info and reusable review reply templates."
-        action={
-          <Badge
-            variant="outline"
-            className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
-          >
-            <Smartphone size={12} />
-            Android
-          </Badge>
-        }
-      />
-
       <Card className="rounded-lg">
         <CardHeader className="flex items-center justify-between gap-3 border-b">
           <div>

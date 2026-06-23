@@ -1,110 +1,93 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ChevronRight,
+  ExternalLink,
   Search,
   Smartphone,
 } from "lucide-react";
 
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   EmptyPanel,
   PageHeader,
-  StatusBadge,
 } from "@/components/tracking/primitives";
-import { compactNumber, dateTime } from "@/lib/tracking/format";
+import { compactNumber } from "@/lib/tracking/format";
 import type {
   ReplyStoreListPageData,
   ReplyStoreSummary,
 } from "@/lib/tracking/page-data";
 
 function StoreCard({ store }: { store: ReplyStoreSummary }) {
-  const previewApps = store.apps.slice(0, 3);
+  const router = useRouter();
 
   return (
-    <Link href={`/reply/${store.storeProfileId}`} className="block h-full">
-      <Card className="h-full rounded-lg transition hover:bg-muted/40">
-        <CardHeader className="gap-3 border-b">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <CardTitle className="truncate text-base">
-                {store.storeAccountName}
-              </CardTitle>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <Badge variant="outline" className="gap-1">
-                  <Smartphone size={11} />
-                  Android
-                </Badge>
-                <span>{compactNumber(store.appCount)} apps</span>
-              </div>
-            </div>
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-background">
-              <ChevronRight size={16} />
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4 p-4">
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-lg border bg-background px-2 py-3">
-              <div className="text-lg font-semibold">
-                {compactNumber(store.reviewCount)}
-              </div>
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                Reviews
-              </div>
-            </div>
-            <div className="rounded-lg border bg-background px-2 py-3">
-              <div className="text-lg font-semibold">
-                {compactNumber(store.pendingReplyCount)}
-              </div>
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                Pending
-              </div>
-            </div>
-            <div className="rounded-lg border bg-background px-2 py-3">
-              <div className="text-lg font-semibold">
-                {compactNumber(store.activeTemplateCount)}
-              </div>
-              <div className="mt-1 text-[11px] text-muted-foreground">
-                Active
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {previewApps.map((app) => (
-              <div
-                key={app.mappingId}
-                className="flex items-center justify-between gap-3 rounded-md border bg-background px-3 py-2"
-              >
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium">
-                    {app.appName}
-                  </div>
-                  <div className="truncate text-xs text-muted-foreground">
-                    {app.identifier}
-                  </div>
-                </div>
-                <StatusBadge status={app.lastSyncStatus ?? "not_found"} />
-              </div>
-            ))}
-            {store.apps.length > previewApps.length ? (
-              <div className="text-xs text-muted-foreground">
-                +{store.apps.length - previewApps.length} more apps
-              </div>
+    <Card
+      className="h-full cursor-pointer gap-0 rounded-lg py-0 transition hover:bg-muted/40"
+      onClick={() => router.push(`/reply/${store.storeProfileId}`)}
+    >
+      <CardHeader className="flex items-center justify-between gap-4 p-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <Avatar className="size-12 rounded-xl border">
+            {store.storeAvatarUrl ? (
+              <AvatarImage
+                src={store.storeAvatarUrl}
+                alt={store.storeAccountName}
+                className="rounded-xl"
+              />
             ) : null}
+            <AvatarFallback className="rounded-xl text-sm font-medium">
+              {store.storeAccountName.slice(0, 2).toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            <CardTitle className="truncate text-lg">
+              {store.storeAccountName}
+            </CardTitle>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <Badge
+                variant="outline"
+                className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+              >
+                <Smartphone size={11} />
+                Android
+              </Badge>
+              <span>{compactNumber(store.appCount)} apps</span>
+            </div>
           </div>
-
-          <div className="border-t pt-3 text-xs text-muted-foreground">
-            Last fetch {dateTime(store.lastFetchedAt)}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {store.storeLink ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              asChild
+              onClick={(event) => event.stopPropagation()}
+            >
+              <a
+                href={store.storeLink}
+                target="_blank"
+                rel="noreferrer"
+                title={store.storeLink}
+                aria-label={`Open store link for ${store.storeAccountName}`}
+              >
+                <ExternalLink size={15} />
+              </a>
+            </Button>
+          ) : null}
+          <div className="flex size-10 items-center justify-center rounded-xl border bg-background">
+            <ChevronRight size={17} />
           </div>
-        </CardContent>
-      </Card>
-    </Link>
+        </div>
+      </CardHeader>
+    </Card>
   );
 }
 

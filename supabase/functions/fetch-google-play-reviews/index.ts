@@ -126,6 +126,11 @@ function commentUpdatedAt(comment: Record<string, unknown>) {
   return timestampToIso(comment.lastModified);
 }
 
+function objectValue(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
 function chooseLatestComment(
   comments: unknown,
   key: "userComment" | "developerComment",
@@ -184,6 +189,7 @@ function normalizeReview(
       developer_reply_text: stringValue(developerComment?.text),
       developer_reply_updated_at: developerReplyUpdatedAt,
       device: stringValue(userComment?.device),
+      device_metadata: objectValue(userComment?.deviceMetadata),
       fetched_at: fetchedAt,
       original_text: stringValue(userComment?.originalText),
       rating: userComment?.starRating ?? null,

@@ -120,11 +120,11 @@ const navGroups: { title: string; items: NavItem[] }[] = [
     ],
   },
   {
-    title: "Reply & Review",
+    title: "Comments & Reply",
     items: [
       {
-        title: "Review",
-        href: "/review",
+        title: "Comments",
+        href: "/comments",
         icon: <MessageSquareText size={17} />,
         roles: ["Admin", "Marketing"],
       },

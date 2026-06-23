@@ -27,6 +27,8 @@ function buildStoreSummaries(data: Awaited<ReturnType<typeof getReplyConfigPageD
         pendingReplyCount: 0,
         reviewCount: 0,
         storeAccountName: app.storeAccountName,
+        storeAvatarUrl: app.storeAvatarUrl,
+        storeLink: app.storeLink,
         storeProfileId: app.storeProfileId,
       } satisfies ReplyStoreSummary);
 

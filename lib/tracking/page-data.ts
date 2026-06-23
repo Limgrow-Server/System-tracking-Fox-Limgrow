@@ -62,7 +62,9 @@ export type ReviewAppCard = {
   identifier: string;
   appIconUrl: string | null;
   appLink: string | null;
+  storeAvatarUrl: string | null;
   storeAccountName: string;
+  storeLink: string | null;
   storeProfileId: string;
   reviewCount: number;
   averageRating: number | null;
@@ -87,6 +89,7 @@ export type AndroidStoreReviewDto = {
   originalText: string | null;
   reviewerLanguage: string | null;
   device: string | null;
+  deviceMetadata: AndroidDeviceMetadataDto | null;
   androidOsVersion: number | null;
   appVersionCode: number | null;
   appVersionName: string | null;
@@ -97,6 +100,20 @@ export type AndroidStoreReviewDto = {
   developerReplyUpdatedAt: string | null;
   fetchedAt: string;
   rawReview: unknown;
+};
+
+export type AndroidDeviceMetadataDto = {
+  cpuMake: string | null;
+  cpuModel: string | null;
+  deviceClass: string | null;
+  glEsVersion: number | null;
+  manufacturer: string | null;
+  nativePlatform: string | null;
+  productName: string | null;
+  ramMb: number | null;
+  screenDensityDpi: number | null;
+  screenHeightPx: number | null;
+  screenWidthPx: number | null;
 };
 
 export type ReviewRatingBucket = {
@@ -162,6 +179,8 @@ export type ReviewReplyTemplateDto = {
 export type ReplyStoreSummary = {
   storeProfileId: string;
   storeAccountName: string;
+  storeAvatarUrl: string | null;
+  storeLink: string | null;
   apps: ReviewAppCard[];
   appCount: number;
   reviewCount: number;

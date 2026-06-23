@@ -5,6 +5,7 @@ import type {
   AndroidStoreReviewFetchRun,
   AndroidStoreReviewReplyTemplate,
   AndroidStoreReviewSyncState,
+  Prisma,
 } from "@prisma/client";
 
 import { badRequest, notFound } from "@/lib/server/api/errors";
@@ -21,6 +22,7 @@ import {
 import { cleanText } from "@/lib/server/services/credentials/credential.shared";
 import type {
   AndroidStoreReviewDto,
+  AndroidDeviceMetadataDto,
   ReplyConfigBasePageData,
   ReviewAppCard,
   ReviewAppDetailPageData,
@@ -53,6 +55,69 @@ function iso(value: Date | null | undefined) {
 
 function enumText(value: unknown) {
   return String(value ?? "").toLowerCase();
+}
+
+function jsonRecord(value: Prisma.JsonValue | null | undefined) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, Prisma.JsonValue>;
+}
+
+function jsonString(value: Prisma.JsonValue | undefined) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function jsonNumber(value: Prisma.JsonValue | undefined) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function latestUserCommentFromRawReview(value: Prisma.JsonValue | null | undefined) {
+  const rawReview = jsonRecord(value);
+  const comments = rawReview?.comments;
+  if (!Array.isArray(comments)) return null;
+
+  let latest: Record<string, Prisma.JsonValue> | null = null;
+  let latestSeconds = -1;
+  let latestNanos = -1;
+
+  for (const item of comments) {
+    const commentItem = jsonRecord(item);
+    const userComment = jsonRecord(commentItem?.userComment);
+    if (!userComment) continue;
+
+    const lastModified = jsonRecord(userComment.lastModified);
+    const seconds = jsonNumber(lastModified?.seconds) ?? 0;
+    const nanos = jsonNumber(lastModified?.nanos) ?? 0;
+
+    if (seconds > latestSeconds || (seconds === latestSeconds && nanos > latestNanos)) {
+      latest = userComment;
+      latestSeconds = seconds;
+      latestNanos = nanos;
+    }
+  }
+
+  return latest;
+}
+
+function deviceMetadataDto(
+  deviceMetadata: Prisma.JsonValue | null | undefined,
+): AndroidDeviceMetadataDto | null {
+  const metadata = jsonRecord(deviceMetadata);
+  if (!metadata) return null;
+
+  return {
+    cpuMake: jsonString(metadata.cpuMake),
+    cpuModel: jsonString(metadata.cpuModel),
+    deviceClass: jsonString(metadata.deviceClass),
+    glEsVersion: jsonNumber(metadata.glEsVersion),
+    manufacturer: jsonString(metadata.manufacturer),
+    nativePlatform: jsonString(metadata.nativePlatform),
+    productName: jsonString(metadata.productName),
+    ramMb: jsonNumber(metadata.ramMb),
+    screenDensityDpi: jsonNumber(metadata.screenDensityDpi),
+    screenHeightPx: jsonNumber(metadata.screenHeightPx),
+    screenWidthPx: jsonNumber(metadata.screenWidthPx),
+  };
 }
 
 function ratingSummary(groups: RatingGroup[]) {
@@ -104,6 +169,8 @@ function reviewAppCard(
     repliedCount,
     reviewCount,
     storeAccountName: mapping.storeAccountName,
+    storeAvatarUrl: mapping.storeProfile.avatarUrl,
+    storeLink: mapping.storeProfile.linkStore,
     storeProfileId: mapping.storeProfileId,
   };
 }
@@ -127,6 +194,8 @@ export async function getReviewAppCards(): Promise<ReviewAppCard[]> {
 }
 
 function reviewDto(review: AndroidStoreReview): AndroidStoreReviewDto {
+  const rawUserComment = latestUserCommentFromRawReview(review.rawReview);
+
   return {
     androidOsVersion: review.androidOsVersion,
     appVersionCode: review.appVersionCode,
@@ -135,6 +204,9 @@ function reviewDto(review: AndroidStoreReview): AndroidStoreReviewDto {
     developerReplyText: review.developerReplyText,
     developerReplyUpdatedAt: iso(review.developerReplyUpdatedAt),
     device: review.device,
+    deviceMetadata:
+      deviceMetadataDto(review.deviceMetadata) ??
+      deviceMetadataDto(rawUserComment?.deviceMetadata),
     fetchedAt: review.fetchedAt.toISOString(),
     id: review.id,
     originalText: review.originalText,
@@ -203,6 +275,7 @@ function mockReview(
     authorName: string;
     developerReplyText?: string;
     device: string;
+    deviceMetadata?: AndroidDeviceMetadataDto;
     originalText?: string;
     reviewText: string;
     thumbsDownCount: number;
@@ -222,6 +295,7 @@ function mockReview(
     developerReplyText: payload.developerReplyText ?? null,
     developerReplyUpdatedAt: iso(replyUpdatedAt),
     device: payload.device,
+    deviceMetadata: payload.deviceMetadata ?? null,
     fetchedAt: new Date().toISOString(),
     id: `mock-${storeMappingId}-${reviewId}`,
     originalText: payload.originalText ?? null,
@@ -234,6 +308,8 @@ function mockReview(
           userComment: {
             starRating: rating,
             text: payload.reviewText,
+            device: payload.device,
+            deviceMetadata: payload.deviceMetadata ?? null,
             lastModified: {
               seconds: Math.floor(updatedAt.getTime() / 1000),
             },
@@ -258,6 +334,19 @@ function mockAndroidReviews(mappingId: string): AndroidStoreReviewDto[] {
       developerReplyText:
         "Thank you for the kind review. We are glad the latest keyboard theme works well for you.",
       device: "Pixel 8",
+      deviceMetadata: {
+        cpuMake: "Google",
+        cpuModel: "Tensor G3",
+        deviceClass: "phone",
+        glEsVersion: null,
+        manufacturer: "Google",
+        nativePlatform: "arm64-v8a",
+        productName: "Pixel 8",
+        ramMb: 8192,
+        screenDensityDpi: 428,
+        screenHeightPx: 2400,
+        screenWidthPx: 1080,
+      },
       reviewText:
         "The LED keyboard looks clean and the typing sound feels much better after the latest update.",
       thumbsDownCount: 0,
@@ -267,6 +356,19 @@ function mockAndroidReviews(mappingId: string): AndroidStoreReviewDto[] {
       appVersionName: "2.8.1",
       authorName: "Duc Nguyen",
       device: "Galaxy S24",
+      deviceMetadata: {
+        cpuMake: "Qualcomm",
+        cpuModel: "Snapdragon 8 Gen 3",
+        deviceClass: "phone",
+        glEsVersion: null,
+        manufacturer: "Samsung",
+        nativePlatform: "arm64-v8a",
+        productName: "Galaxy S24",
+        ramMb: 8192,
+        screenDensityDpi: 416,
+        screenHeightPx: 2340,
+        screenWidthPx: 1080,
+      },
       reviewText:
         "Nice themes and easy setup. I would like more Vietnamese color presets in the next release.",
       thumbsDownCount: 1,
@@ -278,6 +380,19 @@ function mockAndroidReviews(mappingId: string): AndroidStoreReviewDto[] {
       developerReplyText:
         "Thanks for reporting this. Please update to the newest version and contact support if the delay remains.",
       device: "Xiaomi 13",
+      deviceMetadata: {
+        cpuMake: "Qualcomm",
+        cpuModel: "Snapdragon 8 Gen 2",
+        deviceClass: "phone",
+        glEsVersion: null,
+        manufacturer: "Xiaomi",
+        nativePlatform: "arm64-v8a",
+        productName: "Xiaomi 13",
+        ramMb: 12288,
+        screenDensityDpi: 414,
+        screenHeightPx: 2400,
+        screenWidthPx: 1080,
+      },
       reviewText:
         "The app is useful, but the keyboard sometimes opens slowly when switching from chat apps.",
       thumbsDownCount: 2,

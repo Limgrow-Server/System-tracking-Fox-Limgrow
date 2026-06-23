@@ -8,6 +8,7 @@ export function getActiveAndroidReviewMappings() {
   return prisma.androidStoreMapping.findMany({
     where: { status: "ACTIVE" },
     include: {
+      storeProfile: true,
       reviewSyncState: true,
       _count: { select: { reviews: true } },
     },
@@ -19,6 +20,7 @@ export function getAndroidReviewMappingById(mappingId: string) {
   return prisma.androidStoreMapping.findUnique({
     where: { id: mappingId },
     include: {
+      storeProfile: true,
       reviewSyncState: true,
       _count: { select: { reviews: true } },
     },

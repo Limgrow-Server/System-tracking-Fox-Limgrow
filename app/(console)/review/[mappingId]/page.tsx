@@ -1,6 +1,4 @@
-import { requireConsoleSession } from "@/lib/auth/session";
-import { getReviewAppDetailPageData } from "@/lib/server/page-loaders/reviews/review-app-detail.loader";
-import { ReviewAppDetailPage } from "@/components/tracking/pages/review-app-detail-page";
+import { redirect } from "next/navigation";
 
 export default async function ReviewAppDetailRoutePage({
   params,
@@ -9,13 +7,13 @@ export default async function ReviewAppDetailRoutePage({
   params: Promise<{ mappingId: string }>;
   searchParams: Promise<{ mock?: string }>;
 }) {
-  await requireConsoleSession(["Admin", "Marketing"]);
-
   const { mappingId } = await params;
   const { mock } = await searchParams;
-  const data = await getReviewAppDetailPageData(mappingId, {
-    includeMockData: mock === "1" || mock === "true",
-  });
+  const query = new URLSearchParams();
 
-  return <ReviewAppDetailPage data={data} />;
+  if (mock) {
+    query.set("mock", mock);
+  }
+
+  redirect(`/comments/${mappingId}${query.size ? `?${query.toString()}` : ""}`);
 }
