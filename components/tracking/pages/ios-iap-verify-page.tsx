@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
+import { PageHeader, StatusBadge } from "@/components/tracking/primitives";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime, microsToMoney, money, toNumber } from "@/lib/tracking/format";
 import type { IosIapVerifyPageData } from "@/lib/tracking/page-data";
 import type {
@@ -148,7 +147,7 @@ function AppIdentity({ mapping }: { mapping: StoreMapping | null }) {
   }
 
   return (
-    <div className="rounded-lg border bg-muted/30 p-4">
+    <div className="rounded-lg border border-border/80 bg-muted/30 p-4">
       <div className="flex items-start gap-3">
         <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-border">
           <Apple size={18} />
@@ -174,9 +173,9 @@ function ResultMetric({
   value: string;
 }) {
   return (
-    <div className="rounded-lg border bg-background p-3">
+    <div className="rounded-lg border border-border/80 bg-background p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 break-words font-medium">{value}</div>
+      <div className="mt-1 word-break-all font-medium">{value}</div>
     </div>
   );
 }
@@ -261,7 +260,7 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
       />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.7fr)]">
-        <Card>
+        <Card className="rounded-lg border border-border/80 shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <ReceiptText size={18} />
@@ -274,14 +273,14 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
           <CardContent>
             <form className="space-y-5" onSubmit={submit}>
               <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="ios-iap-mapping">App mapping</Label>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label htmlFor="ios-iap-mapping" className="text-xs font-medium text-muted-foreground">App mapping</Label>
                   <Select
                     value={selectedMappingId}
                     onValueChange={selectMapping}
                     disabled={!data.storeMappings.length}
                   >
-                    <SelectTrigger id="ios-iap-mapping" className="h-10 w-full">
+                    <SelectTrigger id="ios-iap-mapping" className="h-9 w-full">
                       <SelectValue placeholder="Select iOS app mapping" />
                     </SelectTrigger>
                     <SelectContent>
@@ -300,8 +299,8 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
                   </Select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="ios-iap-transaction">Transaction ID</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ios-iap-transaction" className="text-xs font-medium text-muted-foreground">Transaction ID</Label>
                   <Input
                     id="ios-iap-transaction"
                     value={transactionId}
@@ -311,10 +310,10 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="ios-iap-environment">Environment</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ios-iap-environment" className="text-xs font-medium text-muted-foreground">Environment</Label>
                   <Select value={environment} onValueChange={(value) => setEnvironment(value as VerifyEnvironment)}>
-                    <SelectTrigger id="ios-iap-environment" className="h-10 w-full">
+                    <SelectTrigger id="ios-iap-environment" className="h-9 w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -324,10 +323,10 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
                   </Select>
                 </div>
 
-                <div className="space-y-2 md:col-span-2">
-                  <Label htmlFor="ios-iap-credential">IAP credential</Label>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label htmlFor="ios-iap-credential" className="text-xs font-medium text-muted-foreground">IAP credential</Label>
                   <Select value={credentialRef} onValueChange={setCredentialRef}>
-                    <SelectTrigger id="ios-iap-credential" className="h-10 w-full">
+                    <SelectTrigger id="ios-iap-credential" className="h-9 w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -341,8 +340,8 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
                   </Select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="ios-iap-product">Product ID optional</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ios-iap-product" className="text-xs font-medium text-muted-foreground">Product ID optional</Label>
                   <Input
                     id="ios-iap-product"
                     value={productId}
@@ -351,8 +350,8 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="ios-iap-user">User ID optional</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ios-iap-user" className="text-xs font-medium text-muted-foreground">User ID optional</Label>
                   <Input
                     id="ios-iap-user"
                     value={userId}
@@ -394,7 +393,7 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="rounded-lg border border-border/80 shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <CheckCircle2 size={18} />
@@ -430,7 +429,7 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
                   <ResultMetric label="Verified at" value={dateTime(selectedTransaction.verified_at)} />
                 </div>
 
-                <div className="rounded-lg border bg-muted/30 p-3">
+                <div className="rounded-lg border border-border/80 bg-muted/30 p-3">
                   <div className="mb-2 flex items-center gap-2 text-sm font-medium">
                     <KeyRound size={15} />
                     Sanitized response
@@ -455,7 +454,7 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
         </Card>
       </div>
 
-      <Card>
+      <Card className="rounded-lg border border-border/80 shadow-sm">
         <CardHeader>
           <CardTitle>Recent iOS IAP verifications</CardTitle>
           <CardDescription>
@@ -463,44 +462,53 @@ export function IosIapVerifyPage({ data }: { data: IosIapVerifyPageData }) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Transaction</TableHead>
-                <TableHead>Bundle</TableHead>
-                <TableHead>Product</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Verified</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recentTransactions.length ? (
-                recentTransactions.map((transaction) => (
-                  <TableRow key={transaction.id}>
-                    <TableCell>
-                      <div className="font-medium">{transaction.transaction_id}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {transaction.environment}
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left text-sm text-foreground">
+              <thead className="bg-muted/40 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                <tr>
+                  <th className="px-4 py-3">Transaction</th>
+                  <th className="px-4 py-3">Bundle</th>
+                  <th className="px-4 py-3">Product</th>
+                  <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Verified</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentTransactions.length ? (
+                  recentTransactions.map((transaction) => (
+                    <tr key={transaction.id} className="border-b hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{transaction.transaction_id}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {transaction.environment}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 max-w-56 truncate text-sm">{transaction.bundle_id ?? "No bundle"}</td>
+                      <td className="px-4 py-3 text-sm">{transaction.product_id}</td>
+                      <td className="px-4 py-3 text-sm">{microsToMoney(transaction.revenue_micros, transaction.currency || "USD")}</td>
+                      <td className="px-4 py-3"><StatusBadge status={transaction.state} /></td>
+                      <td className="px-4 py-3 text-sm">{dateTime(transaction.verified_at)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-12 text-center">
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="flex size-12 items-center justify-center rounded-lg bg-muted">
+                          <ReceiptText className="text-muted-foreground" size={24} />
+                        </div>
+                        <div>
+                          <p className="font-medium text-foreground">No iOS IAP transactions</p>
+                          <p className="text-sm text-muted-foreground">Verified Apple transactions will appear here.</p>
+                        </div>
                       </div>
-                    </TableCell>
-                    <TableCell className="max-w-56 truncate">{transaction.bundle_id ?? "No bundle"}</TableCell>
-                    <TableCell>{transaction.product_id}</TableCell>
-                    <TableCell>{microsToMoney(transaction.revenue_micros, transaction.currency || "USD")}</TableCell>
-                    <TableCell><StatusBadge status={transaction.state} /></TableCell>
-                    <TableCell>{dateTime(transaction.verified_at)}</TableCell>
-                  </TableRow>
-                ))
-              ) : (
-                <TableEmptyState
-                  colSpan={6}
-                  icon={ReceiptText}
-                  title="No iOS IAP transactions"
-                  description="Verified Apple transactions will appear here."
-                />
-              )}
-            </TableBody>
-          </Table>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </CardContent>
       </Card>
     </div>

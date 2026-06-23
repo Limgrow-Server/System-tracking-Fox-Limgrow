@@ -30,7 +30,7 @@ model TeamMember {
   lastLoginAt  DateTime?        @map("last_login_at") @db.Timestamptz(6)
   lastActiveAt DateTime?        @map("last_active_at") @db.Timestamptz(6)
   createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt    DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([role, status], map: "team_members_role_status_idx")
   @@index([email, status], map: "team_members_email_status_idx")

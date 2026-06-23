@@ -1,10 +1,10 @@
-import { IosIapVerifyPage } from "@/components/tracking/pages/ios-iap-verify-page";
+import { IosIapPage } from "@/components/tracking/pages/ios-iap-page";
 import { requireConsoleSession } from "@/lib/auth/session";
-import { getIosIapVerifyPageData } from "@/lib/server/page-loaders/ios/iap-verify.loader";
+import { getIosIapPageData } from "@/lib/server/page-loaders/ios/iap-verify.loader";
 
-export default async function IosIapVerifyRoutePage() {
-  await requireConsoleSession(["Admin"]);
-  const data = await getIosIapVerifyPageData();
+export default async function IosIapRoutePage() {
+  await requireConsoleSession(["Admin", "Dev", "Marketing"]);
+  const data = await getIosIapPageData();
 
-  return <IosIapVerifyPage data={data} />;
+  return <IosIapPage transactions={data} />;
 }

@@ -6,5 +6,5 @@ export default async function AndroidIapRoutePage() {
   await requireConsoleSession(["Admin", "Dev", "Marketing"]);
   const data = await getAndroidIapPageData();
 
-  return <AndroidIapPage transactions={data} />;
+  return <AndroidIapPage data={data} />;
 }

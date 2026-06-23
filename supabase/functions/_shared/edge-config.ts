@@ -107,7 +107,7 @@ export type AppleIapRuntimeConfig = ResolvedRuntimeConfig & {
 
 export const corsHeaders = {
   "access-control-allow-origin": "*",
-  "access-control-allow-headers": "authorization, x-client-info, apikey, x-api-key, content-type",
+  "access-control-allow-headers": "authorization, x-client-info, apikey, x-api-key, content-type, x-review-fetch-secret",
   "access-control-allow-methods": "POST, OPTIONS",
 };
 

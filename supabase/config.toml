@@ -1,8 +1,8 @@
 [functions.device-token-android]
-verify_jwt = false
+verify_jwt = true
 
 [functions.device-token-ios]
-verify_jwt = false
+verify_jwt = true
 
 [functions.verify-android]
 verify_jwt = true
@@ -10,11 +10,14 @@ verify_jwt = true
 [functions.verify-ios]
 verify_jwt = true
 
+[functions.fetch-google-play-reviews]
+verify_jwt = false
+
 [functions.send-notification]
 verify_jwt = true
 
 [functions.dispatch-notifications]
-verify_jwt = false
+verify_jwt = true
 
 [functions.notification-event]
 verify_jwt = false

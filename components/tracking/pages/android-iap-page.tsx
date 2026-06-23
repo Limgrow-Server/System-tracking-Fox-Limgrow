@@ -3,12 +3,16 @@
 import { useMemo, useState } from "react";
 import {
   Calendar,
+  CheckCircle2,
   CreditCard,
   DollarSign,
+  Eye,
   FileJson,
   Search,
   Smartphone,
   Sparkles,
+  Store,
+  XCircle,
 } from "lucide-react";
 
 import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
@@ -20,17 +24,29 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { IapAndroidDto } from "@/lib/server/page-loaders/android/iap.loader";
+import type { AndroidIapPageData } from "@/lib/tracking/page-data";
 
 const pageSize = 10;
 
-export function AndroidIapPage({ transactions }: { transactions: IapAndroidDto[] }) {
+export function AndroidIapPage({ data }: { data: AndroidIapPageData }) {
+  const { storeProfiles, transactions } = data;
+  const [selectedStoreId, setSelectedStoreId] = useState("all");
+  const [selectedAppPackage, setSelectedAppPackage] = useState("all");
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState<string>("all");
   const [kindFilter, setKindFilter] = useState<string>("all");
   const [testFilter, setTestFilter] = useState<string>("all");
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
   const [page, setPage] = useState(1);
+
+  // Overview filtering (Store & App level)
+  const overviewTransactions = useMemo(() => {
+    return transactions.filter((tx) => {
+      const matchesStore = selectedStoreId === "all" || tx.storeProfileId === selectedStoreId;
+      const matchesApp = selectedAppPackage === "all" || tx.packageName === selectedAppPackage;
+      return matchesStore && matchesApp;
+    });
+  }, [transactions, selectedStoreId, selectedAppPackage]);
 
   // Stats calculation
   const stats = useMemo(() => {
@@ -39,7 +55,7 @@ export function AndroidIapPage({ transactions }: { transactions: IapAndroidDto[]
     let activeSubs = 0;
     let productSales = 0;
 
-    transactions.forEach((tx) => {
+    overviewTransactions.forEach((tx) => {
       if (tx.isTestPurchase) {
         testCount++;
       } else if (tx.revenueMicros) {
@@ -60,13 +76,13 @@ export function AndroidIapPage({ transactions }: { transactions: IapAndroidDto[]
       testCount,
       activeSubs,
       productSales,
-      totalCount: transactions.length,
+      totalCount: overviewTransactions.length,
     };
-  }, [transactions]);
+  }, [overviewTransactions]);
 
-  // Filtering
+  // Table filtering
   const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx) => {
+    return overviewTransactions.filter((tx) => {
       // Search matches orderId, packageName, productId, or purchaseToken
       const query = search.toLowerCase();
       const matchesSearch =
@@ -85,7 +101,7 @@ export function AndroidIapPage({ transactions }: { transactions: IapAndroidDto[]
 
       return matchesSearch && matchesState && matchesKind && matchesTest;
     });
-  }, [transactions, search, stateFilter, kindFilter, testFilter]);
+  }, [overviewTransactions, search, stateFilter, kindFilter, testFilter]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / pageSize));
@@ -117,6 +133,71 @@ export function AndroidIapPage({ transactions }: { transactions: IapAndroidDto[]
         eyebrow="Operations / IAP"
         title="Android In-App Purchases"
         description="Manage item purchases and subscription transaction history from the Google Play Store. Data is securely verified via the Google Play Developer API and synchronized in a database-first approach."
+        action={
+          <Card className="rounded-lg border-border/80 shadow-sm w-full sm:w-[300px]">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-3 min-w-0">
+                {selectedStoreId !== "all" ? (() => {
+                  const store = storeProfiles.find(s => s.id === selectedStoreId);
+                  if (!store) return null;
+                  return (
+                    <>
+                      {store.avatarUrl ? (
+                        <img src={store.avatarUrl} alt="Store Avatar" className="w-10 h-10 rounded-full border bg-muted object-cover shrink-0" />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full border bg-muted flex items-center justify-center text-muted-foreground text-xs font-semibold shrink-0">
+                          {store.storeAccountName.substring(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="flex flex-col min-w-0">
+                        <div className="font-semibold text-sm text-foreground truncate">{store.storeAccountName}</div>
+                        {store.linkStore ? (
+                          <a href={store.linkStore} target="_blank" rel="noreferrer" className="text-[10px] text-primary hover:underline truncate">
+                            View Developer Page
+                          </a>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground truncate">No link provided</span>
+                        )}
+                      </div>
+                    </>
+                  );
+                })() : (
+                  <>
+                    <div className="w-10 h-10 rounded-full border border-dashed bg-muted/50 flex items-center justify-center text-muted-foreground shrink-0">
+                      <Store size={18} />
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <div className="font-semibold text-sm text-foreground">All Stores</div>
+                      <span className="text-[10px] text-muted-foreground">Global Overview</span>
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="mt-3">
+                <Select
+                  value={selectedStoreId}
+                  onValueChange={(val) => {
+                    setSelectedStoreId(val);
+                    setSelectedAppPackage("all");
+                    setPage(1);
+                  }}
+                >
+                  <SelectTrigger className="h-8 text-xs bg-background">
+                    <SelectValue placeholder="Switch Store Context" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Stores</SelectItem>
+                    {storeProfiles.map(store => (
+                      <SelectItem key={store.id} value={store.id}>
+                        {store.storeAccountName}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+        }
       />
 
       {/* Quick Stats Grid */}
@@ -200,8 +281,32 @@ export function AndroidIapPage({ transactions }: { transactions: IapAndroidDto[]
 
       {/* Filtering Section */}
       <Card className="rounded-lg border border-border/80">
-        <CardContent className="p-4 flex flex-col gap-3 md:flex-row md:items-end">
-          <div className="flex-1 space-y-1.5">
+        <CardContent className="p-4 flex flex-col gap-3 md:flex-row md:items-end flex-wrap">
+          <div className="w-full md:w-56 space-y-1.5">
+            <Label htmlFor="filter-app" className="text-xs font-medium text-muted-foreground">Application Filter</Label>
+            <Select
+              value={selectedAppPackage}
+              onValueChange={(val) => {
+                setSelectedAppPackage(val);
+                setPage(1);
+              }}
+              disabled={selectedStoreId === "all"}
+            >
+              <SelectTrigger id="filter-app" className="h-9">
+                <SelectValue placeholder={selectedStoreId === "all" ? "Select a store first" : "All Apps"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Apps</SelectItem>
+                {selectedStoreId !== "all" && storeProfiles.find(s => s.id === selectedStoreId)?.apps.map(app => (
+                  <SelectItem key={app.id} value={app.packageName}>
+                    {app.appName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex-1 space-y-1.5 min-w-[200px]">
             <Label htmlFor="search-tx" className="text-xs font-medium text-muted-foreground">Search</Label>
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
@@ -286,6 +391,37 @@ export function AndroidIapPage({ transactions }: { transactions: IapAndroidDto[]
           </div>
         </CardContent>
       </Card>
+
+      {/* App Overview Banner */}
+      {selectedAppPackage !== "all" && (() => {
+        const store = storeProfiles.find(s => s.id === selectedStoreId);
+        const app = store?.apps.find(a => a.packageName === selectedAppPackage);
+        if (!app) return null;
+        return (
+          <div className="rounded-lg border border-border/80 bg-muted/20 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              {app.appIconUrl ? (
+                <img src={app.appIconUrl} alt="App Icon" className="w-9 h-9 rounded-lg border bg-muted object-cover shrink-0" />
+              ) : (
+                <div className="w-9 h-9 rounded-lg border bg-muted flex items-center justify-center text-muted-foreground shrink-0">
+                  <Smartphone size={18} />
+                </div>
+              )}
+              <div className="flex flex-col min-w-0">
+                <div className="font-semibold text-sm text-foreground truncate">{app.appName}</div>
+                <div className="text-xs text-muted-foreground font-mono truncate">{app.packageName}</div>
+              </div>
+            </div>
+            {app.appLink && (
+              <a href={app.appLink} target="_blank" rel="noreferrer" className="shrink-0">
+                <Button variant="outline" size="sm" className="h-8 text-xs">
+                  View in Play Store
+                </Button>
+              </a>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Main Table Card */}
       <Card className="rounded-lg border border-border/80 shadow-sm overflow-hidden">

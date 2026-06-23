@@ -165,14 +165,11 @@ Không dùng `prisma db push` cho Supabase shared/staging/production của repo 
 
 ## 7. Deploy Supabase Edge Functions
 
-Repo có 7 Edge Functions:
+Repo có 4 Edge Functions:
 
 ```text
-dispatch-notifications
 device-token-android
 device-token-ios
-notification-event
-send-notification
 verify-android
 verify-ios
 ```
@@ -195,34 +192,15 @@ supabase projects list
 Deploy:
 
 ```bash
-supabase functions deploy dispatch-notifications --project-ref <project-ref>
 supabase functions deploy device-token-android --project-ref <project-ref>
 supabase functions deploy device-token-ios --project-ref <project-ref>
-supabase functions deploy notification-event --project-ref <project-ref>
-supabase functions deploy send-notification --project-ref <project-ref>
 supabase functions deploy verify-android --project-ref <project-ref>
 supabase functions deploy verify-ios --project-ref <project-ref>
 ```
 
-`send-notification`, `verify-android`, và `verify-ios` dùng Supabase JWT; riêng `send-notification` còn check user hiện tại phải là Admin trong `team_members`.
-`device-token-android`, `device-token-ios`, và `notification-event` có `verify_jwt = false` nhưng tự check publishable key hoặc key cấu hình trong Function secrets.
-`dispatch-notifications` cũng có `verify_jwt = false` nhưng tự check Admin JWT hoặc header `x-dispatch-secret`, dùng cho Supabase Cron.
+`supabase/config.toml` đang bật `verify_jwt = true`, nên caller phải gửi Supabase JWT hợp lệ. Nếu mobile app không dùng Supabase Auth, cần thiết kế thêm app-level/server-to-server auth trước khi mở public.
 
 Chi tiết cách Edge Functions lấy Firebase/Google/Apple config nằm ở [docs/edge-functions-config-guide.md](docs/edge-functions-config-guide.md).
-
-Sau khi deploy `send-notification` và `dispatch-notifications`, login console bằng Admin và vào `/notifications` để:
-
-- Generate nội dung notification.
-- Gửi ngay tới topic hoặc danh sách `device_id`.
-- Lưu lịch `once`, `daily`, `monthly`.
-- Xem delivery logs thành công/thất bại.
-
-Mobile app nên gọi:
-
-- `device-token-android` hoặc `device-token-ios` khi lấy/refresh FCM token. Gửi `appId`, `fcmToken`, `deviceId`, `locale` hoặc `languageCode`.
-- `notification-event` khi nhận/hiển thị/mở notification. FCM data từ hệ thống đã có `notificationJobId`; mobile gửi lại id này để history đếm received, impressions và open count.
-
-Để lịch tự chạy, bật `pg_cron`, `pg_net`, lưu secret `NOTIFICATION_DISPATCH_SECRET` trong Edge Function secrets và Vault secret tên `system_tracking_notification_dispatch_secret`, rồi tạo cron gọi `dispatch-notifications` mỗi phút. Chi tiết nằm trong [docs/edge-functions-config-guide.md](docs/edge-functions-config-guide.md).
 
 ## 8. Bootstrap tài khoản Admin đầu tiên
 

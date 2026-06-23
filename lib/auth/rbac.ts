@@ -16,10 +16,11 @@ export type ConsoleSession = {
 
 export const routeRoles: Record<string, StaffRole[]> = {
   "/dashboard": ["Admin", "Dev", "Marketing"],
-  "/iap": ["Admin", "Dev", "Marketing"],
   "/store-mapping": ["Admin"],
   "/configs": ["Admin"],
-  "/notifications": ["Admin"],
+  "/iap": ["Admin", "Dev", "Marketing"],
+  "/review": ["Admin", "Marketing"],
+  "/reply": ["Admin", "Marketing"],
   "/users": ["Admin"],
 };
 
@@ -31,7 +32,9 @@ export function routeRequiredRoles(pathname: string) {
   const normalized = pathname === "/" ? "/dashboard" : pathname;
   const match = Object.entries(routeRoles)
     .sort(([left], [right]) => right.length - left.length)
-    .find(([route]) => normalized === route || normalized.startsWith(`${route}/`));
+    .find(
+      ([route]) => normalized === route || normalized.startsWith(`${route}/`),
+    );
 
   return match?.[1] ?? null;
 }

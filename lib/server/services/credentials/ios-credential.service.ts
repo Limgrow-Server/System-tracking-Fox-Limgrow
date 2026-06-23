@@ -291,7 +291,8 @@ async function updateIosCredentialMetadata(input: {
       input.payload.storeAccountName !== undefined ||
       input.payload.linkStore !== undefined ||
       input.payload.avatarUrl !== undefined ||
-      input.payload.issuerId !== undefined
+      input.payload.issuerId !== undefined ||
+      input.payload.supabaseUserId !== undefined
         ? await updateIosStoreProfileMetadata(tx, input.target.storeProfileId, {
             ...profileMetadataPatch(input.payload),
             issuerId: input.payload.issuerId === undefined ? undefined : nullableText(input.payload.issuerId),

@@ -77,11 +77,10 @@ Input lookup co the gom:
 ```ts
 {
   platform?: "android" | "ios";
-  appId?: string; // recommended stable app id from App Mapping
   packageName?: string;
   bundleId?: string;
-  appName?: string; // display name fallback only
-  productAppId?: string; // legacy alias, treated like appId when appId is missing
+  appName?: string;
+  productAppId?: string; // alias cu, common coi nhu appName
   storeAccountName?: string;
   storeProfileId?: string;
   credentialRef?: string; // override truc tiep credential can dung
@@ -90,9 +89,8 @@ Input lookup co the gom:
 
 Khuyen nghi:
 
-- Notification/device-token: truyen `appId` tu App Mapping. Mobile token API se luu FCM token theo `app_id`.
-- Android IAP: truyen `packageName`.
-- iOS IAP: truyen `bundleId`.
+- Android: truyen `packageName`.
+- iOS: truyen `bundleId`.
 - Neu can dung key cu the: truyen them `credentialRef`.
 
 ## Tao Supabase admin client
@@ -107,7 +105,7 @@ const supabase = createAdminClient();
 
 1. `SUPABASE_SECRET_KEYS.default`
 2. `SUPABASE_SERVICE_ROLE_KEY`
-3. `NEXT_PUBLIC_SUPABASE_SECRET_KEY`
+3. `SUPABASE_SECRET_KEY`
 
 Hosted Supabase Edge Functions co `SUPABASE_URL` va secret keys tu project secrets/default secrets. Local serve co the dung `.env` hoac `--env-file`.
 
@@ -144,41 +142,6 @@ const config = await getFirebaseAdminConfig(supabase, {
 ```
 
 Khong return `serviceAccount` ve client. Chi dung trong Edge Function de tao OAuth token/call FCM.
-
-Repo da co Edge Function san:
-
-```text
-supabase/functions/send-notification/index.ts
-```
-
-Function nay:
-
-- Goi `getFirebaseAdminConfig()` de tu lay Firebase Admin service account theo app mapping.
-- Gui FCM HTTP v1 theo topic `${topicBase}-${topicCode}`.
-- Hoac gui toi tung `device_id` bang cach resolve `device_tokens.device_id -> fcm_token`.
-- Ghi lich su vao `notification_jobs` va `notification_events`.
-- Yeu cau Supabase JWT hop le va user phai la Admin trong `team_members`.
-
-Function dispatcher:
-
-```text
-supabase/functions/dispatch-notifications/index.ts
-```
-
-Dispatcher doc `notification_schedules`, tim row `status = active` va `next_run_at <= now()`, goi chung sender logic, sau do cap nhat `last_run_at`, `last_status`, `last_error`, `next_run_at`. Function nay dung cho Supabase Cron va cung co the run thu tu UI.
-
-Next.js console goi qua proxy:
-
-```text
-POST /api/admin/notifications/send
-```
-
-UI nam o:
-
-```text
-/notifications
-components/tracking/pages/notifications-page.tsx
-```
 
 ## Lay Google Play IAP config
 
@@ -356,11 +319,8 @@ NODE
 Existing functions:
 
 ```text
-supabase/functions/dispatch-notifications/index.ts
 supabase/functions/device-token-android/index.ts
 supabase/functions/device-token-ios/index.ts
-supabase/functions/notification-event/index.ts
-supabase/functions/send-notification/index.ts
 supabase/functions/verify-android/index.ts
 supabase/functions/verify-ios/index.ts
 ```
@@ -368,11 +328,8 @@ supabase/functions/verify-ios/index.ts
 Deploy:
 
 ```bash
-supabase functions deploy dispatch-notifications --project-ref <project-ref>
 supabase functions deploy device-token-android --project-ref <project-ref>
 supabase functions deploy device-token-ios --project-ref <project-ref>
-supabase functions deploy notification-event --project-ref <project-ref>
-supabase functions deploy send-notification --project-ref <project-ref>
 supabase functions deploy verify-android --project-ref <project-ref>
 supabase functions deploy verify-ios --project-ref <project-ref>
 ```
@@ -386,122 +343,6 @@ verify_jwt = true
 ```
 
 That means caller must send a valid Supabase JWT unless the auth design is changed intentionally.
-
-`device-token-android`, `device-token-ios`, `notification-event`, and `dispatch-notifications`
-are intentionally `verify_jwt = false` in `supabase/config.toml`; they perform their own API-key or dispatch-secret validation.
-
-## Mobile FCM token and open tracking
-
-Register/refresh a token with the platform endpoint:
-
-```json
-{
-  "appId": "LA-009",
-  "platform": "android",
-  "packageName": "com.example.app",
-  "deviceId": "stable-device-id",
-  "fcmToken": "<fcm-token>",
-  "locale": "en-US",
-  "appVersion": "1.0.0",
-  "osVersion": "Android 15"
-}
-```
-
-The Edge Function normalizes `appId`, package name, bundle id, and locale before saving. The stored
-`device_tokens.locale` is used by `send-notification` to choose the matching localized notification row per FCM token.
-
-Every sent FCM data payload includes:
-
-```json
-{
-  "notificationId": "<job-id>",
-  "notificationJobId": "<job-id>",
-  "notificationAppId": "LA-009",
-  "notificationPlatform": "android",
-  "notificationLocale": "en"
-}
-```
-
-When mobile receives, displays, or opens a push, call `notification-event`:
-
-```json
-{
-  "eventType": "opened",
-  "notificationJobId": "<job-id-from-fcm-data>",
-  "appId": "LA-009",
-  "platform": "android",
-  "packageName": "com.example.app",
-  "deviceId": "stable-device-id",
-  "fcmToken": "<optional-fcm-token>",
-  "locale": "en-US"
-}
-```
-
-Accepted `eventType` values include `received`, `impression`, and `opened` plus common aliases such as
-`notification_received`, `displayed`, and `tap`. History reads these rows from `notification_events`.
-
-FCM token expiry is detected during send. If Firebase returns an unregistered/invalid-token error, the sender marks the matching
-`device_tokens` row as `invalid`, so it is removed from active target counts and future sends.
-
-## Notification schedules and cron
-
-UI `/notifications` writes schedules to:
-
-```text
-notification_schedules
-```
-
-Delivery history:
-
-```text
-notification_jobs
-notification_events
-```
-
-Device targeting uses:
-
-```text
-device_tokens.device_id
-```
-
-Recommended scheduler setup:
-
-```sql
-create extension if not exists pg_net with schema extensions;
-create extension if not exists pg_cron with schema pg_catalog;
-```
-
-Create the same random secret in:
-
-- Edge Function secret: `NOTIFICATION_DISPATCH_SECRET`
-- Supabase Vault secret name: `system_tracking_notification_dispatch_secret`
-
-Then schedule dispatcher:
-
-```sql
-select cron.schedule(
-  'system-tracking-notification-dispatcher',
-  '* * * * *',
-  $$
-  select net.http_post(
-    url := 'https://<project-ref>.supabase.co/functions/v1/dispatch-notifications',
-    headers := jsonb_build_object(
-      'content-type', 'application/json',
-      'x-dispatch-secret', (
-        select decrypted_secret::text
-        from vault.decrypted_secrets
-        where name = 'system_tracking_notification_dispatch_secret'
-        limit 1
-      )
-    ),
-    body := jsonb_build_object('source', 'pg_cron'),
-    timeout_milliseconds := 30000
-  ) as request_id;
-  $$
-);
-```
-
-The current project has this cron installed as `system-tracking-notification-dispatcher`.
 
 ## Troubleshooting
 
@@ -532,7 +373,7 @@ The current project has this cron installed as `system-tracking-notification-dis
 
 - For Android IAP, pass `packageName`.
 - For Apple IAP, pass `bundleId`.
-- Prefer `appId`. If using app name only, make sure mapping can still be found by `appName`/legacy `productAppId`.
+- If using app name only, make sure mapping can be found by `appName`/`productAppId`.
 
 ## Notes for future AI agents
 

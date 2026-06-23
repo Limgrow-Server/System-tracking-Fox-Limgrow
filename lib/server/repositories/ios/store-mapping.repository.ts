@@ -1,14 +1,9 @@
 import "server-only";
 
-import type { IosStoreMapping, MappingStatus, Prisma } from "@prisma/client";
+import type { MappingStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { upsertIosStoreProfile } from "@/lib/server/repositories/ios/store-profile.repository";
-
-function isMissingAppIdColumn(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("42703") || message.includes("column") && message.includes("app_id") && message.includes("does not exist");
-}
 
 type SaveIosStoreMappingInput = {
   appId: string | null;
@@ -48,6 +43,7 @@ export async function saveIosStoreMapping(
   });
 
   const data = {
+    appId: input.appId,
     appIconUrl: input.appIconUrl,
     appLink: input.appLink,
     appName: input.appName,
@@ -57,47 +53,31 @@ export async function saveIosStoreMapping(
     storeProfileId: profile.id,
   };
 
-  async function withAppId(mapping: IosStoreMapping) {
-    try {
-      await tx.$executeRaw`
-        UPDATE "ios_store_mappings"
-        SET "app_id" = ${input.appId}
-        WHERE "id" = ${mapping.id}::uuid
-      `;
-    } catch (error) {
-      if (!isMissingAppIdColumn(error)) throw error;
-    }
-    return { ...mapping, appId: input.appId };
-  }
-
   if (input.id) {
-    const mapping = await tx.iosStoreMapping.update({
+    return tx.iosStoreMapping.update({
       where: { id: input.id },
       data,
     });
-    return withAppId(mapping);
   }
 
   const existing = await tx.iosStoreMapping.findFirst({
     where: {
-      storeProfileId: profile.id,
       appName: input.appName,
+      storeProfileId: profile.id,
     },
     select: { id: true },
   });
 
   if (existing) {
-    const mapping = await tx.iosStoreMapping.update({
+    return tx.iosStoreMapping.update({
       where: { id: existing.id },
       data,
     });
-    return withAppId(mapping);
   }
 
-  const mapping = await tx.iosStoreMapping.create({
+  return tx.iosStoreMapping.create({
     data,
   });
-  return withAppId(mapping);
 }
 
 export function deleteIosStoreMapping(id: string) {

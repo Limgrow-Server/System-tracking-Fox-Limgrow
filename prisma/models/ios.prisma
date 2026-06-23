@@ -7,16 +7,18 @@ enum IosSecretType {
 }
 
 model IosStoreProfile {
-  id               String            @id @default(uuid()) @db.Uuid
-  storeAccountName String            @unique @map("store_account_name")
-  linkStore        String?           @map("link_store")
-  avatarUrl        String?           @map("avatar_url")
-  issuerId         String?           @map("issuer_id")
-  status           MappingStatus     @default(ACTIVE)
-  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               String              @id @default(uuid()) @db.Uuid
+  supabaseUserId   String?             @unique @map("supabase_user_id") @db.Uuid
+  storeAccountName String              @unique @map("store_account_name")
+  linkStore        String?             @map("link_store")
+  avatarUrl        String?             @map("avatar_url")
+  issuerId         String?             @map("issuer_id")
+  status           MappingStatus       @default(ACTIVE)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
   mappings         IosStoreMapping[]
   credentials      IosCredential[]
+  iapTransactions  IosIapTransaction[]
 
   @@index([status, storeAccountName], map: "ios_store_profiles_status_name_idx")
   @@map("ios_store_profiles")
@@ -81,6 +83,7 @@ model IosCredential {
 
 model IosIapTransaction {
   id                    String    @id @default(uuid()) @db.Uuid
+  storeProfileId        String?   @map("store_profile_id") @db.Uuid
   transactionId         String    @map("transaction_id")
   originalTransactionId String?   @map("original_transaction_id")
   productId             String    @map("product_id")
@@ -98,7 +101,10 @@ model IosIapTransaction {
   verifiedAt            DateTime  @map("verified_at") @db.Timestamptz(6)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  storeProfile IosStoreProfile? @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
+
   @@unique([transactionId], map: "ios_iap_transactions_transaction_key")
+  @@index([storeProfileId], map: "ios_iap_transactions_store_profile_id_idx")
   @@index([bundleId, verifiedAt], map: "ios_iap_transactions_bundle_verified_idx")
   @@index([productId, verifiedAt], map: "ios_iap_transactions_product_verified_idx")
   @@index([userId, verifiedAt], map: "ios_iap_transactions_user_verified_idx")

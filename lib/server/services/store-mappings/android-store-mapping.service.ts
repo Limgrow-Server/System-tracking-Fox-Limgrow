@@ -22,11 +22,6 @@ function nullableText(value: unknown) {
   return cleaned || null;
 }
 
-function nullableAppId(value: unknown) {
-  const cleaned = cleanText(value).replace(/\s+/g, "").toUpperCase();
-  return cleaned || null;
-}
-
 const mappingStatusMap: Record<string, MappingStatus> = {
   active: MappingStatus.ACTIVE,
   inactive: MappingStatus.INACTIVE,
@@ -35,7 +30,7 @@ const mappingStatusMap: Record<string, MappingStatus> = {
 
 function normalizeAndroidMappingPayload(payload: StoreMappingPayload) {
   return {
-    appId: nullableAppId(payload.appId),
+    appId: nullableText(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
@@ -46,8 +41,8 @@ function normalizeAndroidMappingPayload(payload: StoreMappingPayload) {
 }
 
 function validateAndroidMapping(payload: ReturnType<typeof normalizeAndroidMappingPayload>) {
-  if (!payload.storeAccountName || !payload.appId || !payload.appName) {
-    throw badRequest("Store ref, app id and app name are required.");
+  if (!payload.storeAccountName || !payload.appName) {
+    throw badRequest("Store ref and app name are required.");
   }
 
   if (!payload.packageName) {
@@ -57,7 +52,7 @@ function validateAndroidMapping(payload: ReturnType<typeof normalizeAndroidMappi
 
 function mapAndroidStoreMappingError(error: unknown): never {
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-    throw conflict("An Android mapping with the same app id, app name or package name already exists.");
+    throw conflict("An Android mapping with the same app name or package name already exists.");
   }
 
   throw error;
@@ -77,9 +72,9 @@ export async function androidStoreMappingExists(id: string) {
 }
 
 export async function saveAndroidStoreMappingDto(input: {
-  appId: string | null;
   appIconUrl: string | null;
   appLink: string | null;
+  appId: string | null;
   appName: string;
   id?: string;
   packageName: string;
@@ -105,8 +100,8 @@ export async function createAndroidStoreMapping(payload: StoreMappingPayload) {
   try {
     const mapping = await saveAndroidStoreMappingDto({
       appIconUrl: row.appIconUrl,
-      appId: row.appId,
       appLink: row.appLink,
+      appId: row.appId,
       appName: row.appName,
       packageName: row.packageName!,
       status: row.status,
@@ -136,8 +131,8 @@ export async function updateAndroidStoreMapping(payload: StoreMappingPayload) {
   try {
     const mapping = await saveAndroidStoreMappingDto({
       appIconUrl: row.appIconUrl,
-      appId: row.appId,
       appLink: row.appLink,
+      appId: row.appId,
       appName: row.appName,
       id,
       packageName: row.packageName!,

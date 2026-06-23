@@ -2,7 +2,7 @@
 
 import { FormEvent, type ReactNode, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Cable, Eye, Pencil, Plus, Power, PowerOff, Trash2 } from "lucide-react";
+import { Cable, Eye, Link2, Pencil, Plus, Power, PowerOff, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader, StatusBadge, TableEmptyState, TablePaginationFooter } from "@/components/tracking/primitives";
@@ -56,6 +56,24 @@ function AppIcon({ src, name }: { src: string | null | undefined; name: string |
     <div className="flex size-10 items-center justify-center rounded-md border bg-muted text-sm font-medium text-muted-foreground">
       {appInitial(name)}
     </div>
+  );
+}
+
+function InlineAppLink({ href, appName }: { href: string | null | undefined; appName: string | null | undefined }) {
+  const cleanedHref = href?.trim();
+  if (!cleanedHref) return null;
+
+  return (
+    <a
+      href={cleanedHref}
+      target="_blank"
+      rel="noreferrer"
+      title={cleanedHref}
+      aria-label={`Open app link for ${appName || "app"}`}
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-md border text-muted-foreground transition hover:border-primary/50 hover:text-primary"
+    >
+      <Link2 size={13} />
+    </a>
   );
 }
 
@@ -325,24 +343,23 @@ export function StoreMappingPage({
                       </div>
                     </div>
                     <div className="grid gap-2">
-                      <Label htmlFor="appId">App ID</Label>
-                      <Input
-                        id="appId"
-                        value={form.appId}
-                        onChange={(event) => updateField("appId", event.target.value)}
-                        placeholder="LA-009 or internal app id"
-                        required
-                        readOnly={drawerReadOnly}
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="appName">Display name</Label>
+                      <Label htmlFor="appName">App name</Label>
                       <Input
                         id="appName"
                         value={form.appName}
                         onChange={(event) => updateField("appName", event.target.value)}
                         placeholder="Display app name"
                         required
+                        readOnly={drawerReadOnly}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="appId">App ID</Label>
+                      <Input
+                        id="appId"
+                        value={form.appId}
+                        onChange={(event) => updateField("appId", event.target.value)}
+                        placeholder={isAndroidForm ? "LA-001" : "1234567890"}
                         readOnly={drawerReadOnly}
                       />
                     </div>
@@ -463,9 +480,7 @@ export function StoreMappingPage({
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[72px] pl-4">Avatar</TableHead>
-                <TableHead>App ID</TableHead>
                 <TableHead>App name</TableHead>
-                <TableHead>Link app</TableHead>
                 <TableHead>{platformFilter === "ios" ? "BundleId" : "Package name"}</TableHead>
                 <TableHead>Store ref</TableHead>
                 <TableHead>Status</TableHead>
@@ -483,24 +498,10 @@ export function StoreMappingPage({
                       <AppIcon src={mapping.app_icon_url} name={mapping.app_name} />
                     </TableCell>
                     <TableCell>
-                      <div className="max-w-[180px] truncate font-mono text-sm">{mapping.app_id ?? "N/A"}</div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="max-w-[240px] truncate font-medium">{mapping.app_name}</div>
-                    </TableCell>
-                    <TableCell>
-                      {mapping.app_link ? (
-                        <a
-                          href={mapping.app_link}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block max-w-[320px] truncate text-sm text-primary underline-offset-4 hover:underline"
-                        >
-                          {mapping.app_link}
-                        </a>
-                      ) : (
-                        <span className="text-muted-foreground">N/A</span>
-                      )}
+                      <div className="flex max-w-[260px] items-center gap-2">
+                        <span className="min-w-0 truncate font-medium">{mapping.app_name}</span>
+                        <InlineAppLink href={mapping.app_link} appName={mapping.app_name} />
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="max-w-[260px] truncate font-mono text-sm">{runtimeId ?? "N/A"}</div>
@@ -532,16 +533,18 @@ export function StoreMappingPage({
                         >
                           {pendingRow === mapping.id ? <Spinner className="size-3.5" /> : mapping.status === "active" ? <PowerOff size={14} /> : <Power size={14} />}
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => openDeleteMapping(mapping)}
-                          disabled={pendingRow === mapping.id}
-                          aria-label={`Delete ${mapping.app_name}`}
-                          title="Delete mapping"
-                        >
-                          <Trash2 size={14} />
-                        </Button>
+                        {mapping.status === "inactive" ? (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => openDeleteMapping(mapping)}
+                            disabled={pendingRow === mapping.id}
+                            aria-label={`Delete ${mapping.app_name}`}
+                            title="Delete mapping"
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        ) : null}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -549,7 +552,7 @@ export function StoreMappingPage({
               })}
               {!mappings.length ? (
                 <TableEmptyState
-                  colSpan={9}
+                  colSpan={7}
                   icon={Cable}
                   title="No App Mapping"
                   description="Create the first app mapping and select a store ref with credentials in the vault."

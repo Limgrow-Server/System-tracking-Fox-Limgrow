@@ -87,6 +87,7 @@ export type IosIapTransactionSummary = {
   verified_at: string;
   created_at: string;
 };
+
 export type NotificationJob = {
   id: string;
   schedule_id: string | null;

@@ -30,7 +30,6 @@ flowchart LR
 | iOS App Mapping | `/store-mapping/ios` | `ios_store_profiles`, `ios_store_mappings` | Admin, Dev |
 | Android Credential Config | `/configs/android` | `android_credentials` + Vault | Admin, Dev |
 | iOS Credential Config | `/configs/ios` | `ios_credentials` + Vault | Admin, Dev |
-| Notification Sender | `/notifications`, `send-notification`, `dispatch-notifications` | `notification_schedules`, `notification_jobs`, `notification_events`, `device_tokens`, Firebase credential + Vault | Admin / Cron secret |
 | Device Token API | `device-token-android`, `device-token-ios` | `device_tokens`, store mappings | Supabase JWT caller |
 | Android IAP Verification | `verify-android` | `android_credentials` + Vault + `iap_transactions` | Supabase JWT caller |
 | iOS IAP Verification | `verify-ios` | `ios_credentials` + Vault + `ios_iap_transactions` | Supabase JWT caller |
@@ -204,50 +203,12 @@ Main helpers:
 
 Detailed usage is documented in [edge-functions-config-guide.md](edge-functions-config-guide.md).
 
-## Notification Sender
-
-The dashboard notification workflow is:
-
-```mermaid
-sequenceDiagram
-  actor Admin
-  participant UI as /notifications
-  participant API as /api/admin/notifications/send
-  participant Edge as send-notification
-  participant Dispatch as dispatch-notifications
-  participant Vault as Vault RPC
-  participant Jobs as notification_jobs/events
-  participant FCM as Firebase Cloud Messaging
-
-  Admin->>UI: Select app + language payload
-  UI->>API: POST notification payload
-  API->>API: Require Admin session
-  API->>Edge: Forward with Supabase Auth JWT
-  Edge->>Edge: Verify Admin in team_members
-  Edge->>Vault: Resolve Firebase Admin service account
-  Edge->>FCM: Send topic messages
-  Edge->>Jobs: Persist job + per-topic events
-  Edge-->>UI: Send summary
-  Dispatch->>Jobs: Process due schedules and persist results
-```
-
-Topic convention follows the existing Google Apps Script flow:
-
-```text
-{topicBase}-{topicCode}
-```
-
-Example: `logo_maker-en`, `logo_maker-ja`.
-
-Device targeting uses `device_tokens.device_id`; Edge resolves the FCM token server-side and stores one `notification_events` row per device success/failure.
-
 ## Device Token API
 
 Device token registration is split by platform:
 
-- `device-token-android`: accepts Android FCM token with `appId` plus optional `packageName`.
-- `device-token-ios`: accepts iOS FCM token with `appId` plus optional `bundleId`.
-- `notification-event`: accepts mobile notification lifecycle events (`received`, `impression`, `opened`) with `notificationJobId`.
+- `device-token-android`: accepts Android FCM token with `packageName` or app name.
+- `device-token-ios`: accepts iOS FCM token with `bundleId` or app name.
 
 ```mermaid
 sequenceDiagram
@@ -258,11 +219,9 @@ sequenceDiagram
   participant Events as notification_events
 
   App->>Edge: register / heartbeat / unregister / mark_invalid
-  Edge->>Mapping: Resolve active mapping by appId, then packageName/bundleId/appName fallback
+  Edge->>Mapping: Resolve active mapping by packageName/bundleId/appName
   Edge->>Tokens: Upsert token_hash + app metadata
   Edge->>Events: Write invalid token event when requested
-  App->>Edge: notification received / displayed / opened
-  Edge->>Events: Insert notification_events row linked by notificationJobId
 ```
 
 ## IAP Verification

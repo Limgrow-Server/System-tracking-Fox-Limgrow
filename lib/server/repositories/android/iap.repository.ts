@@ -12,3 +12,23 @@ export function getAndroidIapTransactions(options?: { take?: number }) {
     },
   });
 }
+
+export function getAndroidStoreProfilesWithMappings() {
+  return prisma.androidStoreProfile.findMany({
+    where: { status: "ACTIVE" },
+    orderBy: { storeAccountName: "asc" },
+    include: {
+      mappings: {
+        where: { status: "ACTIVE" },
+        orderBy: { appName: "asc" },
+        select: {
+          id: true,
+          appName: true,
+          packageName: true,
+          appIconUrl: true,
+          appLink: true,
+        },
+      },
+    },
+  });
+}

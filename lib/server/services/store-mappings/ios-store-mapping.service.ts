@@ -22,11 +22,6 @@ function nullableText(value: unknown) {
   return cleaned || null;
 }
 
-function nullableAppId(value: unknown) {
-  const cleaned = cleanText(value).replace(/\s+/g, "").toUpperCase();
-  return cleaned || null;
-}
-
 const mappingStatusMap: Record<string, MappingStatus> = {
   active: MappingStatus.ACTIVE,
   inactive: MappingStatus.INACTIVE,
@@ -35,7 +30,7 @@ const mappingStatusMap: Record<string, MappingStatus> = {
 
 function normalizeIosMappingPayload(payload: StoreMappingPayload) {
   return {
-    appId: nullableAppId(payload.appId),
+    appId: nullableText(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
@@ -46,8 +41,8 @@ function normalizeIosMappingPayload(payload: StoreMappingPayload) {
 }
 
 function validateIosMapping(payload: ReturnType<typeof normalizeIosMappingPayload>) {
-  if (!payload.storeAccountName || !payload.appId || !payload.appName) {
-    throw badRequest("Store ref, app id and app name are required.");
+  if (!payload.storeAccountName || !payload.appName) {
+    throw badRequest("Store ref and app name are required.");
   }
 
   if (!payload.bundleId) {
@@ -57,7 +52,7 @@ function validateIosMapping(payload: ReturnType<typeof normalizeIosMappingPayloa
 
 function mapIosStoreMappingError(error: unknown): never {
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-    throw conflict("An iOS mapping with the same app id, app name or BundleId already exists.");
+    throw conflict("An iOS mapping with the same app name or BundleId already exists.");
   }
 
   throw error;
@@ -77,9 +72,9 @@ export async function iosStoreMappingExists(id: string) {
 }
 
 export async function saveIosStoreMappingDto(input: {
-  appId: string | null;
   appIconUrl: string | null;
   appLink: string | null;
+  appId: string | null;
   appName: string;
   bundleId: string;
   id?: string;
@@ -105,8 +100,8 @@ export async function createIosStoreMapping(payload: StoreMappingPayload) {
   try {
     const mapping = await saveIosStoreMappingDto({
       appIconUrl: row.appIconUrl,
-      appId: row.appId,
       appLink: row.appLink,
+      appId: row.appId,
       appName: row.appName,
       bundleId: row.bundleId!,
       status: row.status,
@@ -136,8 +131,8 @@ export async function updateIosStoreMapping(payload: StoreMappingPayload) {
   try {
     const mapping = await saveIosStoreMappingDto({
       appIconUrl: row.appIconUrl,
-      appId: row.appId,
       appLink: row.appLink,
+      appId: row.appId,
       appName: row.appName,
       bundleId: row.bundleId!,
       id,

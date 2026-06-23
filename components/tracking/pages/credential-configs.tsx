@@ -1,6 +1,13 @@
 "use client";
 
-import { type CSSProperties, type DragEvent, type FormEvent, type ReactNode, useMemo, useState } from "react";
+import {
+  type CSSProperties,
+  type DragEvent,
+  type FormEvent,
+  type ReactNode,
+  useMemo,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   CloudUpload,
@@ -9,6 +16,7 @@ import {
   EyeOff,
   FileUp,
   KeyRound,
+  Link2,
   Pencil,
   Plus,
   Power,
@@ -19,17 +27,49 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { PageHeader, StatusBadge, TableEmptyState, TablePaginationFooter } from "@/components/tracking/primitives";
+import {
+  PageHeader,
+  StatusBadge,
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   SECRET_TYPE_LABELS,
   credentialVaultOptions,
@@ -72,7 +112,10 @@ function safeCredentialRefPart(value: string) {
 }
 
 function credentialConfigMetadata(
-  credential: Pick<CredentialSecretMetadata, "avatar_url" | "description" | "link_store"> | null
+  credential: Pick<
+    CredentialSecretMetadata,
+    "avatar_url" | "description" | "link_store"
+  > | null,
 ) {
   if (credential?.link_store || credential?.avatar_url) {
     return {
@@ -109,15 +152,19 @@ function credentialConfigMetadata(
 
 function fileFromFormData(formData: FormData | null, key: string) {
   const value = formData?.get(key);
-  return typeof File !== "undefined" && value instanceof File && value.size > 0 ? value : null;
+  return typeof File !== "undefined" && value instanceof File && value.size > 0
+    ? value
+    : null;
 }
 
 type IosCredentialGroup = {
   id: string;
+  storeProfileId: string | null;
   storeName: string;
   linkStore: string;
   avatarUrl: string;
   issuerId: string;
+  supabaseUserId: string | null;
   keyReview: CredentialSecretMetadata | null;
   keyIap: CredentialSecretMetadata | null;
   keyFirebase: CredentialSecretMetadata | null;
@@ -150,13 +197,24 @@ function credentialStatusLabel(status: string | null | undefined) {
 }
 
 function keyPresence(credential: CredentialSecretMetadata | null) {
-  if (!credential) return <span className="text-sm text-muted-foreground">N/A</span>;
-  return <StatusBadge status={isActiveCredentialStatus(credential.status) ? "active" : "inactive"} />;
+  if (!credential)
+    return <span className="text-sm text-muted-foreground">N/A</span>;
+  return (
+    <StatusBadge
+      status={
+        isActiveCredentialStatus(credential.status) ? "active" : "inactive"
+      }
+    />
+  );
 }
 
 function credentialGroupStatus(group: IosCredentialGroup) {
   if (!group.credentials.length) return "unknown";
-  return group.credentials.some((credential) => isActiveCredentialStatus(credential.status)) ? "active" : "inactive";
+  return group.credentials.some((credential) =>
+    isActiveCredentialStatus(credential.status),
+  )
+    ? "active"
+    : "inactive";
 }
 
 function hardDeleteCredentialName(credential: CredentialSecretMetadata) {
@@ -165,9 +223,14 @@ function hardDeleteCredentialName(credential: CredentialSecretMetadata) {
 
 function hardDeleteTargetName(target: ConfigViewTarget | null) {
   if (!target) return "";
-  if (target.platform === "android") return hardDeleteCredentialName(target.credential);
+  if (target.platform === "android")
+    return hardDeleteCredentialName(target.credential);
 
-  return target.group.storeName.trim() || target.group.credentials[0]?.credential_ref || target.group.id;
+  return (
+    target.group.storeName.trim() ||
+    target.group.credentials[0]?.credential_ref ||
+    target.group.id
+  );
 }
 
 function hardDeleteTargetIds(target: ConfigViewTarget | null) {
@@ -178,28 +241,41 @@ function hardDeleteTargetIds(target: ConfigViewTarget | null) {
 
 function hardDeleteTargetIsInactive(target: ConfigViewTarget | null) {
   if (!target) return false;
-  if (target.platform === "android") return !isActiveCredentialStatus(target.credential.status);
-  return target.group.credentials.length > 0 && credentialGroupStatus(target.group) !== "active";
+  if (target.platform === "android")
+    return !isActiveCredentialStatus(target.credential.status);
+  return (
+    target.group.credentials.length > 0 &&
+    credentialGroupStatus(target.group) !== "active"
+  );
 }
 
 function configRowClass(status: string | null | undefined, hasVault: boolean) {
   if (!hasVault) return "bg-amber-50/40 hover:bg-amber-50/60";
-  if (!isActiveCredentialStatus(status)) return "bg-muted/30 text-muted-foreground hover:bg-muted/40";
+  if (!isActiveCredentialStatus(status))
+    return "bg-muted/30 text-muted-foreground hover:bg-muted/40";
   return "bg-emerald-50/20 hover:bg-emerald-50/40";
 }
 
-function TruncatedStoreLink({ href }: { href: string | null | undefined }) {
-  if (!href?.trim()) return <span className="text-sm text-muted-foreground">N/A</span>;
+function InlineStoreLink({
+  href,
+  storeName,
+}: {
+  href: string | null | undefined;
+  storeName: string | null | undefined;
+}) {
+  const cleanedHref = href?.trim();
+  if (!cleanedHref) return null;
 
   return (
     <a
-      className="block max-w-[170px] truncate text-sm font-medium text-primary underline-offset-4 hover:underline"
-      href={href}
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-md border text-muted-foreground transition hover:border-primary/50 hover:text-primary"
+      href={cleanedHref}
       target="_blank"
       rel="noreferrer"
-      title={href}
+      title={cleanedHref}
+      aria-label={`Open store link for ${storeName || "store"}`}
     >
-      {href}
+      <Link2 size={13} />
     </a>
   );
 }
@@ -221,7 +297,9 @@ function SensitiveInput({
 }) {
   const [revealed, setRevealed] = useState(false);
   const toggleLabel = revealed ? "Hide value" : "Show value";
-  const textSecurityStyle: WebkitTextSecurityStyle = { WebkitTextSecurity: revealed ? "none" : "disc" };
+  const textSecurityStyle: WebkitTextSecurityStyle = {
+    WebkitTextSecurity: revealed ? "none" : "disc",
+  };
 
   return (
     <div className="grid gap-2">
@@ -270,7 +348,9 @@ function ReadOnlyInputField({
   return (
     <div className="grid gap-2">
       <Label>{label}</Label>
-      {children ?? <Input readOnly value={notAvailable(value)} className="bg-muted/30" />}
+      {children ?? (
+        <Input readOnly value={notAvailable(value)} className="bg-muted/30" />
+      )}
     </div>
   );
 }
@@ -295,7 +375,11 @@ function ReadOnlySensitiveInputField({
         <Input
           id={id}
           readOnly
-          value={hasValue && !revealed ? maskedInlineValue(value) : notAvailable(value)}
+          value={
+            hasValue && !revealed
+              ? maskedInlineValue(value)
+              : notAvailable(value)
+          }
           tabIndex={-1}
           className="pointer-events-none bg-muted/30 pr-10 font-mono text-xs"
         />
@@ -344,8 +428,15 @@ function SecretContentViewer({
 }) {
   const [pending, setPending] = useState(false);
   const [revealed, setRevealed] = useState(false);
-  const displayText = secretText && revealed ? inlineSecretText(secretText) : maskedSecretLine(secretText);
-  const toggleLabel = secretText ? (revealed ? "Hide key" : "Show key") : "Load key from Vault";
+  const displayText =
+    secretText && revealed
+      ? inlineSecretText(secretText)
+      : maskedSecretLine(secretText);
+  const toggleLabel = secretText
+    ? revealed
+      ? "Hide key"
+      : "Show key"
+    : "Load key from Vault";
 
   async function loadSecret() {
     if (secretText) {
@@ -361,17 +452,29 @@ function SecretContentViewer({
         id: credential.id,
         platform,
       });
-      const response = await fetch(`/api/admin/credentials?${params.toString()}`);
-      const payload = (await response.json()) as { ok?: boolean; secretText?: string; error?: string };
+      const response = await fetch(
+        `/api/admin/credentials?${params.toString()}`,
+      );
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        secretText?: string;
+        error?: string;
+      };
 
-      if (!response.ok || !payload.ok || typeof payload.secretText !== "string") {
+      if (
+        !response.ok ||
+        !payload.ok ||
+        typeof payload.secretText !== "string"
+      ) {
         throw new Error(payload.error ?? "Could not load Vault secret.");
       }
 
       onSecretLoaded(credential.id, payload.secretText);
       setRevealed(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not load Vault secret.");
+      toast.error(
+        error instanceof Error ? error.message : "Could not load Vault secret.",
+      );
     } finally {
       setPending(false);
     }
@@ -404,7 +507,13 @@ function SecretContentViewer({
             onClick={loadSecret}
             title={toggleLabel}
           >
-            {pending ? <Spinner /> : revealed ? <EyeOff size={16} /> : <Eye size={16} />}
+            {pending ? (
+              <Spinner />
+            ) : revealed ? (
+              <EyeOff size={16} />
+            ) : (
+              <Eye size={16} />
+            )}
             <span className="sr-only">{toggleLabel}</span>
           </Button>
         </div>
@@ -435,7 +544,8 @@ function SecretContentViewer({
 }
 
 function AvatarPreview({ src }: { src: string | null | undefined }) {
-  if (!src?.trim()) return <span className="text-sm text-muted-foreground">N/A</span>;
+  if (!src?.trim())
+    return <span className="text-sm text-muted-foreground">N/A</span>;
 
   return (
     <div
@@ -503,12 +613,27 @@ function ConfigViewContent({
 
     return (
       <div className="space-y-4">
-        <ReadOnlyInputField label="Store name" value={credential.store_account_name} />
-        <ReadOnlyInputField label="Link store (optional)" value={metadata.linkStore} />
-        <ReadOnlyInputField label="Avatar (optional)" value={metadata.avatarUrl}>
+        <ReadOnlyInputField
+          label="Store name"
+          value={credential.store_account_name}
+        />
+        <ReadOnlyInputField
+          label="Link store (optional)"
+          value={metadata.linkStore}
+        />
+        <ReadOnlyInputField
+          label="Avatar (optional)"
+          value={metadata.avatarUrl}
+        >
           <div className="flex items-center gap-3">
-            <Input readOnly value={notAvailable(metadata.avatarUrl)} className="bg-muted/30" />
-            {metadata.avatarUrl ? <AvatarPreview src={metadata.avatarUrl} /> : null}
+            <Input
+              readOnly
+              value={notAvailable(metadata.avatarUrl)}
+              className="bg-muted/30"
+            />
+            {metadata.avatarUrl ? (
+              <AvatarPreview src={metadata.avatarUrl} />
+            ) : null}
           </div>
         </ReadOnlyInputField>
         <SecretContentViewer
@@ -527,14 +652,25 @@ function ConfigViewContent({
   return (
     <div className="space-y-4">
       <ReadOnlyInputField label="Store name" value={group.storeName} />
-      <ReadOnlyInputField label="Link store (optional)" value={group.linkStore} />
+      <ReadOnlyInputField
+        label="Link store (optional)"
+        value={group.linkStore}
+      />
       <ReadOnlyInputField label="Avatar (optional)" value={group.avatarUrl}>
         <div className="flex items-center gap-3">
-          <Input readOnly value={notAvailable(group.avatarUrl)} className="bg-muted/30" />
+          <Input
+            readOnly
+            value={notAvailable(group.avatarUrl)}
+            className="bg-muted/30"
+          />
           {group.avatarUrl ? <AvatarPreview src={group.avatarUrl} /> : null}
         </div>
       </ReadOnlyInputField>
-      <ReadOnlySensitiveInputField id="iosViewIssuerId" label="IssuerId" value={group.issuerId} />
+      <ReadOnlySensitiveInputField
+        id="iosViewIssuerId"
+        label="IssuerId"
+        value={group.issuerId}
+      />
       <IosCredentialKeyViewSection
         title="Key Review"
         credential={group.keyReview}
@@ -572,7 +708,9 @@ function credentialRefFromStore(prefix: string, storeName: string) {
   return `${prefix}_${safeCredentialRefPart(storeName) || "store"}`;
 }
 
-function iosCredentialRefPrefix(secretType: "apple_asc_p8" | "apple_iap_p8" | "firebase_service_account") {
+function iosCredentialRefPrefix(
+  secretType: "apple_asc_p8" | "apple_iap_p8" | "firebase_service_account",
+) {
   if (secretType === "apple_asc_p8") return "IOS_KEY_REVIEW";
   if (secretType === "apple_iap_p8") return "IOS_KEY_IAP";
   return "IOS_FIREBASE_ADMIN";
@@ -581,7 +719,8 @@ function iosCredentialRefPrefix(secretType: "apple_asc_p8" | "apple_iap_p8" | "f
 function iosCredentialPurpose(credential: CredentialSecretMetadata) {
   if (credential.secret_type === "apple_asc_p8") return "review" as const;
   if (credential.secret_type === "apple_iap_p8") return "iap" as const;
-  if (credential.secret_type === "firebase_service_account") return "firebase" as const;
+  if (credential.secret_type === "firebase_service_account")
+    return "firebase" as const;
   return null;
 }
 
@@ -589,7 +728,17 @@ function latestDateIso(left: string, right: string) {
   return new Date(left).getTime() >= new Date(right).getTime() ? left : right;
 }
 
-function groupIosCredentials(credentials: CredentialSecretMetadata[]): IosCredentialGroup[] {
+function selectedSupabaseUserId(value: string) {
+  return value && value !== "__none__" ? value : null;
+}
+
+function supabaseUserIdFormValue(value: string) {
+  return value === "__none__" ? "" : value;
+}
+
+function groupIosCredentials(
+  credentials: CredentialSecretMetadata[],
+): IosCredentialGroup[] {
   const groups = new Map<string, IosCredentialGroup>();
 
   for (const credential of credentials) {
@@ -597,15 +746,20 @@ function groupIosCredentials(credentials: CredentialSecretMetadata[]): IosCreden
     if (!purpose) continue;
 
     const metadata = credentialConfigMetadata(credential);
-    const groupKey = credential.store_profile_id || credential.store_account_name || credential.credential_ref;
+    const groupKey =
+      credential.store_profile_id ||
+      credential.store_account_name ||
+      credential.credential_ref;
     const current =
       groups.get(groupKey) ??
       ({
         id: groupKey,
+        storeProfileId: credential.store_profile_id,
         storeName: credential.store_account_name ?? "",
         linkStore: "",
         avatarUrl: "",
         issuerId: "",
+        supabaseUserId: credential.supabase_user_id,
         keyReview: null,
         keyIap: null,
         keyFirebase: null,
@@ -613,21 +767,44 @@ function groupIosCredentials(credentials: CredentialSecretMetadata[]): IosCreden
         updatedAt: credential.updated_at,
       } satisfies IosCredentialGroup);
 
-    if (!current.storeName && credential.store_account_name) current.storeName = credential.store_account_name;
-    if (!current.linkStore && metadata.linkStore) current.linkStore = metadata.linkStore;
-    if (!current.avatarUrl && metadata.avatarUrl) current.avatarUrl = metadata.avatarUrl;
-    if (!current.issuerId && credential.issuer_id) current.issuerId = credential.issuer_id;
+    if (!current.storeProfileId && credential.store_profile_id)
+      current.storeProfileId = credential.store_profile_id;
+    if (!current.storeName && credential.store_account_name)
+      current.storeName = credential.store_account_name;
+    if (!current.linkStore && metadata.linkStore)
+      current.linkStore = metadata.linkStore;
+    if (!current.avatarUrl && metadata.avatarUrl)
+      current.avatarUrl = metadata.avatarUrl;
+    if (!current.issuerId && credential.issuer_id)
+      current.issuerId = credential.issuer_id;
+    if (!current.supabaseUserId && credential.supabase_user_id)
+      current.supabaseUserId = credential.supabase_user_id;
     current.updatedAt = latestDateIso(current.updatedAt, credential.updated_at);
     current.credentials.push(credential);
 
-    if (purpose === "review" && (!current.keyReview || credential.status === "active")) current.keyReview = credential;
-    if (purpose === "iap" && (!current.keyIap || credential.status === "active")) current.keyIap = credential;
-    if (purpose === "firebase" && (!current.keyFirebase || credential.status === "active")) current.keyFirebase = credential;
+    if (
+      purpose === "review" &&
+      (!current.keyReview || credential.status === "active")
+    )
+      current.keyReview = credential;
+    if (
+      purpose === "iap" &&
+      (!current.keyIap || credential.status === "active")
+    )
+      current.keyIap = credential;
+    if (
+      purpose === "firebase" &&
+      (!current.keyFirebase || credential.status === "active")
+    )
+      current.keyFirebase = credential;
 
     groups.set(groupKey, current);
   }
 
-  return Array.from(groups.values()).sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+  return Array.from(groups.values()).sort(
+    (left, right) =>
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  );
 }
 
 function CredentialFileDropzone({
@@ -692,13 +869,17 @@ function CredentialFileDropzone({
           handleFile(event.dataTransfer.files?.[0]);
         }}
         className={`flex min-h-28 cursor-pointer items-center justify-center rounded-lg border-2 border-dashed px-4 py-6 text-center transition ${
-          isDragging ? "border-primary bg-primary/5" : "border-muted-foreground/25 bg-background hover:border-muted-foreground/45"
+          isDragging
+            ? "border-primary bg-primary/5"
+            : "border-muted-foreground/25 bg-background hover:border-muted-foreground/45"
         }`}
       >
         <div className="flex flex-wrap items-center justify-center gap-2 text-base">
           <CloudUpload size={20} className="text-muted-foreground" />
           <span>Drag and drop or</span>
-          <span className="font-semibold underline underline-offset-4">choose files</span>
+          <span className="font-semibold underline underline-offset-4">
+            choose files
+          </span>
           <span>to upload</span>
         </div>
       </label>
@@ -730,14 +911,22 @@ function meaningfulCredentialName(secretType: SecretType, fileName: string) {
   const baseName = fileBaseName(fileName).trim();
 
   if (["apple_asc_p8", "apple_iap_p8"].includes(secretType)) {
-    const appleKeyMatch = /^(?:AuthKey|SubscriptionKey)_([A-Za-z0-9]+)$/i.exec(baseName);
+    const appleKeyMatch = /^(?:AuthKey|SubscriptionKey)_([A-Za-z0-9]+)$/i.exec(
+      baseName,
+    );
     if (appleKeyMatch?.[1]) return appleKeyMatch[1];
   }
 
-  const withoutFirebaseAdminSdk = baseName.replace(/-firebase-adminsdk(?:-[a-z0-9]+)+$/i, "");
+  const withoutFirebaseAdminSdk = baseName.replace(
+    /-firebase-adminsdk(?:-[a-z0-9]+)+$/i,
+    "",
+  );
   const parts = withoutFirebaseAdminSdk.split("-");
 
-  while (parts.length > 1 && looksGeneratedSuffix(parts[parts.length - 1] ?? "")) {
+  while (
+    parts.length > 1 &&
+    looksGeneratedSuffix(parts[parts.length - 1] ?? "")
+  ) {
     parts.pop();
   }
 
@@ -745,7 +934,10 @@ function meaningfulCredentialName(secretType: SecretType, fileName: string) {
 }
 
 function credentialRefFromFile(secretType: SecretType, fileName: string) {
-  return credentialRefFromValue(secretType, meaningfulCredentialName(secretType, fileName));
+  return credentialRefFromValue(
+    secretType,
+    meaningfulCredentialName(secretType, fileName),
+  );
 }
 
 function fillFromCredential(credential: VaultCredentialOption) {
@@ -771,14 +963,19 @@ export function CredentialConfigs({
 }) {
   const router = useRouter();
   const platformLabel = platformFilter === "android" ? "Android" : "iOS";
-  const vaultOptions = useMemo(() => credentialVaultOptions(data.credentialSecrets), [data.credentialSecrets]);
+  const vaultOptions = useMemo(
+    () => credentialVaultOptions(data.credentialSecrets),
+    [data.credentialSecrets],
+  );
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [action, setAction] = useState<CredentialAction>("upsert");
   const [selectedCredentialId, setSelectedCredentialId] = useState("new");
   const [platform, setPlatform] = useState<MobilePlatform>(platformFilter);
   const [secretType, setSecretType] = useState<SecretType>("apple_asc_p8");
-  const [secretFormat, setSecretFormat] = useState<SecretFormat>(platformFilter === "ios" ? "p8" : "json");
+  const [secretFormat, setSecretFormat] = useState<SecretFormat>(
+    platformFilter === "ios" ? "p8" : "json",
+  );
   const [selectedRef, setSelectedRef] = useState("");
   const [storeName, setStoreName] = useState("");
   const [linkStore, setLinkStore] = useState("");
@@ -792,35 +989,87 @@ export function CredentialConfigs({
   const [iosReviewFile, setIosReviewFile] = useState<File | null>(null);
   const [iosIapFile, setIosIapFile] = useState<File | null>(null);
   const [iosFirebaseFile, setIosFirebaseFile] = useState<File | null>(null);
-  const [iosEditingGroup, setIosEditingGroup] = useState<IosCredentialGroup | null>(null);
+  const [iosEditingGroup, setIosEditingGroup] =
+    useState<IosCredentialGroup | null>(null);
   const [pending, setPending] = useState(false);
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
   const [viewTarget, setViewTarget] = useState<ConfigViewTarget | null>(null);
-  const [statusConfirmTarget, setStatusConfirmTarget] = useState<ConfigViewTarget | null>(null);
-  const [hardDeleteTarget, setHardDeleteTarget] = useState<ConfigViewTarget | null>(null);
-  const [hardDeleteConfirmationName, setHardDeleteConfirmationName] = useState("");
-  const [vaultSecretCache, setVaultSecretCache] = useState<Record<string, string>>({});
+  const [statusConfirmTarget, setStatusConfirmTarget] =
+    useState<ConfigViewTarget | null>(null);
+  const [hardDeleteTarget, setHardDeleteTarget] =
+    useState<ConfigViewTarget | null>(null);
+  const [hardDeleteConfirmationName, setHardDeleteConfirmationName] =
+    useState("");
+  const [vaultSecretCache, setVaultSecretCache] = useState<
+    Record<string, string>
+  >({});
 
   const isAndroidConfigCredentialView = platformFilter === "android";
   const isIosConfigCredentialView = platformFilter === "ios";
   const isAndroidCredentialOnlyFlow = isAndroidConfigCredentialView;
-  const effectiveAction: CredentialAction = isAndroidCredentialOnlyFlow || isIosConfigCredentialView ? "upsert" : action;
-  const showActionField = !isAndroidCredentialOnlyFlow && !isIosConfigCredentialView;
-  const showSecretTypeField = !isAndroidCredentialOnlyFlow && !isIosConfigCredentialView;
-  const showExistingCredentialField = !isAndroidCredentialOnlyFlow && !isIosConfigCredentialView;
+  const effectiveAction: CredentialAction =
+    isAndroidCredentialOnlyFlow || isIosConfigCredentialView
+      ? "upsert"
+      : action;
+  const showActionField =
+    !isAndroidCredentialOnlyFlow && !isIosConfigCredentialView;
+  const showSecretTypeField =
+    !isAndroidCredentialOnlyFlow && !isIosConfigCredentialView;
+  const showExistingCredentialField =
+    !isAndroidCredentialOnlyFlow && !isIosConfigCredentialView;
   const showPlatformField = false;
-  const controlFieldCount = [showActionField, showPlatformField, showSecretTypeField].filter(Boolean).length;
+  const controlFieldCount = [
+    showActionField,
+    showPlatformField,
+    showSecretTypeField,
+  ].filter(Boolean).length;
   const controlGridClass =
-    controlFieldCount >= 3 ? "grid gap-4 md:grid-cols-3" : controlFieldCount === 2 ? "grid gap-4 md:grid-cols-2" : "grid gap-4";
-  const secretTypes = (Object.keys(SECRET_TYPE_LABELS) as SecretType[]).filter((type) => secretTypeSupportsPlatform(type, platform));
-  const iosCredentialGroups = useMemo(() => groupIosCredentials(data.credentialSecrets), [data.credentialSecrets]);
+    controlFieldCount >= 3
+      ? "grid gap-4 md:grid-cols-3"
+      : controlFieldCount === 2
+        ? "grid gap-4 md:grid-cols-2"
+        : "grid gap-4";
+  const secretTypes = (Object.keys(SECRET_TYPE_LABELS) as SecretType[]).filter(
+    (type) => secretTypeSupportsPlatform(type, platform),
+  );
+  const iosCredentialGroups = useMemo(
+    () => groupIosCredentials(data.credentialSecrets),
+    [data.credentialSecrets],
+  );
   const selectedAndroidCredential = useMemo(
-    () => data.credentialSecrets.find((credential) => credential.platform === "android" && credential.id === selectedCredentialId) ?? null,
-    [data.credentialSecrets, selectedCredentialId]
+    () =>
+      data.credentialSecrets.find(
+        (credential) =>
+          credential.platform === "android" &&
+          credential.id === selectedCredentialId,
+      ) ?? null,
+    [data.credentialSecrets, selectedCredentialId],
   );
 
+  function credentialBelongsToCurrentAuthSelection(
+    credential: CredentialSecretMetadata,
+  ) {
+    if (isAndroidCredentialOnlyFlow) {
+      return credential.id === selectedCredentialId;
+    }
+
+    if (!isIosConfigCredentialView || !iosEditingGroup) {
+      return false;
+    }
+
+    if (iosEditingGroup.storeProfileId) {
+      return credential.store_profile_id === iosEditingGroup.storeProfileId;
+    }
+
+    return credential.store_account_name === iosEditingGroup.storeName;
+  }
+
   function cacheVaultSecret(credentialId: string, secretText: string) {
-    setVaultSecretCache((current) => (current[credentialId] === secretText ? current : { ...current, [credentialId]: secretText }));
+    setVaultSecretCache((current) =>
+      current[credentialId] === secretText
+        ? current
+        : { ...current, [credentialId]: secretText },
+    );
   }
 
   function resetAndroidCredentialForm() {
@@ -849,6 +1098,7 @@ export function CredentialConfigs({
     setStoreName("");
     setLinkStore("");
     setAvatarUrl("");
+    setSupabaseUserId("");
     setSecretFile(null);
     setSelectedFileName("");
     setIosReviewKeyId("");
@@ -878,6 +1128,7 @@ export function CredentialConfigs({
       setStoreName("");
       setLinkStore("");
       setAvatarUrl("");
+      setSupabaseUserId("");
       setSecretFile(null);
       setSelectedFileName("");
       setIosEditingGroup(null);
@@ -927,6 +1178,7 @@ export function CredentialConfigs({
     setStoreName(group.storeName);
     setLinkStore(group.linkStore);
     setAvatarUrl(group.avatarUrl);
+    setSupabaseUserId(group.supabaseUserId ?? "");
     setIosReviewKeyId(group.keyReview?.key_id ?? "");
     setIosIapKeyId(group.keyIap?.key_id ?? "");
     setIosIssuerId(group.keyReview?.issuer_id ?? group.keyIap?.issuer_id ?? "");
@@ -942,7 +1194,7 @@ export function CredentialConfigs({
   async function patchCredentialStatus(
     credential: CredentialSecretMetadata,
     platformValue: MobilePlatform,
-    nextStatus: "active" | "disabled"
+    nextStatus: "active" | "disabled",
   ) {
     const response = await fetch("/api/admin/credentials", {
       method: "PATCH",
@@ -953,41 +1205,66 @@ export function CredentialConfigs({
         status: nextStatus,
       }),
     });
-    const payload = (await response.json()) as { ok?: boolean; message?: string; error?: string };
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      message?: string;
+      error?: string;
+    };
 
     if (!response.ok || !payload.ok) {
       throw new Error(payload.error ?? "Credential status update failed.");
     }
   }
 
-  async function toggleAndroidCredentialStatus(credential: CredentialSecretMetadata) {
-    const nextStatus = isActiveCredentialStatus(credential.status) ? "disabled" : "active";
+  async function toggleAndroidCredentialStatus(
+    credential: CredentialSecretMetadata,
+  ) {
+    const nextStatus = isActiveCredentialStatus(credential.status)
+      ? "disabled"
+      : "active";
     setPendingActionId(credential.id);
 
     try {
       await patchCredentialStatus(credential, "android", nextStatus);
-      toast.success(`Android credential has been set to ${credentialStatusLabel(nextStatus)}.`);
+      toast.success(
+        `Android credential has been set to ${credentialStatusLabel(nextStatus)}.`,
+      );
       router.refresh();
       setStatusConfirmTarget(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Credential status update failed.");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Credential status update failed.",
+      );
     } finally {
       setPendingActionId(null);
     }
   }
 
   async function toggleIosCredentialGroupStatus(group: IosCredentialGroup) {
-    const nextStatus = credentialGroupStatus(group) === "active" ? "disabled" : "active";
+    const nextStatus =
+      credentialGroupStatus(group) === "active" ? "disabled" : "active";
     setPendingActionId(group.id);
 
     try {
-      await Promise.all(group.credentials.map((credential) => patchCredentialStatus(credential, "ios", nextStatus)));
+      await Promise.all(
+        group.credentials.map((credential) =>
+          patchCredentialStatus(credential, "ios", nextStatus),
+        ),
+      );
 
-      toast.success(`iOS credential group has been set to ${credentialStatusLabel(nextStatus)}.`);
+      toast.success(
+        `iOS credential group has been set to ${credentialStatusLabel(nextStatus)}.`,
+      );
       router.refresh();
       setStatusConfirmTarget(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Credential status update failed.");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Credential status update failed.",
+      );
     } finally {
       setPendingActionId(null);
     }
@@ -1013,7 +1290,10 @@ export function CredentialConfigs({
     if (!hardDeleteTarget || hardDeleteConfirmDisabled) return;
 
     const ids = hardDeleteTargetIds(hardDeleteTarget);
-    const targetId = hardDeleteTarget.platform === "android" ? hardDeleteTarget.credential.id : hardDeleteTarget.group.id;
+    const targetId =
+      hardDeleteTarget.platform === "android"
+        ? hardDeleteTarget.credential.id
+        : hardDeleteTarget.group.id;
     setPendingActionId(targetId);
 
     try {
@@ -1026,7 +1306,11 @@ export function CredentialConfigs({
           confirmationName: hardDeleteConfirmationName.trim(),
         }),
       });
-      const payload = (await response.json()) as { ok?: boolean; message?: string; error?: string };
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+      };
 
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error ?? "Credential hard delete failed.");
@@ -1038,7 +1322,11 @@ export function CredentialConfigs({
       toast.success(payload.message ?? "Credential config hard deleted.");
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Credential hard delete failed.");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Credential hard delete failed.",
+      );
     } finally {
       setPendingActionId(null);
     }
@@ -1058,23 +1346,30 @@ export function CredentialConfigs({
       const nextSecretType = "apple_asc_p8";
       setSecretType(nextSecretType);
       setSecretFormat(defaultSecretFormatForType(nextSecretType));
-      if (selectedFileName) setSelectedRef(credentialRefFromFile(nextSecretType, selectedFileName));
+      if (selectedFileName)
+        setSelectedRef(credentialRefFromFile(nextSecretType, selectedFileName));
     }
   }
 
   function changeSecretType(nextValue: SecretType) {
-    const nextPlatform = platformFilter ?? defaultPlatformForSecretType(nextValue, platform);
+    const nextPlatform =
+      platformFilter ?? defaultPlatformForSecretType(nextValue, platform);
     setSelectedCredentialId("new");
     setSecretType(nextValue);
     setPlatform(nextPlatform);
     setSecretFormat(defaultSecretFormatForType(nextValue));
-    if (selectedFileName) setSelectedRef(credentialRefFromFile(nextValue, selectedFileName));
+    if (selectedFileName)
+      setSelectedRef(credentialRefFromFile(nextValue, selectedFileName));
   }
 
   function selectSecretFile(file: File) {
     const lowerName = file.name.toLowerCase();
 
-    if (isAndroidCredentialOnlyFlow && !lowerName.endsWith(".json") && file.type !== "application/json") {
+    if (
+      isAndroidCredentialOnlyFlow &&
+      !lowerName.endsWith(".json") &&
+      file.type !== "application/json"
+    ) {
       toast.error("Google Service Account must be a JSON file.");
       return;
     }
@@ -1085,7 +1380,9 @@ export function CredentialConfigs({
       setSelectedCredentialId("new");
       setSelectedRef(credentialRefFromFile(secretType, file.name));
     } else if (storeName.trim()) {
-      setSelectedRef(credentialRefFromStore("ANDROID_SERVICE_ACCOUNT", storeName));
+      setSelectedRef(
+        credentialRefFromStore("ANDROID_SERVICE_ACCOUNT", storeName),
+      );
     }
 
     if (isAndroidCredentialOnlyFlow || lowerName.endsWith(".json")) {
@@ -1093,14 +1390,19 @@ export function CredentialConfigs({
     } else if (lowerName.endsWith(".p8")) {
       setSecretFormat("p8");
     } else {
-      toast.error("Credential file must be a JSON service account or Apple .p8 key.");
+      toast.error(
+        "Credential file must be a JSON service account or Apple .p8 key.",
+      );
       return;
     }
 
     toast.info(`${file.name} selected for secure upload.`);
   }
 
-  function selectIosSecretFile(kind: "review" | "iap" | "firebase", file: File) {
+  function selectIosSecretFile(
+    kind: "review" | "iap" | "firebase",
+    file: File,
+  ) {
     const lowerName = file.name.toLowerCase();
 
     if ((kind === "review" || kind === "iap") && !lowerName.endsWith(".p8")) {
@@ -1108,7 +1410,11 @@ export function CredentialConfigs({
       return;
     }
 
-    if (kind === "firebase" && !lowerName.endsWith(".json") && file.type !== "application/json") {
+    if (
+      kind === "firebase" &&
+      !lowerName.endsWith(".json") &&
+      file.type !== "application/json"
+    ) {
       toast.error("Key firebase-admin must be a JSON file.");
       return;
     }
@@ -1121,7 +1427,7 @@ export function CredentialConfigs({
 
   async function patchCredentialMetadata(
     credential: CredentialSecretMetadata,
-    fields: { keyId?: string | null; issuerId?: string | null }
+    fields: { keyId?: string | null; issuerId?: string | null },
   ) {
     const response = await fetch("/api/admin/credentials", {
       method: "PATCH",
@@ -1132,6 +1438,7 @@ export function CredentialConfigs({
         storeAccountName: storeName,
         linkStore,
         avatarUrl,
+        supabaseUserId: selectedSupabaseUserId(supabaseUserId),
         keyId: fields.keyId,
         issuerId: fields.issuerId,
         status: "active",
@@ -1145,15 +1452,26 @@ export function CredentialConfigs({
   }
 
   async function uploadIosCredential(
-    secretType: Extract<SecretType, "apple_asc_p8" | "apple_iap_p8" | "firebase_service_account">,
+    secretType: Extract<
+      SecretType,
+      "apple_asc_p8" | "apple_iap_p8" | "firebase_service_account"
+    >,
     file: File,
-    options: { existingId?: string | null; existingRef?: string | null; keyId?: string }
+    options: {
+      existingId?: string | null;
+      existingRef?: string | null;
+      keyId?: string;
+    },
   ) {
     const keyId = options.keyId?.trim() ?? "";
-    const credentialRef = credentialRefFromStore(iosCredentialRefPrefix(secretType), storeName);
+    const credentialRef = credentialRefFromStore(
+      iosCredentialRefPrefix(secretType),
+      storeName,
+    );
     const body = new FormData();
     if (options.existingId) body.set("id", options.existingId);
-    if (iosEditingGroup?.id) body.set("storeProfileId", iosEditingGroup.id);
+    if (iosEditingGroup?.storeProfileId)
+      body.set("storeProfileId", iosEditingGroup.storeProfileId);
     body.set("credentialRef", options.existingRef || credentialRef);
     body.set("secretType", secretType);
     body.set("secretFormat", defaultSecretFormatForType(secretType));
@@ -1162,10 +1480,12 @@ export function CredentialConfigs({
     body.set("storeAccountName", storeName);
     body.set("linkStore", linkStore);
     body.set("avatarUrl", avatarUrl);
+    body.set("supabaseUserId", supabaseUserIdFormValue(supabaseUserId));
     body.set("secretFile", file);
 
     if (keyId) body.set("keyId", keyId);
-    if (secretType !== "firebase_service_account" && iosIssuerId.trim()) body.set("issuerId", iosIssuerId.trim());
+    if (secretType !== "firebase_service_account" && iosIssuerId.trim())
+      body.set("issuerId", iosIssuerId.trim());
 
     const response = await fetch("/api/admin/credentials", {
       method: "POST",
@@ -1179,9 +1499,11 @@ export function CredentialConfigs({
   }
 
   async function submitIosCredentialGroup(formData: FormData | null) {
-    const reviewFile = iosReviewFile ?? fileFromFormData(formData, "iosReviewFile");
+    const reviewFile =
+      iosReviewFile ?? fileFromFormData(formData, "iosReviewFile");
     const iapFile = iosIapFile ?? fileFromFormData(formData, "iosIapFile");
-    const firebaseFile = iosFirebaseFile ?? fileFromFormData(formData, "iosFirebaseFile");
+    const firebaseFile =
+      iosFirebaseFile ?? fileFromFormData(formData, "iosFirebaseFile");
     const hasAnyFile = Boolean(reviewFile || iapFile || firebaseFile);
 
     if (!storeName.trim()) {
@@ -1197,12 +1519,15 @@ export function CredentialConfigs({
     }
 
     if (iosEditingGroup) {
-      const metadataUpdates = iosEditingGroup.credentials.filter((credential) => {
-        if (credential.secret_type === "apple_asc_p8") return !reviewFile;
-        if (credential.secret_type === "apple_iap_p8") return !iapFile;
-        if (credential.secret_type === "firebase_service_account") return !firebaseFile;
-        return false;
-      });
+      const metadataUpdates = iosEditingGroup.credentials.filter(
+        (credential) => {
+          if (credential.secret_type === "apple_asc_p8") return !reviewFile;
+          if (credential.secret_type === "apple_iap_p8") return !iapFile;
+          if (credential.secret_type === "firebase_service_account")
+            return !firebaseFile;
+          return false;
+        },
+      );
 
       await Promise.all(
         metadataUpdates.map((credential) =>
@@ -1214,11 +1539,12 @@ export function CredentialConfigs({
                   ? iosIapKeyId
                   : undefined,
             issuerId:
-              credential.secret_type === "apple_asc_p8" || credential.secret_type === "apple_iap_p8"
+              credential.secret_type === "apple_asc_p8" ||
+              credential.secret_type === "apple_iap_p8"
                 ? iosIssuerId
                 : undefined,
-          })
-        )
+          }),
+        ),
       );
     }
 
@@ -1263,8 +1589,12 @@ export function CredentialConfigs({
         return;
       }
 
-      const submittedSecretFile = secretFile ?? fileFromFormData(submittedFormData, "secretFile");
-      const isAndroidMetadataUpdate = isAndroidCredentialOnlyFlow && selectedCredentialId !== "new" && !submittedSecretFile;
+      const submittedSecretFile =
+        secretFile ?? fileFromFormData(submittedFormData, "secretFile");
+      const isAndroidMetadataUpdate =
+        isAndroidCredentialOnlyFlow &&
+        selectedCredentialId !== "new" &&
+        !submittedSecretFile;
 
       if (effectiveAction === "upsert" && !submittedSecretFile) {
         if (!isAndroidMetadataUpdate) {
@@ -1283,11 +1613,15 @@ export function CredentialConfigs({
             storeAccountName: storeName,
             linkStore,
             avatarUrl,
-            supabaseUserId: supabaseUserId && supabaseUserId !== "__none__" ? supabaseUserId : null,
+            supabaseUserId: selectedSupabaseUserId(supabaseUserId),
             status: "active",
           }),
         });
-        const payload = (await response.json()) as { ok?: boolean; message?: string; error?: string };
+        const payload = (await response.json()) as {
+          ok?: boolean;
+          message?: string;
+          error?: string;
+        };
 
         if (!response.ok || !payload.ok) {
           throw new Error(payload.error ?? "Credential operation failed.");
@@ -1303,7 +1637,9 @@ export function CredentialConfigs({
 
       const body = new FormData();
       const targetCredentialRef =
-        isAndroidCredentialOnlyFlow && selectedCredentialId !== "new" && selectedRef
+        isAndroidCredentialOnlyFlow &&
+        selectedCredentialId !== "new" &&
+        selectedRef
           ? selectedRef
           : isAndroidCredentialOnlyFlow
             ? credentialRefFromStore("ANDROID_SERVICE_ACCOUNT", storeName)
@@ -1321,11 +1657,14 @@ export function CredentialConfigs({
       body.set("platform", platform);
       body.set("storeAccountName", storeName);
       if (isAndroidCredentialOnlyFlow) {
-        const currentCredential = data.credentialSecrets.find((credential) => credential.id === selectedCredentialId);
-        if (currentCredential?.store_profile_id) body.set("storeProfileId", currentCredential.store_profile_id);
+        const currentCredential = data.credentialSecrets.find(
+          (credential) => credential.id === selectedCredentialId,
+        );
+        if (currentCredential?.store_profile_id)
+          body.set("storeProfileId", currentCredential.store_profile_id);
         body.set("linkStore", linkStore);
         body.set("avatarUrl", avatarUrl);
-        if (supabaseUserId && supabaseUserId !== "__none__") body.set("supabaseUserId", supabaseUserId);
+        body.set("supabaseUserId", supabaseUserIdFormValue(supabaseUserId));
       }
       if (submittedSecretFile) body.set("secretFile", submittedSecretFile);
 
@@ -1335,9 +1674,16 @@ export function CredentialConfigs({
           effectiveAction === "delete"
             ? JSON.stringify({ credentialRef: selectedRef, platform })
             : body,
-        headers: effectiveAction === "delete" ? { "content-type": "application/json" } : undefined,
+        headers:
+          effectiveAction === "delete"
+            ? { "content-type": "application/json" }
+            : undefined,
       });
-      const payload = (await response.json()) as { ok?: boolean; message?: string; error?: string };
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        message?: string;
+        error?: string;
+      };
 
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error ?? "Credential operation failed.");
@@ -1350,14 +1696,18 @@ export function CredentialConfigs({
       toast.success(payload.message ?? "Credential operation completed.");
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Credential operation failed.");
+      toast.error(
+        error instanceof Error ? error.message : "Credential operation failed.",
+      );
     } finally {
       setPending(false);
     }
   }
 
   const statusTargetId =
-    statusConfirmTarget?.platform === "android" ? statusConfirmTarget.credential.id : statusConfirmTarget?.group.id;
+    statusConfirmTarget?.platform === "android"
+      ? statusConfirmTarget.credential.id
+      : statusConfirmTarget?.group.id;
   const statusTargetName =
     statusConfirmTarget?.platform === "android"
       ? notAvailable(statusConfirmTarget.credential.store_account_name)
@@ -1372,16 +1722,20 @@ export function CredentialConfigs({
       : statusConfirmTarget
         ? credentialGroupStatus(statusConfirmTarget.group)
         : "inactive";
-  const statusTargetNext = statusTargetCurrent === "active" ? "inactive" : "active";
+  const statusTargetNext =
+    statusTargetCurrent === "active" ? "inactive" : "active";
   const statusTargetCurrentLabel = credentialStatusLabel(statusTargetCurrent);
   const statusTargetNextLabel = credentialStatusLabel(statusTargetNext);
   const statusConfirmDisabled =
     !statusConfirmTarget ||
     pendingActionId === statusTargetId ||
-    (statusConfirmTarget.platform === "ios" && !statusConfirmTarget.group.credentials.length);
+    (statusConfirmTarget.platform === "ios" &&
+      !statusConfirmTarget.group.credentials.length);
   const hardDeleteExpectedName = hardDeleteTargetName(hardDeleteTarget);
   const hardDeleteTargetId =
-    hardDeleteTarget?.platform === "android" ? hardDeleteTarget.credential.id : hardDeleteTarget?.group.id;
+    hardDeleteTarget?.platform === "android"
+      ? hardDeleteTarget.credential.id
+      : hardDeleteTarget?.group.id;
   const hardDeleteConfirmDisabled =
     !hardDeleteTarget ||
     !hardDeleteTargetIsInactive(hardDeleteTarget) ||
@@ -1399,7 +1753,9 @@ export function CredentialConfigs({
             <SheetTrigger asChild>
               <Button>
                 <Plus size={15} />
-                {isAndroidCredentialOnlyFlow || isIosConfigCredentialView ? "Add credential" : "Add / rotate credential"}
+                {isAndroidCredentialOnlyFlow || isIosConfigCredentialView
+                  ? "Add credential"
+                  : "Add / rotate credential"}
               </Button>
             </SheetTrigger>
             <SheetContent
@@ -1411,287 +1767,394 @@ export function CredentialConfigs({
               </SheetHeader>
 
               <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
-                <form className="space-y-4" autoComplete="off" onSubmit={submit}>
-                {controlFieldCount ? (
-                  <div className={controlGridClass}>
-                    {showActionField ? (
-                      <div className="grid gap-2">
-                        <Label htmlFor="action">Action</Label>
-                        <Select value={action} onValueChange={(nextValue) => setAction(nextValue as CredentialAction)}>
-                          <SelectTrigger id="action" className="h-9 w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="upsert">Create / rotate</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    ) : null}
-
-                    {showPlatformField ? (
-                      <div className="grid gap-2">
-                        <Label htmlFor="platform">Platform</Label>
-                        <Select value={platform} onValueChange={(nextValue) => changePlatform(nextValue as MobilePlatform)}>
-                          <SelectTrigger id="platform" className="h-9 w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="android">Android</SelectItem>
-                            <SelectItem value="ios">iOS</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    ) : null}
-
-                    {showSecretTypeField ? (
-                      <div className="grid gap-2">
-                        <Label htmlFor="secretType">Secret type</Label>
-                        <Select value={secretType} onValueChange={(nextValue) => changeSecretType(nextValue as SecretType)}>
-                          <SelectTrigger id="secretType" className="h-9 w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {secretTypes.map((type) => (
-                              <SelectItem key={type} value={type}>
-                                {SECRET_TYPE_LABELS[type]}
+                <form
+                  className="space-y-4"
+                  autoComplete="off"
+                  onSubmit={submit}
+                >
+                  {controlFieldCount ? (
+                    <div className={controlGridClass}>
+                      {showActionField ? (
+                        <div className="grid gap-2">
+                          <Label htmlFor="action">Action</Label>
+                          <Select
+                            value={action}
+                            onValueChange={(nextValue) =>
+                              setAction(nextValue as CredentialAction)
+                            }
+                          >
+                            <SelectTrigger id="action" className="h-9 w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="upsert">
+                                Create / rotate
                               </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ) : null}
 
-                <div className="grid gap-2">
-                  <Label htmlFor="storeName">Store name</Label>
-                  <Input
-                    id="storeName"
-                    value={storeName}
-                    onChange={(event) => setStoreName(event.target.value)}
-                    placeholder={platform === "android" ? "Google Play store/account name" : "App Store Connect store/account name"}
-                    autoComplete="off"
-                    data-lpignore="true"
-                    data-1p-ignore="true"
-                    required={effectiveAction === "upsert"}
-                  />
-                </div>
+                      {showPlatformField ? (
+                        <div className="grid gap-2">
+                          <Label htmlFor="platform">Platform</Label>
+                          <Select
+                            value={platform}
+                            onValueChange={(nextValue) =>
+                              changePlatform(nextValue as MobilePlatform)
+                            }
+                          >
+                            <SelectTrigger id="platform" className="h-9 w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="android">Android</SelectItem>
+                              <SelectItem value="ios">iOS</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ) : null}
 
-                {isAndroidCredentialOnlyFlow || isIosConfigCredentialView ? (
-                  <>
-                    <div className="grid gap-2">
-                      <Label htmlFor="linkStore">Link store <span className="text-muted-foreground">(optional)</span></Label>
-                      <Input
-                        id="linkStore"
-                        type="url"
-                        value={linkStore}
-                        onChange={(event) => setLinkStore(event.target.value)}
-                        placeholder={platform === "ios" ? "https://apps.apple.com/app/id..." : "https://play.google.com/store/apps/details?id=..."}
-                        autoComplete="off"
-                        data-lpignore="true"
-                        data-1p-ignore="true"
-                      />
-                    </div>
-
-                    <div className="grid gap-2">
-                      <Label htmlFor="avatarUrl">Avatar <span className="text-muted-foreground">(optional)</span></Label>
-                      <Input
-                        id="avatarUrl"
-                        type="url"
-                        value={avatarUrl}
-                        onChange={(event) => setAvatarUrl(event.target.value)}
-                        placeholder="https://.../store-avatar.png"
-                        autoComplete="off"
-                        data-lpignore="true"
-                        data-1p-ignore="true"
-                      />
-                    </div>
-
-                    {isAndroidCredentialOnlyFlow && data.supabaseAuthUsers.length > 0 ? (
-                      <div className="grid gap-2">
-                        <Label htmlFor="supabaseUserId">
-                          Auth account <span className="text-muted-foreground">(optional)</span>
-                        </Label>
-                        <Select value={supabaseUserId} onValueChange={setSupabaseUserId}>
-                          <SelectTrigger id="supabaseUserId" className="h-9 w-full">
-                            <SelectValue placeholder="No account linked" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__none__">No account linked</SelectItem>
-                            {data.supabaseAuthUsers
-                              .filter((user) => {
-                                if (user.id === supabaseUserId) return true;
-                                const alreadyLinked = data.credentialSecrets.some(
-                                  (credential) =>
-                                    credential.supabase_user_id === user.id &&
-                                    credential.id !== selectedCredentialId
-                                );
-                                return !alreadyLinked;
-                              })
-                              .map((user) => (
-                                <SelectItem key={user.id} value={user.id}>
-                                  {user.email}
+                      {showSecretTypeField ? (
+                        <div className="grid gap-2">
+                          <Label htmlFor="secretType">Secret type</Label>
+                          <Select
+                            value={secretType}
+                            onValueChange={(nextValue) =>
+                              changeSecretType(nextValue as SecretType)
+                            }
+                          >
+                            <SelectTrigger
+                              id="secretType"
+                              className="h-9 w-full"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {secretTypes.map((type) => (
+                                <SelectItem key={type} value={type}>
+                                  {SECRET_TYPE_LABELS[type]}
                                 </SelectItem>
                               ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    ) : null}
-                  </>
-                ) : null}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
-                {showExistingCredentialField ? (
                   <div className="grid gap-2">
-                    <Label htmlFor="existingCredential">Existing credential</Label>
-                    <Select value={selectedCredentialId} onValueChange={selectCredential}>
-                      <SelectTrigger id="existingCredential" className="h-9 w-full">
-                        <SelectValue placeholder="Create new credential ref" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="new">Create new credential ref</SelectItem>
-                        {vaultOptions.map((option) => (
-                          <SelectItem key={option.id} value={option.id}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
-
-                {!isAndroidCredentialOnlyFlow && !isIosConfigCredentialView ? (
-                  <div className="grid gap-2">
-                    <Label htmlFor="credentialRef">Credential ref</Label>
+                    <Label htmlFor="storeName">Store name</Label>
                     <Input
-                      id="credentialRef"
-                      className="font-mono text-xs"
-                      placeholder="APPLE_ASC_KEY_P8__team__key_id"
-                      value={selectedRef}
-                      onChange={(event) => {
-                        setSelectedCredentialId("new");
-                        setSelectedRef(event.target.value);
-                      }}
-                      required
+                      id="storeName"
+                      value={storeName}
+                      onChange={(event) => setStoreName(event.target.value)}
+                      placeholder={
+                        platform === "android"
+                          ? "Google Play store/account name"
+                          : "App Store Connect store/account name"
+                      }
+                      autoComplete="off"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      required={effectiveAction === "upsert"}
                     />
                   </div>
-                ) : null}
 
-                {isIosConfigCredentialView ? (
-                  <>
-                    <SensitiveInput
-                      id="iosIssuerId"
-                      label="IssuerId"
-                      value={iosIssuerId}
-                      onChange={setIosIssuerId}
-                      placeholder="App Store Connect issuer id"
-                    />
+                  {isAndroidCredentialOnlyFlow || isIosConfigCredentialView ? (
+                    <>
+                      <div className="grid gap-2">
+                        <Label htmlFor="linkStore">
+                          Link store{" "}
+                          <span className="text-muted-foreground">
+                            (optional)
+                          </span>
+                        </Label>
+                        <Input
+                          id="linkStore"
+                          type="url"
+                          value={linkStore}
+                          onChange={(event) => setLinkStore(event.target.value)}
+                          placeholder={
+                            platform === "ios"
+                              ? "https://apps.apple.com/app/id..."
+                              : "https://play.google.com/store/apps/details?id=..."
+                          }
+                          autoComplete="off"
+                          data-lpignore="true"
+                          data-1p-ignore="true"
+                        />
+                      </div>
 
-                    <fieldset className="space-y-3 rounded-lg border p-3">
-                      <legend className="px-1 text-sm font-medium">Key Review</legend>
+                      <div className="grid gap-2">
+                        <Label htmlFor="avatarUrl">
+                          Avatar{" "}
+                          <span className="text-muted-foreground">
+                            (optional)
+                          </span>
+                        </Label>
+                        <Input
+                          id="avatarUrl"
+                          type="url"
+                          value={avatarUrl}
+                          onChange={(event) => setAvatarUrl(event.target.value)}
+                          placeholder="https://.../store-avatar.png"
+                          autoComplete="off"
+                          data-lpignore="true"
+                          data-1p-ignore="true"
+                        />
+                      </div>
+
+                      {(isAndroidCredentialOnlyFlow ||
+                        isIosConfigCredentialView) &&
+                      data.supabaseAuthUsers.length > 0 ? (
+                        <div className="grid gap-2">
+                          <Label htmlFor="supabaseUserId">
+                            Auth account{" "}
+                            <span className="text-muted-foreground">
+                              (optional)
+                            </span>
+                          </Label>
+                          <Select
+                            value={supabaseUserId}
+                            onValueChange={setSupabaseUserId}
+                          >
+                            <SelectTrigger
+                              id="supabaseUserId"
+                              className="h-9 w-full"
+                            >
+                              <SelectValue placeholder="No account linked" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">
+                                No account linked
+                              </SelectItem>
+                              {data.supabaseAuthUsers
+                                .filter((user) => {
+                                  if (user.id === supabaseUserId) return true;
+                                  const alreadyLinked =
+                                    data.credentialSecrets.some(
+                                      (credential) =>
+                                        credential.supabase_user_id ===
+                                          user.id &&
+                                        !credentialBelongsToCurrentAuthSelection(
+                                          credential,
+                                        ),
+                                    );
+                                  return !alreadyLinked;
+                                })
+                                .map((user) => (
+                                  <SelectItem key={user.id} value={user.id}>
+                                    {user.email}
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+
+                  {showExistingCredentialField ? (
+                    <div className="grid gap-2">
+                      <Label htmlFor="existingCredential">
+                        Existing credential
+                      </Label>
+                      <Select
+                        value={selectedCredentialId}
+                        onValueChange={selectCredential}
+                      >
+                        <SelectTrigger
+                          id="existingCredential"
+                          className="h-9 w-full"
+                        >
+                          <SelectValue placeholder="Create new credential ref" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="new">
+                            Create new credential ref
+                          </SelectItem>
+                          {vaultOptions.map((option) => (
+                            <SelectItem key={option.id} value={option.id}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
+
+                  {!isAndroidCredentialOnlyFlow &&
+                  !isIosConfigCredentialView ? (
+                    <div className="grid gap-2">
+                      <Label htmlFor="credentialRef">Credential ref</Label>
+                      <Input
+                        id="credentialRef"
+                        className="font-mono text-xs"
+                        placeholder="APPLE_ASC_KEY_P8__team__key_id"
+                        value={selectedRef}
+                        onChange={(event) => {
+                          setSelectedCredentialId("new");
+                          setSelectedRef(event.target.value);
+                        }}
+                        required
+                      />
+                    </div>
+                  ) : null}
+
+                  {isIosConfigCredentialView ? (
+                    <>
                       <SensitiveInput
-                        id="iosReviewKeyId"
-                        label="Key Review ID (optional)"
-                        value={iosReviewKeyId}
-                        onChange={setIosReviewKeyId}
-                        placeholder="ASC key id for reviews"
+                        id="iosIssuerId"
+                        label="IssuerId"
+                        value={iosIssuerId}
+                        onChange={setIosIssuerId}
+                        placeholder="App Store Connect issuer id"
                       />
+
+                      <fieldset className="space-y-3 rounded-lg border p-3">
+                        <legend className="px-1 text-sm font-medium">
+                          Key Review
+                        </legend>
+                        <SensitiveInput
+                          id="iosReviewKeyId"
+                          label="Key Review ID (optional)"
+                          value={iosReviewKeyId}
+                          onChange={setIosReviewKeyId}
+                          placeholder="ASC key id for reviews"
+                        />
+                        <CredentialFileDropzone
+                          id="iosReviewFile"
+                          label="Key Review (optional)"
+                          accept=".p8"
+                          fileName={iosReviewFile?.name ?? ""}
+                          onFile={(file) => selectIosSecretFile("review", file)}
+                        />
+                        {iosEditingGroup?.keyReview ? (
+                          <SecretContentViewer
+                            credential={iosEditingGroup.keyReview}
+                            platform="ios"
+                            label="Current Key Review"
+                            secretText={
+                              vaultSecretCache[iosEditingGroup.keyReview.id]
+                            }
+                            onSecretLoaded={cacheVaultSecret}
+                          />
+                        ) : null}
+                      </fieldset>
+
+                      <fieldset className="space-y-3 rounded-lg border p-3">
+                        <legend className="px-1 text-sm font-medium">
+                          Key IAP
+                        </legend>
+                        <SensitiveInput
+                          id="iosIapKeyId"
+                          label="Key IAP ID (optional)"
+                          value={iosIapKeyId}
+                          onChange={setIosIapKeyId}
+                          placeholder="ASC key id for IAP"
+                        />
+                        <CredentialFileDropzone
+                          id="iosIapFile"
+                          label="Key IAP (optional)"
+                          accept=".p8"
+                          fileName={iosIapFile?.name ?? ""}
+                          onFile={(file) => selectIosSecretFile("iap", file)}
+                        />
+                        {iosEditingGroup?.keyIap ? (
+                          <SecretContentViewer
+                            credential={iosEditingGroup.keyIap}
+                            platform="ios"
+                            label="Current Key IAP"
+                            secretText={
+                              vaultSecretCache[iosEditingGroup.keyIap.id]
+                            }
+                            onSecretLoaded={cacheVaultSecret}
+                          />
+                        ) : null}
+                      </fieldset>
+
+                      <fieldset className="space-y-3 rounded-lg border p-3">
+                        <legend className="px-1 text-sm font-medium">
+                          Key Firebase
+                        </legend>
+                        <CredentialFileDropzone
+                          id="iosFirebaseFile"
+                          label="Key firebase-admin (optional)"
+                          accept=".json,application/json"
+                          fileName={iosFirebaseFile?.name ?? ""}
+                          onFile={(file) =>
+                            selectIosSecretFile("firebase", file)
+                          }
+                        />
+                        {iosEditingGroup?.keyFirebase ? (
+                          <SecretContentViewer
+                            credential={iosEditingGroup.keyFirebase}
+                            platform="ios"
+                            label="Current key firebase-admin"
+                            secretText={
+                              vaultSecretCache[iosEditingGroup.keyFirebase.id]
+                            }
+                            onSecretLoaded={cacheVaultSecret}
+                          />
+                        ) : null}
+                      </fieldset>
+                    </>
+                  ) : effectiveAction === "upsert" ? (
+                    <>
                       <CredentialFileDropzone
-                        id="iosReviewFile"
-                        label="Key Review (optional)"
-                        accept=".p8"
-                        fileName={iosReviewFile?.name ?? ""}
-                        onFile={(file) => selectIosSecretFile("review", file)}
+                        id="secretFile"
+                        label={
+                          isAndroidCredentialOnlyFlow
+                            ? "Google Service Account JSON"
+                            : "Secret file"
+                        }
+                        accept={
+                          isAndroidCredentialOnlyFlow
+                            ? ".json,application/json"
+                            : ".json,.p8,application/json"
+                        }
+                        fileName={selectedFileName}
+                        onFile={selectSecretFile}
                       />
-                      {iosEditingGroup?.keyReview ? (
+                      {isAndroidCredentialOnlyFlow &&
+                      selectedAndroidCredential ? (
                         <SecretContentViewer
-                          credential={iosEditingGroup.keyReview}
-                          platform="ios"
-                          label="Current Key Review"
-                          secretText={vaultSecretCache[iosEditingGroup.keyReview.id]}
+                          credential={selectedAndroidCredential}
+                          platform="android"
+                          label="Current Google Service Account JSON"
+                          secretText={
+                            vaultSecretCache[selectedAndroidCredential.id]
+                          }
                           onSecretLoaded={cacheVaultSecret}
                         />
                       ) : null}
-                    </fieldset>
+                    </>
+                  ) : (
+                    <Alert className="border-amber-200 bg-amber-50 text-amber-900">
+                      <AlertTitle>Delete impact</AlertTitle>
+                      <AlertDescription className="text-amber-900">
+                        Deleting the credential revokes its Vault secret and may
+                        remove readiness/runtime credentials from mappings that
+                        still reference it.
+                      </AlertDescription>
+                    </Alert>
+                  )}
 
-                    <fieldset className="space-y-3 rounded-lg border p-3">
-                      <legend className="px-1 text-sm font-medium">Key IAP</legend>
-                      <SensitiveInput
-                        id="iosIapKeyId"
-                        label="Key IAP ID (optional)"
-                        value={iosIapKeyId}
-                        onChange={setIosIapKeyId}
-                        placeholder="ASC key id for IAP"
-                      />
-                      <CredentialFileDropzone
-                        id="iosIapFile"
-                        label="Key IAP (optional)"
-                        accept=".p8"
-                        fileName={iosIapFile?.name ?? ""}
-                        onFile={(file) => selectIosSecretFile("iap", file)}
-                      />
-                      {iosEditingGroup?.keyIap ? (
-                        <SecretContentViewer
-                          credential={iosEditingGroup.keyIap}
-                          platform="ios"
-                          label="Current Key IAP"
-                          secretText={vaultSecretCache[iosEditingGroup.keyIap.id]}
-                          onSecretLoaded={cacheVaultSecret}
-                        />
-                      ) : null}
-                    </fieldset>
-
-                    <fieldset className="space-y-3 rounded-lg border p-3">
-                      <legend className="px-1 text-sm font-medium">Key Firebase</legend>
-                      <CredentialFileDropzone
-                        id="iosFirebaseFile"
-                        label="Key firebase-admin (optional)"
-                        accept=".json,application/json"
-                        fileName={iosFirebaseFile?.name ?? ""}
-                        onFile={(file) => selectIosSecretFile("firebase", file)}
-                      />
-                      {iosEditingGroup?.keyFirebase ? (
-                        <SecretContentViewer
-                          credential={iosEditingGroup.keyFirebase}
-                          platform="ios"
-                          label="Current key firebase-admin"
-                          secretText={vaultSecretCache[iosEditingGroup.keyFirebase.id]}
-                          onSecretLoaded={cacheVaultSecret}
-                        />
-                      ) : null}
-                    </fieldset>
-                  </>
-                ) : effectiveAction === "upsert" ? (
-                  <>
-                    <CredentialFileDropzone
-                      id="secretFile"
-                      label={isAndroidCredentialOnlyFlow ? "Google Service Account JSON" : "Secret file"}
-                      accept={isAndroidCredentialOnlyFlow ? ".json,application/json" : ".json,.p8,application/json"}
-                      fileName={selectedFileName}
-                      onFile={selectSecretFile}
-                    />
-                    {isAndroidCredentialOnlyFlow && selectedAndroidCredential ? (
-                      <SecretContentViewer
-                        credential={selectedAndroidCredential}
-                        platform="android"
-                        label="Current Google Service Account JSON"
-                        secretText={vaultSecretCache[selectedAndroidCredential.id]}
-                        onSecretLoaded={cacheVaultSecret}
-                      />
-                    ) : null}
-                  </>
-                ) : (
-                  <Alert className="border-amber-200 bg-amber-50 text-amber-900">
-                    <AlertTitle>Delete impact</AlertTitle>
-                    <AlertDescription className="text-amber-900">
-                      Deleting the credential revokes its Vault secret and may remove readiness/runtime credentials from mappings that still reference it.
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                <Button disabled={pending} className="w-full">
-                  {pending ? <Spinner /> : effectiveAction === "delete" ? <Trash2 size={15} /> : <RotateCcw size={15} />}
-                  {pending ? "Processing..." : effectiveAction === "delete" ? "Delete credential" : "Save Vault credential"}
-                </Button>
+                  <Button disabled={pending} className="w-full">
+                    {pending ? (
+                      <Spinner />
+                    ) : effectiveAction === "delete" ? (
+                      <Trash2 size={15} />
+                    ) : (
+                      <RotateCcw size={15} />
+                    )}
+                    {pending
+                      ? "Processing..."
+                      : effectiveAction === "delete"
+                        ? "Delete credential"
+                        : "Save Vault credential"}
+                  </Button>
                 </form>
               </div>
             </SheetContent>
@@ -1699,11 +2162,20 @@ export function CredentialConfigs({
         }
       />
 
-      <Sheet open={Boolean(viewTarget)} onOpenChange={(open) => !open && setViewTarget(null)}>
-        <SheetContent side="right" className="gap-0 p-0 data-[side=right]:w-full md:data-[side=right]:w-[42vw] md:data-[side=right]:max-w-none">
+      <Sheet
+        open={Boolean(viewTarget)}
+        onOpenChange={(open) => !open && setViewTarget(null)}
+      >
+        <SheetContent
+          side="right"
+          className="gap-0 p-0 data-[side=right]:w-full md:data-[side=right]:w-[42vw] md:data-[side=right]:max-w-none"
+        >
           <SheetHeader className="border-b px-5 py-4">
             <SheetTitle>Credential config details</SheetTitle>
-            <SheetDescription>Config fields mirror the add form. Vault key content loads only when an Admin requests it.</SheetDescription>
+            <SheetDescription>
+              Config fields mirror the add form. Vault key content loads only
+              when an Admin requests it.
+            </SheetDescription>
           </SheetHeader>
           <div className="flex-1 overflow-y-auto px-5 py-5">
             {viewTarget ? (
@@ -1725,18 +2197,40 @@ export function CredentialConfigs({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{statusTargetNext === "active" ? "Activate credential config?" : "Deactivate credential config?"}</DialogTitle>
+            <DialogTitle>
+              {statusTargetNext === "active"
+                ? "Activate credential config?"
+                : "Deactivate credential config?"}
+            </DialogTitle>
             <DialogDescription>
-              {statusTargetName} is currently {statusTargetCurrentLabel}. Confirm to change it to {statusTargetNextLabel}.
-              {statusTargetNext === "inactive" ? " Existing mappings that depend on this config may stop using this key." : " This config will become selectable and usable again."}
+              {statusTargetName} is currently {statusTargetCurrentLabel}.
+              Confirm to change it to {statusTargetNextLabel}.
+              {statusTargetNext === "inactive"
+                ? " Existing mappings that depend on this config may stop using this key."
+                : " This config will become selectable and usable again."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={Boolean(pendingActionId)} onClick={() => setStatusConfirmTarget(null)}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={Boolean(pendingActionId)}
+              onClick={() => setStatusConfirmTarget(null)}
+            >
               Cancel
             </Button>
-            <Button type="button" disabled={statusConfirmDisabled} onClick={confirmStatusToggle}>
-              {pendingActionId === statusTargetId ? <Spinner /> : statusTargetNext === "active" ? <Power size={15} /> : <PowerOff size={15} />}
+            <Button
+              type="button"
+              disabled={statusConfirmDisabled}
+              onClick={confirmStatusToggle}
+            >
+              {pendingActionId === statusTargetId ? (
+                <Spinner />
+              ) : statusTargetNext === "active" ? (
+                <Power size={15} />
+              ) : (
+                <PowerOff size={15} />
+              )}
               {statusTargetNext === "active" ? "Activate" : "Deactivate"}
             </Button>
           </DialogFooter>
@@ -1756,15 +2250,21 @@ export function CredentialConfigs({
           <DialogHeader>
             <DialogTitle>Hard delete credential config?</DialogTitle>
             <DialogDescription>
-              This will delete the Vault secret and permanently delete the credential record from the app database. To confirm, type the exact store name below.
+              This will delete the Vault secret and permanently delete the
+              credential record from the app database. To confirm, type the
+              exact store name below.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2">
-            <Label htmlFor="hardDeleteConfirmationName">Type `{hardDeleteExpectedName}` to confirm</Label>
+            <Label htmlFor="hardDeleteConfirmationName">
+              Type `{hardDeleteExpectedName}` to confirm
+            </Label>
             <Input
               id="hardDeleteConfirmationName"
               value={hardDeleteConfirmationName}
-              onChange={(event) => setHardDeleteConfirmationName(event.target.value)}
+              onChange={(event) =>
+                setHardDeleteConfirmationName(event.target.value)
+              }
               placeholder={hardDeleteExpectedName}
               autoComplete="off"
               data-lpignore="true"
@@ -1783,8 +2283,17 @@ export function CredentialConfigs({
             >
               Cancel
             </Button>
-            <Button type="button" variant="destructive" disabled={hardDeleteConfirmDisabled} onClick={confirmHardDelete}>
-              {pendingActionId === hardDeleteTargetId ? <Spinner /> : <Trash2 size={15} />}
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={hardDeleteConfirmDisabled}
+              onClick={confirmHardDelete}
+            >
+              {pendingActionId === hardDeleteTargetId ? (
+                <Spinner />
+              ) : (
+                <Trash2 size={15} />
+              )}
               Hard delete
             </Button>
           </DialogFooter>
@@ -1797,13 +2306,12 @@ export function CredentialConfigs({
             <CardTitle>Credential config</CardTitle>
           </CardHeader>
           <CardContent className="overflow-x-auto px-0">
-            <Table className="min-w-[1120px]">
+            <Table className="min-w-[1040px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-4">Avatar</TableHead>
                   <TableHead>Store name</TableHead>
                   <TableHead>Account</TableHead>
-                  <TableHead>Link store</TableHead>
                   <TableHead>Service account JSON</TableHead>
                   <TableHead>Vault</TableHead>
                   <TableHead>Status</TableHead>
@@ -1816,64 +2324,125 @@ export function CredentialConfigs({
                   const metadata = credentialConfigMetadata(secret);
 
                   return (
-                    <TableRow key={secret.id} className={configRowClass(secret.status, Boolean(secret.vault_secret_name))}>
+                    <TableRow
+                      key={secret.id}
+                      className={configRowClass(
+                        secret.status,
+                        Boolean(secret.vault_secret_name),
+                      )}
+                    >
                       <TableCell className="pl-4">
                         <AvatarPreview src={metadata.avatarUrl} />
                       </TableCell>
                       <TableCell>
-                        <div className="font-medium">{notAvailable(secret.store_account_name)}</div>
+                        <div className="flex max-w-[260px] items-center gap-2">
+                          <span className="min-w-0 truncate font-medium">
+                            {notAvailable(secret.store_account_name)}
+                          </span>
+                          <InlineStoreLink
+                            href={metadata.linkStore}
+                            storeName={secret.store_account_name}
+                          />
+                        </div>
                       </TableCell>
                       <TableCell>
                         {secret.supabase_user_id ? (
                           <div className="flex items-center gap-1.5">
-                            <UserRound size={14} className="shrink-0 text-emerald-600" />
-                            <span className="max-w-[160px] truncate text-xs font-medium" title={secret.supabase_user_email ?? secret.supabase_user_id}>
-                              {data.supabaseAuthUsers.find((user) => user.id === secret.supabase_user_id)?.email ?? secret.supabase_user_id.slice(0, 8) + "…"}
+                            <UserRound
+                              size={14}
+                              className="shrink-0 text-emerald-600"
+                            />
+                            <span
+                              className="max-w-[160px] truncate text-xs font-medium"
+                              title={
+                                secret.supabase_user_email ??
+                                secret.supabase_user_id
+                              }
+                            >
+                              {data.supabaseAuthUsers.find(
+                                (user) => user.id === secret.supabase_user_id,
+                              )?.email ??
+                                secret.supabase_user_id.slice(0, 8) + "…"}
                             </span>
                           </div>
                         ) : (
-                          <span className="text-sm text-muted-foreground">N/A</span>
+                          <span className="text-sm text-muted-foreground">
+                            N/A
+                          </span>
                         )}
                       </TableCell>
-                      <TableCell className="max-w-[190px]">
-                        <TruncatedStoreLink href={metadata.linkStore} />
-                      </TableCell>
-                      <TableCell>
-                        {keyPresence(secret)}
-                      </TableCell>
+                      <TableCell>{keyPresence(secret)}</TableCell>
                       <TableCell>
                         {secret.vault_secret_name ? (
                           <>
                             <div className="max-w-[220px] truncate font-mono text-xs text-muted-foreground">
                               {secret.vault_secret_name}
                             </div>
-                            <div className="text-xs text-muted-foreground">v{secret.vault_secret_version}</div>
+                            <div className="text-xs text-muted-foreground">
+                              v{secret.vault_secret_version}
+                            </div>
                           </>
                         ) : (
-                          <span className="text-sm text-muted-foreground">N/A</span>
+                          <span className="text-sm text-muted-foreground">
+                            N/A
+                          </span>
                         )}
                       </TableCell>
                       <TableCell>
-                        <StatusBadge status={displayCredentialStatus(secret.status)} />
+                        <StatusBadge
+                          status={displayCredentialStatus(secret.status)}
+                        />
                       </TableCell>
                       <TableCell>{dateTime(secret.updated_at)}</TableCell>
                       <TableCell className="align-middle">
                         <div className="flex items-center gap-2">
-                          <Button type="button" variant="outline" size="icon" title="View credential" onClick={() => setViewTarget({ platform: "android", credential: secret })}>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            title="View credential"
+                            onClick={() =>
+                              setViewTarget({
+                                platform: "android",
+                                credential: secret,
+                              })
+                            }
+                          >
                             <Eye size={14} />
                           </Button>
-                          <Button type="button" variant="outline" size="icon" title="Edit credential" onClick={() => editAndroidCredential(secret)}>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            title="Edit credential"
+                            onClick={() => editAndroidCredential(secret)}
+                          >
                             <Pencil size={14} />
                           </Button>
                           <Button
                             type="button"
                             variant="outline"
                             size="icon"
-                            title={isActiveCredentialStatus(secret.status) ? "Deactivate credential" : "Activate credential"}
+                            title={
+                              isActiveCredentialStatus(secret.status)
+                                ? "Deactivate credential"
+                                : "Activate credential"
+                            }
                             disabled={pendingActionId === secret.id}
-                            onClick={() => setStatusConfirmTarget({ platform: "android", credential: secret })}
+                            onClick={() =>
+                              setStatusConfirmTarget({
+                                platform: "android",
+                                credential: secret,
+                              })
+                            }
                           >
-                            {pendingActionId === secret.id ? <Spinner /> : isActiveCredentialStatus(secret.status) ? <PowerOff size={14} /> : <Power size={14} />}
+                            {pendingActionId === secret.id ? (
+                              <Spinner />
+                            ) : isActiveCredentialStatus(secret.status) ? (
+                              <PowerOff size={14} />
+                            ) : (
+                              <Power size={14} />
+                            )}
                           </Button>
                           {!isActiveCredentialStatus(secret.status) ? (
                             <Button
@@ -1882,7 +2451,12 @@ export function CredentialConfigs({
                               size="icon"
                               title="Hard delete credential"
                               disabled={pendingActionId === secret.id}
-                              onClick={() => openHardDelete({ platform: "android", credential: secret })}
+                              onClick={() =>
+                                openHardDelete({
+                                  platform: "android",
+                                  credential: secret,
+                                })
+                              }
                             >
                               <Trash2 size={14} />
                             </Button>
@@ -1894,7 +2468,7 @@ export function CredentialConfigs({
                 })}
                 {!data.credentialSecrets.length ? (
                   <TableEmptyState
-                    colSpan={9}
+                    colSpan={8}
                     icon={KeyRound}
                     title="No credentials"
                     description="Add a Google Service Account JSON key to create the first Android credential."
@@ -1902,7 +2476,10 @@ export function CredentialConfigs({
                 ) : null}
               </TableBody>
             </Table>
-            <TablePaginationFooter shown={Math.min(data.credentialSecrets.length, 24)} total={data.credentialSecrets.length} />
+            <TablePaginationFooter
+              shown={Math.min(data.credentialSecrets.length, 24)}
+              total={data.credentialSecrets.length}
+            />
           </CardContent>
         </Card>
       ) : isIosConfigCredentialView ? (
@@ -1911,12 +2488,12 @@ export function CredentialConfigs({
             <CardTitle>Credential config</CardTitle>
           </CardHeader>
           <CardContent className="overflow-x-auto px-0">
-            <Table className="min-w-[1320px]">
+            <Table className="min-w-[1240px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-4">Avatar</TableHead>
                   <TableHead>Store name</TableHead>
-                  <TableHead>Link store</TableHead>
+                  <TableHead>Account</TableHead>
                   <TableHead>Issuer ID</TableHead>
                   <TableHead>Key IAP</TableHead>
                   <TableHead>Key Review</TableHead>
@@ -1929,16 +2506,52 @@ export function CredentialConfigs({
               </TableHeader>
               <TableBody>
                 {iosCredentialGroups.slice(0, 24).map((group) => (
-                  <TableRow key={group.id} className={configRowClass(credentialGroupStatus(group), group.credentials.some((credential) => Boolean(credential.vault_secret_name)))}>
+                  <TableRow
+                    key={group.id}
+                    className={configRowClass(
+                      credentialGroupStatus(group),
+                      group.credentials.some((credential) =>
+                        Boolean(credential.vault_secret_name),
+                      ),
+                    )}
+                  >
                     <TableCell className="pl-4">
                       <AvatarPreview src={group.avatarUrl} />
                     </TableCell>
                     <TableCell>
-                      <div className="font-medium">{notAvailable(group.storeName)}</div>
+                      <div className="flex max-w-[260px] items-center gap-2">
+                        <span className="min-w-0 truncate font-medium">
+                          {notAvailable(group.storeName)}
+                        </span>
+                        <InlineStoreLink
+                          href={group.linkStore}
+                          storeName={group.storeName}
+                        />
+                      </div>
                     </TableCell>
-                    <TableCell className="max-w-[190px]">
-                      <TruncatedStoreLink href={group.linkStore} />
+                    <TableCell>
+                      {group.supabaseUserId ? (
+                        <div className="flex items-center gap-1.5">
+                          <UserRound
+                            size={14}
+                            className="shrink-0 text-emerald-600"
+                          />
+                          <span
+                            className="max-w-[160px] truncate text-xs font-medium"
+                            title={group.supabaseUserId}
+                          >
+                            {data.supabaseAuthUsers.find(
+                              (user) => user.id === group.supabaseUserId,
+                            )?.email ?? `${group.supabaseUserId.slice(0, 8)}…`}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">
+                          N/A
+                        </span>
+                      )}
                     </TableCell>
+
                     <TableCell>
                       <span className="block max-w-[220px] truncate text-muted-foreground">
                         {notAvailable(group.issuerId)}
@@ -1951,12 +2564,19 @@ export function CredentialConfigs({
                       <div className="space-y-1">
                         {group.credentials.length ? (
                           group.credentials.slice(0, 3).map((credential) => (
-                            <div key={credential.id} className="max-w-[220px] truncate font-mono text-xs text-muted-foreground">
-                              {credential.vault_secret_name ? `${credential.vault_secret_name} v${credential.vault_secret_version}` : "N/A"}
+                            <div
+                              key={credential.id}
+                              className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
+                            >
+                              {credential.vault_secret_name
+                                ? `${credential.vault_secret_name} v${credential.vault_secret_version}`
+                                : "N/A"}
                             </div>
                           ))
                         ) : (
-                          <span className="text-sm text-muted-foreground">N/A</span>
+                          <span className="text-sm text-muted-foreground">
+                            N/A
+                          </span>
                         )}
                       </div>
                     </TableCell>
@@ -1966,30 +2586,62 @@ export function CredentialConfigs({
                     <TableCell>{dateTime(group.updatedAt)}</TableCell>
                     <TableCell className="align-middle">
                       <div className="flex items-center gap-2">
-                        <Button type="button" variant="outline" size="icon" title="View credential" onClick={() => setViewTarget({ platform: "ios", group })}>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          title="View credential"
+                          onClick={() =>
+                            setViewTarget({ platform: "ios", group })
+                          }
+                        >
                           <Eye size={14} />
                         </Button>
-                        <Button type="button" variant="outline" size="icon" title="Update credential" onClick={() => editIosCredentialGroup(group)}>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          title="Update credential"
+                          onClick={() => editIosCredentialGroup(group)}
+                        >
                           <Pencil size={14} />
                         </Button>
                         <Button
                           type="button"
                           variant="outline"
                           size="icon"
-                          title={credentialGroupStatus(group) === "active" ? "Deactivate credential group" : "Activate credential group"}
-                          disabled={pendingActionId === group.id || !group.credentials.length}
-                          onClick={() => setStatusConfirmTarget({ platform: "ios", group })}
+                          title={
+                            credentialGroupStatus(group) === "active"
+                              ? "Deactivate credential group"
+                              : "Activate credential group"
+                          }
+                          disabled={
+                            pendingActionId === group.id ||
+                            !group.credentials.length
+                          }
+                          onClick={() =>
+                            setStatusConfirmTarget({ platform: "ios", group })
+                          }
                         >
-                          {pendingActionId === group.id ? <Spinner /> : credentialGroupStatus(group) === "active" ? <PowerOff size={14} /> : <Power size={14} />}
+                          {pendingActionId === group.id ? (
+                            <Spinner />
+                          ) : credentialGroupStatus(group) === "active" ? (
+                            <PowerOff size={14} />
+                          ) : (
+                            <Power size={14} />
+                          )}
                         </Button>
-                        {credentialGroupStatus(group) !== "active" && group.credentials.length ? (
+                        {credentialGroupStatus(group) !== "active" &&
+                        group.credentials.length ? (
                           <Button
                             type="button"
                             variant="destructive"
                             size="icon"
                             title="Hard delete credential group"
                             disabled={pendingActionId === group.id}
-                            onClick={() => openHardDelete({ platform: "ios", group })}
+                            onClick={() =>
+                              openHardDelete({ platform: "ios", group })
+                            }
                           >
                             <Trash2 size={14} />
                           </Button>
@@ -2000,7 +2652,7 @@ export function CredentialConfigs({
                 ))}
                 {!iosCredentialGroups.length ? (
                   <TableEmptyState
-                    colSpan={11}
+                    colSpan={10}
                     icon={KeyRound}
                     title="No credentials"
                     description="Add iOS review, IAP or firebase-admin keys to create the first credential group."
@@ -2008,7 +2660,10 @@ export function CredentialConfigs({
                 ) : null}
               </TableBody>
             </Table>
-            <TablePaginationFooter shown={Math.min(iosCredentialGroups.length, 24)} total={iosCredentialGroups.length} />
+            <TablePaginationFooter
+              shown={Math.min(iosCredentialGroups.length, 24)}
+              total={iosCredentialGroups.length}
+            />
           </CardContent>
         </Card>
       ) : null}
