@@ -1,0 +1,2 @@
+npm run check:branch
+npx lint-staged
