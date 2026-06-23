@@ -55,6 +55,17 @@ type SaveTemplatesResponse = {
   error?: string;
 };
 
+type SaveStoreInfoResponse = {
+  ok?: boolean;
+  error?: string;
+  message?: string;
+  store?: {
+    contactEmail: string | null;
+    supportPhone: string | null;
+    websiteUrl: string | null;
+  };
+};
+
 function defaultTemplates(storeMappingId: string): ReviewReplyTemplateDto[] {
   return RATINGS.map((rating) => ({
     id: null,
@@ -278,14 +289,15 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
     data.apps[0]?.mappingId ?? "",
   );
   const [storeInfo, setStoreInfo] = useState<StoreInfoDraft>({
-    contactEmail: "",
-    supportPhone: "",
-    websiteUrl: "",
+    contactEmail: data.store.contactEmail ?? "",
+    supportPhone: data.store.supportPhone ?? "",
+    websiteUrl: data.store.websiteUrl ?? "",
   });
   const [drafts, setDrafts] = useState<DraftTemplates>(() =>
     initialDrafts(data),
   );
   const [saving, setSaving] = useState(false);
+  const [savingStoreInfo, setSavingStoreInfo] = useState(false);
 
   const selectedApp = useMemo(
     () => data.apps.find((app) => app.mappingId === selectedAppId) ?? null,
@@ -335,8 +347,41 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
     toast.success("Reply templates reset.");
   }
 
-  function saveStoreInfoPreview() {
-    toast.success("Store info updated for this UI preview.");
+  async function saveStoreInfo() {
+    if (savingStoreInfo) return;
+
+    setSavingStoreInfo(true);
+
+    try {
+      const response = await fetch("/api/reply-store-info", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contactEmail: storeInfo.contactEmail,
+          storeProfileId: data.store.storeProfileId,
+          supportPhone: storeInfo.supportPhone,
+          websiteUrl: storeInfo.websiteUrl,
+        }),
+      });
+      const payload = (await response.json()) as SaveStoreInfoResponse;
+
+      if (!response.ok || !payload.ok || !payload.store) {
+        throw new Error(payload.error ?? "Store info could not be saved.");
+      }
+
+      setStoreInfo({
+        contactEmail: payload.store.contactEmail ?? "",
+        supportPhone: payload.store.supportPhone ?? "",
+        websiteUrl: payload.store.websiteUrl ?? "",
+      });
+      toast.success(payload.message ?? "Store info saved.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Store info could not be saved.",
+      );
+    } finally {
+      setSavingStoreInfo(false);
+    }
   }
 
   async function saveSelectedApp() {
@@ -421,21 +466,6 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         </span>
       </nav>
 
-      <PageHeader
-        eyebrow="Google Play"
-        title={data.store.storeAccountName}
-        description="Configure shared store contact info and reusable review reply templates."
-        action={
-          <Badge
-            variant="outline"
-            className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
-          >
-            <Smartphone size={12} />
-            Android
-          </Badge>
-        }
-      />
-
       <Card className="rounded-lg">
         <CardHeader className="flex items-center justify-between gap-3 border-b">
           <div>
@@ -444,8 +474,13 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
               Shared values available to every app reply template in this store.
             </div>
           </div>
-          <Button type="button" variant="outline" onClick={saveStoreInfoPreview}>
-            <Save size={15} />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={savingStoreInfo}
+            onClick={saveStoreInfo}
+          >
+            {savingStoreInfo ? <Spinner /> : <Save size={15} />}
             Save Info
           </Button>
         </CardHeader>

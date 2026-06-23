@@ -77,6 +77,7 @@ export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosI
     currency: transaction.currency,
     is_trial: transaction.isTrial,
     environment: transaction.environment,
+    raw_receipt: transaction.rawReceipt,
     verified_at: transaction.verifiedAt.toISOString(),
     created_at: transaction.createdAt.toISOString(),
   };

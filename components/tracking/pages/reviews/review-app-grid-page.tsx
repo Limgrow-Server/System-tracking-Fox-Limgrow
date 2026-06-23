@@ -63,8 +63,8 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
     <div className="flex h-full flex-col gap-6 p-6">
       <PageHeader
         eyebrow="Google Play"
-        title="Reviews"
-        description="Select an application to inspect review sync, ratings, replies and comments."
+        title="List Apps"
+        description="Select an application to inspect comment sync, ratings and replies."
       />
 
       <div className="flex flex-col items-center gap-4 sm:flex-row">
@@ -144,7 +144,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
           <li key={app.mappingId}>
             <Card
               className="h-full cursor-pointer rounded-lg transition-colors hover:bg-muted/50"
-              onClick={() => router.push(`/review/${app.mappingId}`)}
+              onClick={() => router.push(`/comments/${app.mappingId}`)}
             >
               <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
                 <Avatar className="size-11 rounded-lg border">
@@ -203,7 +203,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
                   <div className="rounded-md border bg-muted/20 p-2">
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
                       <MessageSquareText size={12} />
-                      Reviews
+                      Comments
                     </div>
                     <div className="mt-1 font-semibold">
                       {compactNumber(app.reviewCount)}

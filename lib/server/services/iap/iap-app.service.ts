@@ -7,7 +7,7 @@ import {
   getAndroidTransactionsByPackageAndProfile,
   getIosTransactionsByBundleId,
 } from "@/lib/server/repositories/iap/iap-app.repository";
-import type { IapAppCard, IapAppDetailPageData } from "@/lib/tracking/page-data";
+import type { IapAppCard, IapAppTransaction } from "@/lib/tracking/page-data";
 import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
 import { iosIapTransactionToSummary } from "@/lib/tracking/mappers/ios";
 
@@ -37,14 +37,14 @@ export async function getIapAppCards(): Promise<IapAppCard[]> {
   }));
 
   return [...androidCards, ...iosCards].sort((a, b) =>
-    a.appName.localeCompare(b.appName)
+    a.appName.localeCompare(b.appName),
   );
 }
 
 export async function getIapAppDetail(
   mappingId: string,
   platform: string,
-): Promise<{ appCard: IapAppCard; transactions: IapAppDetailPageData["transactions"] }> {
+): Promise<{ appCard: IapAppCard; transactions: IapAppTransaction[] }> {
   if (platform === "android") {
     const mapping = await getAndroidMappingById(mappingId);
     if (!mapping) throw new Error("Android mapping not found");
@@ -62,7 +62,7 @@ export async function getIapAppDetail(
 
     const rawTransactions = await getAndroidTransactionsByPackageAndProfile(
       mapping.packageName,
-      mapping.storeProfileId
+      mapping.storeProfileId,
     );
     return {
       appCard,
@@ -83,7 +83,10 @@ export async function getIapAppDetail(
       storeProfileId: mapping.storeProfileId,
     };
 
-    const rawTransactions = await getIosTransactionsByBundleId(mapping.bundleId);
+    const rawTransactions = await getIosTransactionsByBundleId(
+      mapping.bundleId,
+      mapping.storeProfileId,
+    );
     return {
       appCard,
       transactions: rawTransactions.map(iosIapTransactionToSummary),

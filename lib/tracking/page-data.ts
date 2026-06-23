@@ -63,9 +63,11 @@ export type IapAppGridPageData = {
   storeNames: string[];
 };
 
+export type IapAppTransaction = IapAndroidDto | IosIapTransactionSummary;
+
 export type IapAppDetailPageData = {
   app: IapAppCard;
-  transactions: IapAndroidDto[] | IosIapTransactionSummary[];
+  transactions: IapAppTransaction[];
 };
 
 export type ReviewAppCard = {
@@ -75,8 +77,13 @@ export type ReviewAppCard = {
   identifier: string;
   appIconUrl: string | null;
   appLink: string | null;
+  storeAvatarUrl: string | null;
   storeAccountName: string;
+  storeContactEmail: string | null;
+  storeLink: string | null;
   storeProfileId: string;
+  storeSupportPhone: string | null;
+  storeWebsiteUrl: string | null;
   reviewCount: number;
   averageRating: number | null;
   repliedCount: number;
@@ -100,6 +107,7 @@ export type AndroidStoreReviewDto = {
   originalText: string | null;
   reviewerLanguage: string | null;
   device: string | null;
+  deviceMetadata: AndroidDeviceMetadataDto | null;
   androidOsVersion: number | null;
   appVersionCode: number | null;
   appVersionName: string | null;
@@ -110,6 +118,20 @@ export type AndroidStoreReviewDto = {
   developerReplyUpdatedAt: string | null;
   fetchedAt: string;
   rawReview: unknown;
+};
+
+export type AndroidDeviceMetadataDto = {
+  cpuMake: string | null;
+  cpuModel: string | null;
+  deviceClass: string | null;
+  glEsVersion: number | null;
+  manufacturer: string | null;
+  nativePlatform: string | null;
+  productName: string | null;
+  ramMb: number | null;
+  screenDensityDpi: number | null;
+  screenHeightPx: number | null;
+  screenWidthPx: number | null;
 };
 
 export type ReviewRatingBucket = {
@@ -153,10 +175,22 @@ export type ReviewAppStats = {
   ratingBuckets: ReviewRatingBucket[];
 };
 
+export type ReviewReplyTemplatePreviewDto = {
+  id: string | null;
+  storeMappingId: string;
+  rating: number;
+  replyText: string;
+  resolvedReplyText: string;
+  isActive: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
 export type ReviewAppDetailPageData = {
   app: ReviewAppCard;
   stats: ReviewAppStats;
   reviews: AndroidStoreReviewDto[];
+  replyTemplates: ReviewReplyTemplatePreviewDto[];
   syncState: ReviewSyncStateDto | null;
   fetchRuns: ReviewFetchRunDto[];
   isMockData?: boolean;
@@ -175,6 +209,11 @@ export type ReviewReplyTemplateDto = {
 export type ReplyStoreSummary = {
   storeProfileId: string;
   storeAccountName: string;
+  storeAvatarUrl: string | null;
+  contactEmail: string | null;
+  storeLink: string | null;
+  supportPhone: string | null;
+  websiteUrl: string | null;
   apps: ReviewAppCard[];
   appCount: number;
   reviewCount: number;
