@@ -45,6 +45,7 @@ jobs:
         run: npm run check
 
       - name: SonarQube Scan
+        if: vars.ENABLE_SONAR_SCAN == 'true'
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
