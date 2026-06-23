@@ -1,18 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Image from "next/image";
 import {
   Calendar,
-  CheckCircle2,
   CreditCard,
   DollarSign,
-  Eye,
   FileJson,
   Search,
   Smartphone,
   Sparkles,
   Store,
-  XCircle,
 } from "lucide-react";
 
 import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
@@ -143,7 +141,14 @@ export function AndroidIapPage({ data }: { data: AndroidIapPageData }) {
                   return (
                     <>
                       {store.avatarUrl ? (
-                        <img src={store.avatarUrl} alt="Store Avatar" className="w-10 h-10 rounded-full border bg-muted object-cover shrink-0" />
+                        <Image
+                          src={store.avatarUrl}
+                          alt="Store Avatar"
+                          width={40}
+                          height={40}
+                          unoptimized
+                          className="w-10 h-10 rounded-full border bg-muted object-cover shrink-0"
+                        />
                       ) : (
                         <div className="w-10 h-10 rounded-full border bg-muted flex items-center justify-center text-muted-foreground text-xs font-semibold shrink-0">
                           {store.storeAccountName.substring(0, 2).toUpperCase()}
@@ -401,7 +406,14 @@ export function AndroidIapPage({ data }: { data: AndroidIapPageData }) {
           <div className="rounded-lg border border-border/80 bg-muted/20 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               {app.appIconUrl ? (
-                <img src={app.appIconUrl} alt="App Icon" className="w-9 h-9 rounded-lg border bg-muted object-cover shrink-0" />
+                <Image
+                  src={app.appIconUrl}
+                  alt="App Icon"
+                  width={36}
+                  height={36}
+                  unoptimized
+                  className="w-9 h-9 rounded-lg border bg-muted object-cover shrink-0"
+                />
               ) : (
                 <div className="w-9 h-9 rounded-lg border bg-muted flex items-center justify-center text-muted-foreground shrink-0">
                   <Smartphone size={18} />

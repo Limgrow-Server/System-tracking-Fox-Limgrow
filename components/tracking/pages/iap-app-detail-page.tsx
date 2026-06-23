@@ -3,20 +3,16 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  ChevronRight,
+  ArrowDownRight,
   ArrowLeft,
   ArrowUpRight,
-  ArrowDownRight,
-  Smartphone,
   Apple,
   Calendar,
-  FileJson,
+  ChevronRight,
   CreditCard,
+  FileJson,
   MoreHorizontal,
-  ReceiptText,
-  ClipboardCheck,
-  Sparkles,
-  Receipt,
+  Smartphone,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -32,25 +28,130 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { IapAppDetailPageData } from "@/lib/tracking/page-data";
+import type {
+  IapAppDetailPageData,
+  IapAppTransaction,
+} from "@/lib/tracking/page-data";
+import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
+import type { IosIapTransactionSummary } from "@/lib/tracking/types";
 
 const pageSize = 10;
 
-function formatRevenue(micros: string | null, currency: string | null) {
-  if (!micros) return "N/A";
-  const num = parseInt(micros);
-  if (isNaN(num)) return "N/A";
+function formatRevenue(micros: number | string | null, currency: string | null) {
+  if (micros === null) return "N/A";
+  const num = typeof micros === "number" ? micros : Number.parseInt(micros, 10);
+  if (!Number.isFinite(num)) return "N/A";
   return new Intl.NumberFormat("vi-VN", { style: "currency", currency: currency || "VND" }).format(num / 1000000);
 }
 
-function formatDate(dateVal: any) {
+function formatDate(dateVal: number | string | null) {
   if (!dateVal) return "N/A";
   let d = new Date(dateVal);
-  if (isNaN(d.getTime()) && !isNaN(Number(dateVal))) {
+  if (Number.isNaN(d.getTime()) && !Number.isNaN(Number(dateVal))) {
     d = new Date(Number(dateVal));
   }
-  if (isNaN(d.getTime())) return "N/A";
+  if (Number.isNaN(d.getTime())) return "N/A";
   return d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+}
+
+function isIosTransaction(
+  transaction: IapAppTransaction,
+): transaction is IosIapTransactionSummary {
+  return "transaction_id" in transaction;
+}
+
+function isAndroidTransaction(
+  transaction: IapAppTransaction,
+): transaction is IapAndroidDto {
+  return "orderId" in transaction;
+}
+
+function transactionDisplayId(transaction: IapAppTransaction) {
+  if (isIosTransaction(transaction)) return transaction.transaction_id;
+  return transaction.orderId ?? transaction.purchaseToken;
+}
+
+function transactionSecondaryId(transaction: IapAppTransaction) {
+  if (isIosTransaction(transaction)) return transaction.original_transaction_id;
+  return transaction.purchaseToken;
+}
+
+function transactionProductId(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction)
+    ? transaction.product_id
+    : transaction.productId;
+}
+
+function transactionPackageOrBundle(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction)
+    ? transaction.bundle_id
+    : transaction.packageName;
+}
+
+function transactionKind(transaction: IapAppTransaction) {
+  return isAndroidTransaction(transaction) ? transaction.purchaseKind : null;
+}
+
+function transactionIsTest(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction)
+    ? transaction.environment.toLowerCase() === "sandbox"
+    : transaction.isTestPurchase;
+}
+
+function transactionRevenueMicros(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction)
+    ? transaction.revenue_micros
+    : transaction.revenueMicros;
+}
+
+function transactionCurrency(transaction: IapAppTransaction) {
+  return transaction.currency ?? "VND";
+}
+
+function transactionPurchaseDate(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction)
+    ? transaction.purchase_date
+    : transaction.purchaseDate;
+}
+
+function transactionExpiresDate(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction)
+    ? transaction.expires_date
+    : transaction.expiresDate;
+}
+
+function transactionRawReceipt(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction)
+    ? transaction.raw_receipt
+    : transaction.rawReceipt;
+}
+
+function transactionRevenueValue(transaction: IapAppTransaction) {
+  const micros = transactionRevenueMicros(transaction);
+  if (micros === null) return 0;
+  const numericMicros =
+    typeof micros === "number" ? micros : Number.parseInt(micros, 10);
+  return Number.isFinite(numericMicros) ? numericMicros / 1_000_000 : 0;
+}
+
+function transactionTimestamp(transaction: IapAppTransaction) {
+  const dateValue = transactionPurchaseDate(transaction);
+  if (!dateValue) return 0;
+  const timestamp = new Date(dateValue).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function transactionSearchText(transaction: IapAppTransaction) {
+  return [
+    transactionDisplayId(transaction),
+    transactionSecondaryId(transaction),
+    transactionProductId(transaction),
+    transactionPackageOrBundle(transaction),
+    isIosTransaction(transaction) ? transaction.user_id : transaction.purchaseToken,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -113,95 +214,94 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
 
   const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx: any) => {
-      const txId = isIos ? tx.transaction_id : tx.orderId;
-      const tState = tx.state;
-      const tKind = isIos ? "unknown" : tx.purchaseKind;
-      const matchSearch = !search || (txId?.toLowerCase().includes(search.toLowerCase())) || (tx.productId || tx.product_id || "").toLowerCase().includes(search.toLowerCase());
-      const matchState = filterState === "all" || (tState?.toLowerCase() === filterState);
-      const matchKind = filterKind === "all" || (tKind?.toLowerCase() === filterKind);
-      return matchSearch && matchState && matchKind;
-    }).sort((a: any, b: any) => {
-      const dA = new Date((isIos ? a.purchase_date : a.purchaseDate) || 0).getTime();
-      const dB = new Date((isIos ? b.purchase_date : b.purchaseDate) || 0).getTime();
-      return dB - dA;
-    });
-  }, [transactions, search, filterState, filterKind, isIos]);
+    const query = search.trim().toLowerCase();
 
-  // MOCK DATA INJECTION ONLY FOR CHART & STATS UI TESTING
-  const chartTransactions = useMemo(() => {
-    if (filteredTransactions.length >= 10) return filteredTransactions;
-    // Deterministic seeded PRNG to avoid hydration mismatch
-    let seed = 42;
-    const rand = () => { seed = (seed * 16807 + 0) % 2147483647; return (seed - 1) / 2147483646; };
-    const baseTime = new Date("2026-06-22T00:00:00Z").getTime();
-    const mockTxs = [];
-    for (let i = 0; i < 80; i++) {
-      const daysAgo = Math.floor(rand() * 360);
-      const isTest = rand() > 0.8;
-      const state = rand() > 0.2 ? "active" : "canceled";
-      const revenue = Math.floor(rand() * 500000 + 50000) * 1000000;
-      const txHash = Math.floor(rand() * 1e9).toString(36);
-      mockTxs.push({
-        id: `mock-${i}`,
-        transaction_id: `mock-tx-${txHash}`,
-        orderId: `GPA.3300-${Math.floor(rand() * 9999)}-${Math.floor(rand() * 9999)}`,
-        productId: `com.limgrow.app.premium_${Math.floor(rand() * 3 + 1)}m`,
-        product_id: `com.limgrow.app.premium_${Math.floor(rand() * 3 + 1)}m`,
-        state,
-        purchaseKind: "subscription",
-        isTestPurchase: isTest,
-        environment: isTest ? "Sandbox" : "Production",
-        revenueMicros: revenue.toString(),
-        revenue_micros: revenue.toString(),
-        purchaseDate: new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
-        purchase_date: new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
-        currency: "VND",
-        regionCode: "VN",
-      });
-    }
-    return [...filteredTransactions, ...mockTxs];
-  }, [filteredTransactions, isIos]);
+    return transactions.filter((tx) => {
+      const tState = tx.state.toLowerCase();
+      const tKind = transactionKind(tx);
+      const matchSearch = !query || transactionSearchText(tx).includes(query);
+      const matchState = filterState === "all" || tState === filterState;
+      const matchKind =
+        isIos || filterKind === "all" || tKind?.toLowerCase() === filterKind;
+
+      return matchSearch && matchState && matchKind;
+    }).sort((a, b) => transactionTimestamp(b) - transactionTimestamp(a));
+  }, [transactions, search, filterState, filterKind, isIos]);
 
   const stats = useMemo(() => {
     let rev = 0; let active = 0; let canceled = 0;
-    const now = Date.now(); const week = 7*24*60*60*1000;
+    const latestTimestamp = Math.max(
+      0,
+      ...filteredTransactions.map(transactionTimestamp),
+    );
+    const week = 7 * 24 * 60 * 60 * 1000;
     let revL7 = 0; let revP7 = 0; let ordL7 = 0; let ordP7 = 0;
-    chartTransactions.forEach((tx: any) => {
-      const test = isIos ? tx.environment === "Sandbox" : tx.isTestPurchase;
-      const st = (tx.state || "").toLowerCase();
-      const m = isIos ? tx.revenue_micros : tx.revenueMicros;
-      const v = m ? parseInt(m) / 1e6 : 0;
-      const d = new Date((isIos ? tx.purchase_date : tx.purchaseDate) || 0).getTime();
-      if (!test && m) { rev += v; if (d >= now - week) { revL7 += v; ordL7++; } else if (d >= now - 2*week) { revP7 += v; ordP7++; } }
+
+    filteredTransactions.forEach((tx) => {
+      const test = transactionIsTest(tx);
+      const st = tx.state.toLowerCase();
+      const value = transactionRevenueValue(tx);
+      const timestamp = transactionTimestamp(tx);
+
+      if (!test && value > 0) {
+        rev += value;
+        if (latestTimestamp && timestamp >= latestTimestamp - week) {
+          revL7 += value;
+          ordL7++;
+        } else if (latestTimestamp && timestamp >= latestTimestamp - 2 * week) {
+          revP7 += value;
+          ordP7++;
+        }
+      }
       if (st === "active" || st === "purchased") active++;
       if (st === "canceled" || st === "expired") canceled++;
     });
     const sg = revP7 > 0 ? ((revL7 - revP7) / revP7) * 100 : revL7 > 0 ? 100 : 0;
     const og = ordP7 > 0 ? ((ordL7 - ordP7) / ordP7) * 100 : ordL7 > 0 ? 100 : 0;
-    return { rev, active, canceled, total: chartTransactions.length, sg, ogDir: og >= 0 ? "up" as const : "down" as const, sgDir: sg >= 0 ? "up" as const : "down" as const, revL7, revP7, ordL7, ordP7, og };
-  }, [chartTransactions, isIos]);
+    return { rev, active, canceled, total: filteredTransactions.length, sg, ogDir: og >= 0 ? "up" as const : "down" as const, sgDir: sg >= 0 ? "up" as const : "down" as const, revL7, revP7, ordL7, ordP7, og, latestTimestamp };
+  }, [filteredTransactions]);
 
   // Monthly chart data (12 months)
   const { buckets, maxVal } = useMemo(() => {
     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const b: { label: string; prod: number; sand: number }[] = [];
-    const now = new Date();
-    for (let i = 11; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); b.push({ label: months[d.getMonth()], prod: 0, sand: 0 }); }
-    chartTransactions.forEach((tx: any) => {
-      const test = isIos ? tx.environment === "Sandbox" : tx.isTestPurchase;
-      const pd = new Date((isIos ? tx.purchase_date : tx.purchaseDate) || 0);
-      const m = isIos ? tx.revenue_micros : tx.revenueMicros;
-      if (!m) return;
-      const v = parseInt(m) / 1e6;
-      const mIdx = b.findIndex((_, idx) => { const ref = new Date(now.getFullYear(), now.getMonth() - (11 - idx), 1); return ref.getMonth() === pd.getMonth() && ref.getFullYear() === pd.getFullYear(); });
-      if (mIdx >= 0) { if (test) b[mIdx].sand += v; else b[mIdx].prod += v; }
+    const chartEnd = stats.latestTimestamp
+      ? new Date(stats.latestTimestamp)
+      : new Date("2026-06-01T00:00:00.000Z");
+
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(chartEnd.getFullYear(), chartEnd.getMonth() - i, 1);
+      b.push({ label: months[d.getMonth()], prod: 0, sand: 0 });
+    }
+
+    filteredTransactions.forEach((tx) => {
+      const pd = new Date(transactionPurchaseDate(tx) ?? 0);
+      const value = transactionRevenueValue(tx);
+      if (!value || Number.isNaN(pd.getTime())) return;
+
+      const mIdx = b.findIndex((_, idx) => {
+        const ref = new Date(
+          chartEnd.getFullYear(),
+          chartEnd.getMonth() - (11 - idx),
+          1,
+        );
+        return ref.getMonth() === pd.getMonth() && ref.getFullYear() === pd.getFullYear();
+      });
+
+      if (mIdx >= 0) {
+        if (transactionIsTest(tx)) b[mIdx].sand += value;
+        else b[mIdx].prod += value;
+      }
     });
     let mx = 1; b.forEach(x => { if (x.prod + x.sand > mx) mx = x.prod + x.sand; });
     return { buckets: b, maxVal: mx };
-  }, [chartTransactions, isIos]);
+  }, [filteredTransactions, stats.latestTimestamp]);
 
-  const uniqueStates = useMemo(() => { const s = new Set<string>(); transactions.forEach((tx: any) => { if (tx.state) s.add(tx.state.toLowerCase()); }); return Array.from(s).sort(); }, [transactions]);
+  const uniqueStates = useMemo(() => {
+    const states = new Set<string>();
+    transactions.forEach((tx) => states.add(tx.state.toLowerCase()));
+    return Array.from(states).sort();
+  }, [transactions]);
 
   const totalPages = Math.ceil(filteredTransactions.length / pageSize);
   const currentPage = Math.min(page, Math.max(1, totalPages));
@@ -309,23 +409,29 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
               <tr><th className="px-4 py-3">Transaction / Order</th><th className="px-4 py-3">Product Info</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Revenue / Price</th><th className="px-4 py-3">Purchase time</th><th className="px-4 py-3">Receipt</th></tr>
             </thead>
             <tbody className="divide-y border-b bg-background">
-              {visible.map((tx: any) => {
-                const txId = isIos ? tx.transaction_id : (tx.orderId || "N/A");
-                const productId = isIos ? tx.product_id : tx.productId;
-                const isTest = isIos ? tx.environment === "Sandbox" : tx.isTestPurchase;
-                const revenue = isIos ? tx.revenue_micros : tx.revenueMicros;
-                const currency = tx.currency || "VND";
-                const purchaseDate = isIos ? tx.purchase_date : tx.purchaseDate;
-                const expiresDate = isIos ? tx.expires_date : tx.expiresDate;
+              {visible.map((tx) => {
+                const txId = transactionDisplayId(tx);
+                const secondaryId = transactionSecondaryId(tx);
+                const productId = transactionProductId(tx);
+                const purchaseKind = transactionKind(tx);
+                const isTest = transactionIsTest(tx);
+                const revenue = transactionRevenueMicros(tx);
+                const currency = transactionCurrency(tx);
+                const purchaseDate = transactionPurchaseDate(tx);
+                const expiresDate = transactionExpiresDate(tx);
                 return (
-                  <tr key={tx.id || tx.transaction_id || tx.purchaseToken} className="hover:bg-muted/20 transition-colors">
+                  <tr key={tx.id} className="hover:bg-muted/20 transition-colors">
                     <td className="px-4 py-3.5 max-w-[240px]">
                       <div className="font-semibold truncate" title={txId}>{txId}</div>
-                      {isIos && tx.original_transaction_id && <div className="text-xs text-muted-foreground font-mono mt-0.5 truncate">Orig: {tx.original_transaction_id}</div>}
+                      {isIos && secondaryId ? (
+                        <div className="text-xs text-muted-foreground font-mono mt-0.5 truncate">
+                          Orig: {secondaryId}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="flex flex-col gap-1 items-start">
-                        {!isIos && tx.purchaseKind && <Badge variant="secondary" className="px-2 py-0.5 text-[11px] font-medium">{tx.purchaseKind === "subscription" ? "Subscription" : "Product"}</Badge>}
+                        {!isIos && purchaseKind && <Badge variant="secondary" className="px-2 py-0.5 text-[11px] font-medium">{purchaseKind === "subscription" ? "Subscription" : "Product"}</Badge>}
                         <div className="text-xs text-muted-foreground font-semibold">{productId}</div>
                       </div>
                     </td>
@@ -337,20 +443,26 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="font-semibold">{formatRevenue(revenue, currency)}</div>
-                      {!isIos && <div className="text-[10px] text-muted-foreground mt-0.5">{tx.regionCode && `Region: ${tx.regionCode}`}{tx.currency && ` (${tx.currency})`}</div>}
+                      {!isIos && isAndroidTransaction(tx) && <div className="text-[10px] text-muted-foreground mt-0.5">{tx.regionCode && `Region: ${tx.regionCode}`}{tx.currency && ` (${tx.currency})`}</div>}
                     </td>
                     <td className="px-4 py-3.5 text-xs">
                       <div className="flex items-center gap-1.5 text-muted-foreground"><Calendar size={12} className="shrink-0" /><span>{formatDate(purchaseDate)}</span></div>
+                      {expiresDate ? (
+                        <div className="mt-1 flex items-center gap-1.5 text-muted-foreground">
+                          <Calendar size={12} className="shrink-0" />
+                          <span>Expires: {formatDate(expiresDate)}</span>
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3.5">
-                      <Dialog><DialogTrigger asChild><Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5" onClick={() => setSelectedReceipt(tx.rawReceipt || tx)}><FileJson size={13} /><span>JSON</span></Button></DialogTrigger>
+                      <Dialog><DialogTrigger asChild><Button variant="outline" size="sm" className="h-8 gap-1.5 px-2.5" onClick={() => setSelectedReceipt(transactionRawReceipt(tx))}><FileJson size={13} /><span>JSON</span></Button></DialogTrigger>
                         <DialogContent className="sm:max-w-4xl max-h-[80vh] flex flex-col p-6"><DialogHeader className="pb-2 border-b"><DialogTitle className="flex items-center gap-2"><FileJson size={18} className="text-primary" /><span>Receipt Details</span></DialogTitle></DialogHeader><div className="flex-1 overflow-auto mt-4 p-4 rounded-lg bg-zinc-950 font-mono text-xs text-zinc-300 border border-zinc-800"><pre className="whitespace-pre-wrap">{JSON.stringify(selectedReceipt, null, 2)}</pre></div></DialogContent>
                       </Dialog>
                     </td>
                   </tr>
                 );
               })}
-              {!visible.length && <TableEmptyState colSpan={7} icon={CreditCard} title="No transactions found" description="Try changing your search terms or filters." />}
+              {!visible.length && <TableEmptyState colSpan={6} icon={CreditCard} title="No transactions found" description="Try changing your search terms or filters." />}
             </tbody>
           </table>
         </div>

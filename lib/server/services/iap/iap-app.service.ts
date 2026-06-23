@@ -7,7 +7,7 @@ import {
   getAndroidTransactionsByPackageAndProfile,
   getIosTransactionsByBundleId,
 } from "@/lib/server/repositories/iap/iap-app.repository";
-import { IapAppCard } from "@/lib/tracking/page-data";
+import type { IapAppCard, IapAppTransaction } from "@/lib/tracking/page-data";
 import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
 import { iosIapTransactionToSummary } from "@/lib/tracking/mappers/ios";
 
@@ -41,9 +41,12 @@ export async function getIapAppCards(): Promise<IapAppCard[]> {
   );
 }
 
-export async function getIapAppDetail(mappingId: string, platform: string) {
+export async function getIapAppDetail(
+  mappingId: string,
+  platform: string,
+): Promise<{ appCard: IapAppCard; transactions: IapAppTransaction[] }> {
   let appCard: IapAppCard | null = null;
-  let transactions: any[] = [];
+  let transactions: IapAppTransaction[] = [];
 
   if (platform === "android") {
     const mapping = await getAndroidMappingById(mappingId);
@@ -80,11 +83,16 @@ export async function getIapAppDetail(mappingId: string, platform: string) {
       storeProfileId: mapping.storeProfileId,
     };
 
-    const rawTransactions = await getIosTransactionsByBundleId(mapping.bundleId);
+    const rawTransactions = await getIosTransactionsByBundleId(
+      mapping.bundleId,
+      mapping.storeProfileId,
+    );
     transactions = rawTransactions.map(iosIapTransactionToSummary);
   } else {
     throw new Error("Invalid platform");
   }
+
+  if (!appCard) throw new Error("App mapping not found");
 
   return { appCard, transactions };
 }

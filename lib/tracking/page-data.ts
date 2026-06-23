@@ -50,9 +50,11 @@ export type IapAppGridPageData = {
   storeNames: string[];
 };
 
+export type IapAppTransaction = IapAndroidDto | IosIapTransactionSummary;
+
 export type IapAppDetailPageData = {
   app: IapAppCard;
-  transactions: IapAndroidDto[] | IosIapTransactionSummary[];
+  transactions: IapAppTransaction[];
 };
 
 export type ReviewAppCard = {

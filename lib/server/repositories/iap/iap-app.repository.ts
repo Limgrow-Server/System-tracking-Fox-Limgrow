@@ -37,9 +37,17 @@ export async function getAndroidTransactionsByPackageAndProfile(packageName: str
   });
 }
 
-export async function getIosTransactionsByBundleId(bundleId: string) {
+export async function getIosTransactionsByBundleId(
+  bundleId: string,
+  storeProfileId?: string,
+) {
   return prisma.iosIapTransaction.findMany({
-    where: { bundleId },
+    where: {
+      bundleId,
+      ...(storeProfileId
+        ? { OR: [{ storeProfileId }, { storeProfileId: null }] }
+        : {}),
+    },
     orderBy: { verifiedAt: "desc" },
     take: 300,
   });

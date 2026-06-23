@@ -30,7 +30,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import type { IapAppGridPageData, IapAppCard } from "@/lib/tracking/page-data";
+import type { IapAppGridPageData } from "@/lib/tracking/page-data";
 import { PageHeader } from "../primitives";
 
 export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {

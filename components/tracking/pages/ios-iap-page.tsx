@@ -2,19 +2,15 @@
 
 import { useMemo, useState } from "react";
 import {
-  Calendar,
-  CheckCircle2,
   CreditCard,
   DollarSign,
   Eye,
-  FileJson,
   Search,
   Smartphone,
   Sparkles,
-  XCircle,
 } from "lucide-react";
 
-import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
+import { PageHeader, StatusBadge } from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
