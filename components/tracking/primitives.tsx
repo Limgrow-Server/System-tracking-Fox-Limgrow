@@ -103,9 +103,13 @@ export function PlatformBadge({ platform }: { platform: Platform | string | null
 
 export function StatusBadge({ status }: { status: string | null | undefined }) {
   const normalized = status ?? "unknown";
-  const label = normalized === "active" ? "Active" : normalized === "inactive" ? "Inactive" : normalized;
+  const label = normalized
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
   const tone =
-    ["active", "passed", "sent", "delivered", "healthy", "purchased", "renewed", "served", "published", "approved", "fresh"].includes(normalized)
+    ["active", "passed", "sent", "delivered", "healthy", "purchased", "renewed", "served", "published", "approved", "fresh", "succeeded"].includes(normalized)
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
       : ["pending", "received", "sending", "grace_period", "warning", "draft", "pending_approval", "paused", "stale"].includes(normalized)
         ? "border-amber-200 bg-amber-50 text-amber-700"

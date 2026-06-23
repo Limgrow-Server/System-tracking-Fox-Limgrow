@@ -22,7 +22,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -55,6 +58,7 @@ import type {
   AndroidDeviceMetadataDto,
   AndroidStoreReviewDto,
   ReviewAppDetailPageData,
+  ReviewReplyTemplatePreviewDto,
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -223,25 +227,115 @@ function CommentContentCell({ review }: { review: AndroidStoreReviewDto }) {
 function CommentReplyCell({
   onSend,
   review,
+  replyTemplate,
   sending,
 }: {
   onSend: () => void;
   review: AndroidStoreReviewDto;
+  replyTemplate: ReviewReplyTemplatePreviewDto | null;
   sending: boolean;
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const commentText = review.reviewText || review.originalText || "No comment text.";
+  const templatePreviewText =
+    replyTemplate?.resolvedReplyText || replyTemplate?.replyText.trim() || "";
+  const canSendTemplate = Boolean(
+    review.rating &&
+      replyTemplate?.isActive &&
+      replyTemplate.resolvedReplyText.trim(),
+  );
+
+  function confirmSend() {
+    if (!canSendTemplate) return;
+
+    setConfirmOpen(false);
+    onSend();
+  }
+
   if (!review.developerReplyText) {
     return (
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="gap-1.5"
-        disabled={sending}
-        onClick={onSend}
-      >
-        {sending ? <Spinner /> : <MessageSquareReply size={13} />}
-        Send reply
-      </Button>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={sending}
+          >
+            {sending ? <Spinner /> : <MessageSquareReply size={13} />}
+            Send reply
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Send reply?</DialogTitle>
+            <DialogDescription>
+              Review the mapped template before sending it to Google Play.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-medium">
+                  {review.authorName ?? "Anonymous reviewer"}
+                </span>
+                <span className="text-muted-foreground">/</span>
+                <span className="text-muted-foreground">
+                  {formatRating(review.rating)}
+                </span>
+              </div>
+              <p className="line-clamp-4 text-sm leading-5 text-muted-foreground">
+                {commentText}
+              </p>
+            </div>
+
+            <div className="space-y-2 rounded-lg border p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium">
+                  {review.rating ? `${review.rating}-star template` : "Template"}
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    replyTemplate?.isActive && templatePreviewText
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-amber-200 bg-amber-50 text-amber-700",
+                  )}
+                >
+                  {replyTemplate?.isActive ? "Active" : "Inactive"}
+                </Badge>
+              </div>
+              {templatePreviewText ? (
+                <div className="whitespace-pre-wrap rounded-md bg-muted/30 p-3 text-sm leading-5 text-foreground">
+                  {templatePreviewText}
+                </div>
+              ) : (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
+                  No mapped reply content is available for this rating.
+                </div>
+              )}
+              {replyTemplate?.isActive && !replyTemplate.resolvedReplyText.trim() ? (
+                <div className="text-xs text-amber-700">
+                  The active template becomes empty after mapping store contact
+                  fields.
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button type="button" disabled={sending || !canSendTemplate} onClick={confirmSend}>
+              {sending ? <Spinner /> : <MessageSquareReply size={14} />}
+              Send reply
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     );
   }
 
@@ -355,6 +449,10 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
   const [ratingFilter, setRatingFilter] = useState("all");
   const [replyFilter, setReplyFilter] = useState("all");
   const [replyingReviewId, setReplyingReviewId] = useState<string | null>(null);
+  const replyTemplateByRating = useMemo(
+    () => new Map(data.replyTemplates.map((template) => [template.rating, template])),
+    [data.replyTemplates],
+  );
 
   const filteredReviews = useMemo(() => {
     const query = search.toLowerCase();
@@ -420,7 +518,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
           className="flex items-center gap-1 transition-colors hover:text-foreground"
         >
           <ArrowLeft size={15} />
-          Comments
+          List Apps
         </Link>
         <ChevronRight size={15} />
         <span className="truncate text-foreground">{data.app.appName}</span>
@@ -553,6 +651,11 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                     <TableCell className="align-top">
                       <CommentReplyCell
                         onSend={() => sendReply(review)}
+                        replyTemplate={
+                          review.rating
+                            ? replyTemplateByRating.get(review.rating) ?? null
+                            : null
+                        }
                         review={review}
                         sending={replyingReviewId === review.reviewId}
                       />

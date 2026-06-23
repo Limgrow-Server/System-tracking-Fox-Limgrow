@@ -41,6 +41,7 @@ import type {
   ReviewAppStats,
   ReviewFetchRunDto,
   ReviewRatingBucket,
+  ReviewReplyTemplatePreviewDto,
   ReviewReplyTemplateDto,
   ReviewSyncStateDto,
 } from "@/lib/tracking/page-data";
@@ -474,6 +475,39 @@ function buildReviewStats(
   };
 }
 
+function renderReplyTemplatePreviewText(
+  templateText: string,
+  storeInfo: {
+    contactEmail: string | null;
+    supportPhone: string | null;
+    websiteUrl: string | null;
+  },
+) {
+  return templateText
+    .replaceAll("{{contactEmail}}", storeInfo.contactEmail ?? "")
+    .replaceAll("{{supportPhone}}", storeInfo.supportPhone ?? "")
+    .replaceAll("{{websiteUrl}}", storeInfo.websiteUrl ?? "")
+    .trim();
+}
+
+function replyTemplatePreviewDto(
+  template: AndroidStoreReviewReplyTemplate | null,
+  storeMappingId: string,
+  rating: number,
+  storeInfo: {
+    contactEmail: string | null;
+    supportPhone: string | null;
+    websiteUrl: string | null;
+  },
+): ReviewReplyTemplatePreviewDto {
+  const dto = templateDto(template, storeMappingId, rating);
+
+  return {
+    ...dto,
+    resolvedReplyText: renderReplyTemplatePreviewText(dto.replyText, storeInfo),
+  };
+}
+
 export async function getReviewAppDetail(
   mappingId: string,
   options?: { includeMockData?: boolean },
@@ -481,11 +515,12 @@ export async function getReviewAppDetail(
   const mapping = await getAndroidReviewMappingById(mappingId);
   if (!mapping) throw notFound("Android app mapping was not found.");
 
-  const [ratingGroups, replyGroups, reviews, fetchRuns] = await Promise.all([
+  const [ratingGroups, replyGroups, reviews, fetchRuns, templates] = await Promise.all([
     getAndroidReviewRatingGroups([mappingId]),
     getAndroidReviewReplyGroups([mappingId]),
     getAndroidReviewsForMapping(mappingId),
     getAndroidReviewFetchRuns(mappingId),
+    getAndroidReviewReplyTemplates([mappingId]),
   ]);
   const app = reviewAppCard(mapping, ratingGroups, replyCountByMapping(replyGroups));
   const realReviewDtos = reviews.map(reviewDto);
@@ -501,6 +536,18 @@ export async function getReviewAppDetail(
     app,
     fetchRuns: fetchRuns.map(fetchRunDto),
     isMockData: useMockData,
+    replyTemplates: RATINGS.map((rating) =>
+      replyTemplatePreviewDto(
+        templates.find((template) => template.rating === rating) ?? null,
+        mappingId,
+        rating,
+        {
+          contactEmail: mapping.storeProfile.contactEmail,
+          supportPhone: mapping.storeProfile.supportPhone,
+          websiteUrl: mapping.storeProfile.websiteUrl,
+        },
+      ),
+    ),
     reviews: reviewDtos,
     stats,
     syncState: syncStateDto(mapping.reviewSyncState),

@@ -162,10 +162,22 @@ export type ReviewAppStats = {
   ratingBuckets: ReviewRatingBucket[];
 };
 
+export type ReviewReplyTemplatePreviewDto = {
+  id: string | null;
+  storeMappingId: string;
+  rating: number;
+  replyText: string;
+  resolvedReplyText: string;
+  isActive: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+};
+
 export type ReviewAppDetailPageData = {
   app: ReviewAppCard;
   stats: ReviewAppStats;
   reviews: AndroidStoreReviewDto[];
+  replyTemplates: ReviewReplyTemplatePreviewDto[];
   syncState: ReviewSyncStateDto | null;
   fetchRuns: ReviewFetchRunDto[];
   isMockData?: boolean;

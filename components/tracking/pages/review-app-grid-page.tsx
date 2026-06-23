@@ -63,7 +63,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
     <div className="flex h-full flex-col gap-6 p-6">
       <PageHeader
         eyebrow="Google Play"
-        title="Comments"
+        title="List Apps"
         description="Select an application to inspect comment sync, ratings and replies."
       />
 
