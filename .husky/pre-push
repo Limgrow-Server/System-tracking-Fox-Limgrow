@@ -1,4 +1,1 @@
-npm run lint --if-present
-npm run typecheck --if-present
-npm run test --if-present
-npm run build
+npm run check

@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "check": "npm run lint --if-present && npm run typecheck --if-present && npm run test --if-present && npm run build",
     "prepare": "husky",
     "check:branch": "node scripts/check-branch-name.mjs",
     "commitlint": "commitlint --edit",
