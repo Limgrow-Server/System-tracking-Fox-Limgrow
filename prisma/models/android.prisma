@@ -30,6 +30,7 @@ model AndroidStoreMapping {
   reviews          AndroidStoreReview[]
   reviewSyncState  AndroidStoreReviewSyncState?
   reviewFetchRuns  AndroidStoreReviewFetchRun[]
+  replyTemplates   AndroidStoreReviewReplyTemplate[]
 
   @@unique([storeProfileId, appName], map: "android_store_mappings_profile_app_name_key")
   @@unique([packageName], map: "android_store_mappings_package_key")
@@ -113,6 +114,23 @@ model AndroidStoreReviewFetchRun {
   @@index([storeMappingId, startedAt], map: "android_store_review_fetch_runs_mapping_started_idx")
   @@index([status, startedAt], map: "android_store_review_fetch_runs_status_started_idx")
   @@map("android_store_review_fetch_runs")
+}
+
+model AndroidStoreReviewReplyTemplate {
+  id             String              @id @default(uuid()) @db.Uuid
+  storeMappingId String              @map("store_mapping_id") @db.Uuid
+  rating         Int
+  replyText      String              @map("reply_text") @db.Text
+  isActive       Boolean             @default(false) @map("is_active")
+  createdBy      String?             @map("created_by")
+  updatedBy      String?             @map("updated_by")
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeMapping   AndroidStoreMapping @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+
+  @@unique([storeMappingId, rating], map: "android_store_review_reply_templates_mapping_rating_key")
+  @@index([storeMappingId, isActive], map: "android_store_review_reply_templates_mapping_active_idx")
+  @@map("android_store_review_reply_templates")
 }
 
 model AndroidCredential {

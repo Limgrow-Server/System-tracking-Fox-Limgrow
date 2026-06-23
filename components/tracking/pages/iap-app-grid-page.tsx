@@ -2,17 +2,19 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Apple, Check, ChevronsUpDown, Link2, Search, Smartphone } from "lucide-react";
+import {
+  Apple,
+  Check,
+  ChevronsUpDown,
+  Link2,
+  Search,
+  Smartphone,
+} from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardContent,
-} from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Command,
@@ -43,16 +45,18 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
         .toLowerCase()
         .includes(searchQuery.toLowerCase());
       const matchesStore =
-        selectedStore === "All Stores" || app.storeAccountName === selectedStore;
+        selectedStore === "All Stores" ||
+        app.storeAccountName === selectedStore;
       return matchesSearch && matchesStore;
     });
   }, [data.apps, searchQuery, selectedStore]);
 
   return (
     <div className="flex h-full flex-col gap-6 p-6">
-      <PageHeader 
-        title="In-App Purchases" 
-        description="Select an application to view its transaction details." 
+      <PageHeader
+        eyebrow=""
+        title="In-App Purchases"
+        description="Select an application to view its transaction details."
       />
 
       {/* Filters Row */}
@@ -67,7 +71,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
-        
+
         <Popover open={openStoreCombobox} onOpenChange={setOpenStoreCombobox}>
           <PopoverTrigger asChild>
             <Button
@@ -96,7 +100,9 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
                     <Check
                       className={cn(
                         "mr-2 h-4 w-4",
-                        selectedStore === "All Stores" ? "opacity-100" : "opacity-0"
+                        selectedStore === "All Stores"
+                          ? "opacity-100"
+                          : "opacity-0",
                       )}
                     />
                     All Stores
@@ -113,7 +119,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
                       <Check
                         className={cn(
                           "mr-2 h-4 w-4",
-                          selectedStore === store ? "opacity-100" : "opacity-0"
+                          selectedStore === store ? "opacity-100" : "opacity-0",
                         )}
                       />
                       {store}
@@ -130,14 +136,20 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {filteredApps.map((app) => (
           <li key={app.mappingId}>
-            <Card 
+            <Card
               className="hover:bg-muted/50 transition-colors h-full cursor-pointer"
-              onClick={() => router.push(`/iap/${app.mappingId}?platform=${app.platform}`)}
+              onClick={() =>
+                router.push(`/iap/${app.mappingId}?platform=${app.platform}`)
+              }
             >
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <Avatar className="h-10 w-10 border rounded-lg">
                   {app.appIconUrl ? (
-                    <AvatarImage src={app.appIconUrl} alt={app.appName} className="rounded-lg" />
+                    <AvatarImage
+                      src={app.appIconUrl}
+                      alt={app.appName}
+                      className="rounded-lg"
+                    />
                   ) : null}
                   <AvatarFallback className="text-xs rounded-lg">
                     {app.appName.substring(0, 2).toUpperCase()}
@@ -145,15 +157,30 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
                 </Avatar>
                 <div>
                   {app.platform === "ios" ? (
-                    <Badge variant="outline" className="border-zinc-200 bg-zinc-50 text-zinc-700 gap-1.5 text-sm px-2.5 py-1"><Apple size={16} />iOS</Badge>
+                    <Badge
+                      variant="outline"
+                      className="border-zinc-200 bg-zinc-50 text-zinc-700 gap-1.5 text-sm px-2.5 py-1"
+                    >
+                      <Apple size={16} />
+                      iOS
+                    </Badge>
                   ) : (
-                    <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700 gap-1.5 text-sm px-2.5 py-1"><Smartphone size={16} />Android</Badge>
+                    <Badge
+                      variant="outline"
+                      className="border-emerald-200 bg-emerald-50 text-emerald-700 gap-1.5 text-sm px-2.5 py-1"
+                    >
+                      <Smartphone size={16} />
+                      Android
+                    </Badge>
                   )}
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2">
-                  <CardTitle className="text-lg line-clamp-1 flex-1" title={app.appName}>
+                  <CardTitle
+                    className="text-lg line-clamp-1 flex-1"
+                    title={app.appName}
+                  >
                     {app.appName}
                   </CardTitle>
                   {app.appLink && (
@@ -164,8 +191,15 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
                       title={app.appLink}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" asChild>
-                        <span><Link2 size={16} /></span>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8 shrink-0"
+                        asChild
+                      >
+                        <span>
+                          <Link2 size={16} />
+                        </span>
                       </Button>
                     </a>
                   )}
