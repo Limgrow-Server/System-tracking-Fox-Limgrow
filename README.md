@@ -281,17 +281,128 @@ Route chính:
 - `/configs/ios`: iOS Credential Config.
 - `/users`: quản lý console users.
 
-## 10. Build và kiểm tra
+## 10. Build, kiểm tra và Git workflow
+
+Chạy một lệnh tổng trước khi commit/push:
+
+```powershell
+npm run check
+```
+
+`npm run check` sẽ chạy lần lượt:
+
+```powershell
+npm run lint --if-present
+npm run typecheck --if-present
+npm run test --if-present
+npm run build
+```
+
+Repo cũng có các lệnh riêng khi cần debug từng bước:
 
 ```powershell
 npm run prisma:validate
 npm run prisma:migrate:deploy
-npx tsc --noEmit
 npm run lint
 npm run build
 ```
 
 Ghi chú: `next build` có thể cần network nếu Next/font phải tải Google Fonts.
+
+### Commit và branch
+
+Repo dùng Husky để tự kiểm tra trước commit/push:
+
+- `pre-commit`: kiểm tra branch name và chạy `lint-staged`.
+- `commit-msg`: kiểm tra commit message bằng Commitlint.
+- `pre-push`: chạy `npm run check`.
+
+Commit message bắt buộc theo format:
+
+```bash
+<type>(<scope>): <message>
+```
+
+Ví dụ:
+
+```bash
+feat(notification): add fcm token registration
+fix(mapping): update app id validation
+chore(ci): add quality workflow
+```
+
+Branch nên dùng một trong các prefix:
+
+```bash
+feature/<slug>
+fix/<slug>
+hotfix/<slug>
+release/<slug>
+chore/<slug>
+docs/<slug>
+refactor/<slug>
+test/<slug>
+codex/<slug>
+```
+
+Chi tiết đầy đủ nằm ở [COMMIT_RULE.md](COMMIT_RULE.md).
+
+### Push code mẫu
+
+```bash
+git fetch origin
+git checkout feature/your-branch
+git pull --rebase origin feature/your-branch
+
+npm run check
+
+git add .
+git commit -m "feat(scope): short message"
+git push origin feature/your-branch
+```
+
+### Staging trước khi merge main
+
+Flow PR khuyến nghị:
+
+```text
+feature/* -> staging -> main
+```
+
+Khi cần đồng bộ `staging` theo `main` mới nhất:
+
+```bash
+git fetch origin main
+git branch -f staging origin/main
+git push --force-with-lease origin staging:staging
+```
+
+### GitHub Action quality
+
+Workflow CI nằm ở [.github/workflows/quality.yml](.github/workflows/quality.yml). Workflow tên `quality` chạy trên pull request và push vào các branch chính, rồi chạy:
+
+```bash
+npm ci
+npm run check
+```
+
+Nếu GitHub branch protection đang yêu cầu check `quality`, tên required check phải trùng với job `quality`.
+
+### Discord webhook cho CI
+
+GitHub Action có thể bắn kết quả pass/fail qua Discord. Tạo secret trong GitHub:
+
+```text
+Settings -> Secrets and variables -> Actions -> New repository secret
+```
+
+Tên secret:
+
+```text
+DISCORD_WEBHOOK_URL
+```
+
+Giá trị là Discord webhook URL của channel cần nhận thông báo. Nếu secret chưa được cấu hình, workflow vẫn chạy và chỉ bỏ qua bước gửi Discord.
 
 ## 11. Troubleshooting
 
