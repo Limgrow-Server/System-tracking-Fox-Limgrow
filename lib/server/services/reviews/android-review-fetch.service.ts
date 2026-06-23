@@ -26,6 +26,8 @@ const DEFAULT_MAX_RESULTS = 100;
 const DEFAULT_MAX_PAGES = 2;
 const MAX_ALLOWED_RESULTS = 100;
 const MAX_ALLOWED_PAGES = 10;
+const GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const LOCK_TTL_MS = 10 * 60 * 1000;
 
 type FetchRunContext = {
@@ -35,16 +37,20 @@ type FetchRunContext = {
 
 type NormalizedReview = {
   developerReplyUpdatedAt: Date | null;
+  latestUpdatedAt: Date | null;
   reviewId: string;
   row: AndroidReviewUpsertInput;
   userCommentUpdatedAt: Date | null;
 };
 
 export type FetchAndroidReviewsPayload = {
+  fromDate?: unknown;
   maxPages?: unknown;
   maxResults?: unknown;
   pageToken?: unknown;
   storeMappingId?: unknown;
+  timezoneOffsetMinutes?: unknown;
+  toDate?: unknown;
   translationLanguage?: unknown;
   triggerType?: unknown;
 };
@@ -86,6 +92,12 @@ function latestDate(current: Date | null, candidate: Date | null) {
   if (!candidate) return current;
   if (!current) return candidate;
   return candidate.getTime() > current.getTime() ? candidate : current;
+}
+
+function earliestDate(current: Date | null, candidate: Date | null) {
+  if (!candidate) return current;
+  if (!current) return candidate;
+  return candidate.getTime() < current.getTime() ? candidate : current;
 }
 
 function timestampToDate(value: unknown) {
@@ -151,6 +163,7 @@ function normalizeReview(
 
   return {
     developerReplyUpdatedAt,
+    latestUpdatedAt: latestDate(userCommentUpdatedAt, developerReplyUpdatedAt),
     reviewId,
     row: {
       androidOsVersion: numberValue(userComment?.androidOsVersion),
@@ -230,13 +243,150 @@ function nextPageToken(body: Record<string, unknown>) {
   return cleanText((tokenPagination as Record<string, unknown>).nextPageToken);
 }
 
+function parseTimezoneOffset(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(Math.max(Math.trunc(parsed), -840), 840);
+}
+
+function parseDateOnly(value: unknown, label: string) {
+  const text = cleanText(value);
+  if (!text) return null;
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) {
+    throw badRequest(`${label} must use YYYY-MM-DD format.`);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw badRequest(`${label} is invalid.`);
+  }
+
+  return { day, month, year };
+}
+
+function localDateBoundaryUtc(
+  dateOnly: { day: number; month: number; year: number },
+  timezoneOffsetMinutes: number,
+  addDays = 0,
+) {
+  return new Date(
+    Date.UTC(dateOnly.year, dateOnly.month - 1, dateOnly.day + addDays) +
+      timezoneOffsetMinutes * 60_000,
+  );
+}
+
+function currentLocalDateOnly(timezoneOffsetMinutes: number) {
+  const localNow = new Date(Date.now() - timezoneOffsetMinutes * 60_000);
+
+  return {
+    day: localNow.getUTCDate(),
+    month: localNow.getUTCMonth() + 1,
+    year: localNow.getUTCFullYear(),
+  };
+}
+
+function normalizeDateRange(input: {
+  fromDate: unknown;
+  timezoneOffsetMinutes: unknown;
+  toDate: unknown;
+}) {
+  const timezoneOffsetMinutes = parseTimezoneOffset(input.timezoneOffsetMinutes);
+  const fromDate = parseDateOnly(input.fromDate, "From date");
+  const toDate = parseDateOnly(input.toDate, "To date");
+
+  if (!fromDate && !toDate) {
+    return {
+      fromDate: null,
+      timezoneOffsetMinutes,
+      toDate: null,
+    };
+  }
+
+  const from = fromDate
+    ? localDateBoundaryUtc(fromDate, timezoneOffsetMinutes)
+    : null;
+  const toExclusive = toDate
+    ? localDateBoundaryUtc(toDate, timezoneOffsetMinutes, 1)
+    : null;
+
+  if (from && toExclusive && from.getTime() >= toExclusive.getTime()) {
+    throw badRequest("From date must be before or equal to To date.");
+  }
+
+  if (from || toExclusive) {
+    const today = currentLocalDateOnly(timezoneOffsetMinutes);
+    const oldestAllowed = localDateBoundaryUtc(
+      today,
+      timezoneOffsetMinutes,
+      -(GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS - 1),
+    );
+    const tomorrow = localDateBoundaryUtc(today, timezoneOffsetMinutes, 1);
+    const effectiveFrom = from ?? oldestAllowed;
+    const effectiveTo = toExclusive ?? tomorrow;
+
+    if (from && from.getTime() < oldestAllowed.getTime()) {
+      throw badRequest("From date must be within the last 7 days.");
+    }
+    if (toExclusive && toExclusive.getTime() <= oldestAllowed.getTime()) {
+      throw badRequest("To date must be within the last 7 days.");
+    }
+    if (toExclusive && toExclusive.getTime() > tomorrow.getTime()) {
+      throw badRequest("To date cannot be in the future.");
+    }
+    if (
+      effectiveTo.getTime() - effectiveFrom.getTime() >
+      GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS * DAY_MS
+    ) {
+      throw badRequest("Date range cannot exceed 7 days.");
+    }
+  }
+
+  return {
+    fromDate: from,
+    timezoneOffsetMinutes,
+    toDate: toExclusive,
+  };
+}
+
+function reviewMatchesDateRange(
+  review: NormalizedReview,
+  range: { fromDate: Date | null; toDate: Date | null },
+) {
+  if (!range.fromDate && !range.toDate) return true;
+  const updatedAt = review.latestUpdatedAt;
+  if (!updatedAt) return false;
+  if (range.fromDate && updatedAt.getTime() < range.fromDate.getTime()) {
+    return false;
+  }
+  if (range.toDate && updatedAt.getTime() >= range.toDate.getTime()) {
+    return false;
+  }
+  return true;
+}
+
 function normalizeFetchPayload(payload: FetchAndroidReviewsPayload) {
   const storeMappingId = cleanText(payload.storeMappingId);
   if (!storeMappingId || !isUuid(storeMappingId)) {
     throw badRequest("Android app mapping is required.");
   }
+  const dateRange = normalizeDateRange({
+    fromDate: payload.fromDate,
+    timezoneOffsetMinutes: payload.timezoneOffsetMinutes,
+    toDate: payload.toDate,
+  });
 
   return {
+    dateRange,
     maxPages: boundedInteger(
       payload.maxPages,
       DEFAULT_MAX_PAGES,
@@ -302,8 +452,11 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
   let syncStarted = false;
   let pagesFetched = 0;
   let reviewsFetched = 0;
+  let reviewsMatched = 0;
+  let reviewsSkipped = 0;
   let reviewsUpserted = 0;
   let lastReviewUpdatedAt: Date | null = null;
+  let oldestReviewUpdatedAt: Date | null = null;
   let pageToken = normalized.pageToken;
 
   try {
@@ -339,8 +492,18 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
       const normalizedReviews = rawReviews
         .map((review) => normalizeReview(review, mapping.id, fetchedAt))
         .filter((review): review is NormalizedReview => Boolean(review));
+      const matchingReviews = normalizedReviews.filter((review) =>
+        reviewMatchesDateRange(review, normalized.dateRange),
+      );
 
       for (const review of normalizedReviews) {
+        oldestReviewUpdatedAt = earliestDate(
+          oldestReviewUpdatedAt,
+          review.latestUpdatedAt,
+        );
+      }
+
+      for (const review of matchingReviews) {
         lastReviewUpdatedAt = latestDate(
           lastReviewUpdatedAt,
           review.userCommentUpdatedAt,
@@ -352,11 +515,20 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
       }
 
       reviewsFetched += normalizedReviews.length;
+      reviewsMatched += matchingReviews.length;
+      reviewsSkipped += normalizedReviews.length - matchingReviews.length;
       reviewsUpserted += await upsertAndroidReviews(
-        normalizedReviews.map((review) => review.row),
+        matchingReviews.map((review) => review.row),
       );
 
       pageToken = nextPageToken(body);
+      if (
+        normalized.dateRange.fromDate &&
+        oldestReviewUpdatedAt &&
+        oldestReviewUpdatedAt.getTime() < normalized.dateRange.fromDate.getTime()
+      ) {
+        pageToken = "";
+      }
       if (!pageToken) break;
     }
 
@@ -385,6 +557,8 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
       packageName: mapping.packageName,
       pagesFetched,
       reviewsFetched,
+      reviewsMatched,
+      reviewsSkipped,
       reviewsUpserted,
       runId: context.runId,
       status: resultStatus(status),

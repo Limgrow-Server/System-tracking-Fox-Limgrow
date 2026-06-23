@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
-  Calendar,
+  Calendar as CalendarIcon,
   ChevronRight,
   FileJson,
   MessageSquareReply,
@@ -20,6 +20,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar as CalendarPicker } from "@/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -32,6 +33,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Select,
@@ -63,6 +69,9 @@ import type {
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+
+const GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function formatRating(value: number | null) {
   return value ? value.toFixed(1) : "N/A";
@@ -114,16 +123,178 @@ function RatingDistribution({ data }: { data: ReviewAppDetailPageData }) {
   );
 }
 
+function dateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateFromInputValue(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+}
+
+function addDaysToInputValue(value: string, days: number) {
+  const date = dateFromInputValue(value);
+  if (!date) return "";
+  date.setDate(date.getDate() + days);
+  return dateInputValue(date);
+}
+
+function earliestInputValue(...values: string[]) {
+  return values.filter(Boolean).sort()[0] ?? "";
+}
+
+function latestInputValue(...values: string[]) {
+  const sortedValues = values.filter(Boolean).sort();
+  return sortedValues[sortedValues.length - 1] ?? "";
+}
+
+function displayDateValue(value: string) {
+  const date = dateFromInputValue(value);
+  if (!date) return "Select date";
+
+  return date.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function defaultFetchFromDate() {
+  const date = new Date();
+  date.setDate(date.getDate() - (GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS - 1));
+  return dateInputValue(date);
+}
+
+function defaultFetchToDate() {
+  return dateInputValue(new Date());
+}
+
+function fetchDateRangeError(fromDate: string, toDate: string) {
+  const from = dateFromInputValue(fromDate);
+  const to = dateFromInputValue(toDate);
+  const windowStart = dateFromInputValue(defaultFetchFromDate());
+  const windowEnd = dateFromInputValue(defaultFetchToDate());
+
+  if (!from || !to || !windowStart || !windowEnd) {
+    return "Select a valid date range.";
+  }
+  if (from.getTime() > to.getTime()) {
+    return "From date must be before or equal to To date.";
+  }
+  if (from.getTime() < windowStart.getTime()) {
+    return "Google Play only exposes reviews from the last 7 days.";
+  }
+  if (to.getTime() > windowEnd.getTime()) {
+    return "To date cannot be in the future.";
+  }
+
+  const selectedDays = Math.floor((to.getTime() - from.getTime()) / DAY_MS) + 1;
+  if (selectedDays > GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS) {
+    return "Date range cannot exceed 7 days.";
+  }
+
+  return "";
+}
+
+function FetchDatePicker({
+  label,
+  maxDate,
+  minDate,
+  onChange,
+  value,
+}: {
+  label: string;
+  maxDate: string;
+  minDate: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedDate = dateFromInputValue(value) ?? undefined;
+  const min = dateFromInputValue(minDate);
+  const max = dateFromInputValue(maxDate);
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <CalendarIcon size={13} />
+        {label}
+      </div>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-9 w-full justify-start gap-2 px-3 font-normal"
+          >
+            <CalendarIcon size={14} />
+            <span className="truncate">{displayDateValue(value)}</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          <CalendarPicker
+            mode="single"
+            selected={selectedDate}
+            onSelect={(date) => {
+              if (!date) return;
+              onChange(dateInputValue(date));
+              setOpen(false);
+            }}
+            disabled={(date) =>
+              Boolean(
+                (min && date.getTime() < min.getTime()) ||
+                  (max && date.getTime() > max.getTime()),
+              )
+            }
+            className="rounded-lg border"
+            captionLayout="dropdown"
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 function SyncPanel({
   data,
+  fromDate,
   fetching,
+  onFromDateChange,
   onFetch,
+  onToDateChange,
+  toDate,
 }: {
   data: ReviewAppDetailPageData;
+  fromDate: string;
   fetching: boolean;
+  onFromDateChange: (value: string) => void;
   onFetch: () => void;
+  onToDateChange: (value: string) => void;
+  toDate: string;
 }) {
   const syncRunning = data.syncState?.status === "running";
+  const windowStartDate = defaultFetchFromDate();
+  const windowEndDate = defaultFetchToDate();
+  const fromMinDate = latestInputValue(
+    windowStartDate,
+    addDaysToInputValue(toDate, -(GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS - 1)),
+  );
+  const fromMaxDate = earliestInputValue(toDate, windowEndDate);
+  const toMinDate = latestInputValue(fromDate, windowStartDate);
+  const toMaxDate = earliestInputValue(
+    windowEndDate,
+    addDaysToInputValue(fromDate, GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS - 1),
+  );
+  const dateRangeError = fetchDateRangeError(fromDate, toDate);
 
   return (
     <Card className="rounded-lg">
@@ -133,7 +304,7 @@ function SyncPanel({
           type="button"
           variant="outline"
           size="sm"
-          disabled={fetching || syncRunning}
+          disabled={fetching || syncRunning || Boolean(dateRangeError)}
           onClick={onFetch}
         >
           {fetching ? <Spinner /> : <RefreshCw size={14} />}
@@ -141,6 +312,28 @@ function SyncPanel({
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FetchDatePicker
+            label="From"
+            maxDate={fromMaxDate}
+            minDate={fromMinDate}
+            onChange={onFromDateChange}
+            value={fromDate}
+          />
+          <FetchDatePicker
+            label="To"
+            maxDate={toMaxDate}
+            minDate={toMinDate}
+            onChange={onToDateChange}
+            value={toDate}
+          />
+        </div>
+        {dateRangeError ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            {dateRangeError}
+          </div>
+        ) : null}
+
         <div className="grid gap-3 text-sm sm:grid-cols-2">
           <div>
             <div className="text-xs text-muted-foreground">Status</div>
@@ -467,6 +660,8 @@ function CommentJsonDialog({ review }: { review: AndroidStoreReviewDto }) {
 export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData }) {
   const router = useRouter();
   const [fetchingReviews, setFetchingReviews] = useState(false);
+  const [fetchFromDate, setFetchFromDate] = useState(defaultFetchFromDate);
+  const [fetchToDate, setFetchToDate] = useState(defaultFetchToDate);
   const [search, setSearch] = useState("");
   const [ratingFilter, setRatingFilter] = useState("all");
   const [replyFilter, setReplyFilter] = useState("all");
@@ -507,7 +702,10 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          fromDate: fetchFromDate || undefined,
           storeMappingId: data.app.mappingId,
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          toDate: fetchToDate || undefined,
           triggerType: "manual",
         }),
       });
@@ -518,6 +716,8 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
           hasMore?: boolean;
           pagesFetched?: number;
           reviewsFetched?: number;
+          reviewsMatched?: number;
+          reviewsSkipped?: number;
           reviewsUpserted?: number;
         };
       };
@@ -528,7 +728,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
 
       const moreText = payload.result.hasMore ? " More pages are available." : "";
       toast.success(
-        `Fetched ${payload.result.reviewsFetched ?? 0} reviews, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
+        `Fetched ${payload.result.reviewsFetched ?? 0} reviews, matched ${payload.result.reviewsMatched ?? 0}, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
       );
       router.refresh();
     } catch (error) {
@@ -640,14 +840,22 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
           label="Latest Comment"
           value={dateTime(data.stats.latestReviewAt)}
           detail="Newest user comment"
-          icon={Calendar}
+          icon={CalendarIcon}
           trend="flat"
         />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <RatingDistribution data={data} />
-        <SyncPanel data={data} fetching={fetchingReviews} onFetch={fetchReviews} />
+        <SyncPanel
+          data={data}
+          fetching={fetchingReviews}
+          fromDate={fetchFromDate}
+          onFetch={fetchReviews}
+          onFromDateChange={setFetchFromDate}
+          onToDateChange={setFetchToDate}
+          toDate={fetchToDate}
+        />
       </div>
 
       <div className="rounded-lg border bg-card">
