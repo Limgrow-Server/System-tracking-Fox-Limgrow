@@ -10,9 +10,6 @@ verify_jwt = true
 [functions.verify-ios]
 verify_jwt = true
 
-[functions.fetch-google-play-reviews]
-verify_jwt = false
-
 [functions.send-notification]
 verify_jwt = true
 

@@ -84,6 +84,7 @@ export type IosIapTransactionSummary = {
   currency: string | null;
   is_trial: boolean | null;
   environment: string;
+  raw_receipt: unknown;
   verified_at: string;
   created_at: string;
 };

@@ -117,6 +117,7 @@ function transactionToSummary(transaction: Record<string, unknown> | null | unde
     currency: nullableString(transaction.currency),
     is_trial: boolOrNull(transaction.is_trial),
     environment: stringValue(transaction.environment) || "production",
+    raw_receipt: transaction.raw_receipt ?? transaction,
     verified_at: verifiedAt,
     created_at: stringValue(transaction.created_at) || verifiedAt,
   };
