@@ -1,0 +1,20 @@
+[functions.device-token-android]
+verify_jwt = false
+
+[functions.device-token-ios]
+verify_jwt = false
+
+[functions.verify-android]
+verify_jwt = true
+
+[functions.verify-ios]
+verify_jwt = true
+
+[functions.send-notification]
+verify_jwt = true
+
+[functions.dispatch-notifications]
+verify_jwt = false
+
+[functions.notification-event]
+verify_jwt = false

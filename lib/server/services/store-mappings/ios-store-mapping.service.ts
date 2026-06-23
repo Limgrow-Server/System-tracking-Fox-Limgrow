@@ -1,0 +1,168 @@
+import "server-only";
+
+import { MappingStatus, Prisma } from "@prisma/client";
+
+import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
+import {
+  deleteIosStoreMapping,
+  getIosStoreMappingId,
+  getIosStoreMappings,
+  saveIosStoreMapping,
+} from "@/lib/server/repositories/ios/store-mapping.repository";
+import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
+import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
+import { iosStoreMappingToTracking } from "@/lib/tracking/mappers/ios";
+
+function cleanText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function nullableText(value: unknown) {
+  const cleaned = cleanText(value);
+  return cleaned || null;
+}
+
+function nullableAppId(value: unknown) {
+  const cleaned = cleanText(value).replace(/\s+/g, "").toUpperCase();
+  return cleaned || null;
+}
+
+const mappingStatusMap: Record<string, MappingStatus> = {
+  active: MappingStatus.ACTIVE,
+  inactive: MappingStatus.INACTIVE,
+  archived: MappingStatus.ARCHIVED,
+};
+
+function normalizeIosMappingPayload(payload: StoreMappingPayload) {
+  return {
+    appId: nullableAppId(payload.appId),
+    appIconUrl: nullableText(payload.appIconUrl),
+    appLink: nullableText(payload.appLink),
+    appName: cleanText(payload.appName),
+    bundleId: nullableText(payload.bundleId),
+    status: mappingStatusMap[cleanText(payload.status).toLowerCase()] ?? MappingStatus.ACTIVE,
+    storeAccountName: cleanText(payload.storeAccountName),
+  };
+}
+
+function validateIosMapping(payload: ReturnType<typeof normalizeIosMappingPayload>) {
+  if (!payload.storeAccountName || !payload.appId || !payload.appName) {
+    throw badRequest("Store ref, app id and app name are required.");
+  }
+
+  if (!payload.bundleId) {
+    throw badRequest("iOS mapping requires BundleId.");
+  }
+}
+
+function mapIosStoreMappingError(error: unknown): never {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    throw conflict("An iOS mapping with the same app id, app name or BundleId already exists.");
+  }
+
+  throw error;
+}
+
+export async function getIosStoreMappingDtos(options?: { take?: number }) {
+  const mappings = await getIosStoreMappings(options);
+  return mappings.map(iosStoreMappingToTracking);
+}
+
+export async function getIosStoreMappingsResult() {
+  return { mappings: await getIosStoreMappingDtos({ take: 300 }) };
+}
+
+export async function iosStoreMappingExists(id: string) {
+  return Boolean(await getIosStoreMappingId(id));
+}
+
+export async function saveIosStoreMappingDto(input: {
+  appId: string | null;
+  appIconUrl: string | null;
+  appLink: string | null;
+  appName: string;
+  bundleId: string;
+  id?: string;
+  status: MappingStatus;
+  storeAccountName: string;
+}) {
+  const mapping = await runRepositoryTransaction((tx) => saveIosStoreMapping(tx, input));
+  return iosStoreMappingToTracking(mapping);
+}
+
+export function deleteIosStoreMappingById(id: string) {
+  return deleteIosStoreMapping(id);
+}
+
+export async function createIosStoreMapping(payload: StoreMappingPayload) {
+  if (payload.platform && payload.platform !== "ios") {
+    throw badRequest("iOS route only accepts iOS mappings.");
+  }
+
+  const row = normalizeIosMappingPayload(payload);
+  validateIosMapping(row);
+
+  try {
+    const mapping = await saveIosStoreMappingDto({
+      appIconUrl: row.appIconUrl,
+      appId: row.appId,
+      appLink: row.appLink,
+      appName: row.appName,
+      bundleId: row.bundleId!,
+      status: row.status,
+      storeAccountName: row.storeAccountName,
+    });
+
+    return { mapping, message: `iOS app mapping for ${row.appName} has been saved.` };
+  } catch (error) {
+    mapIosStoreMappingError(error);
+  }
+}
+
+export async function updateIosStoreMapping(payload: StoreMappingPayload) {
+  const id = cleanText(payload.id);
+
+  if (!id) {
+    throw badRequest("Mapping id is required.");
+  }
+
+  if (!(await iosStoreMappingExists(id))) {
+    throw notFound("iOS mapping was not found.");
+  }
+
+  const row = normalizeIosMappingPayload(payload);
+  validateIosMapping(row);
+
+  try {
+    const mapping = await saveIosStoreMappingDto({
+      appIconUrl: row.appIconUrl,
+      appId: row.appId,
+      appLink: row.appLink,
+      appName: row.appName,
+      bundleId: row.bundleId!,
+      id,
+      status: row.status,
+      storeAccountName: row.storeAccountName,
+    });
+
+    return { mapping, message: `iOS app mapping for ${row.appName} has been updated.` };
+  } catch (error) {
+    mapIosStoreMappingError(error);
+  }
+}
+
+export async function deleteIosStoreMappingConfig(payload: StoreMappingPayload) {
+  const id = cleanText(payload.id);
+
+  if (!id) {
+    throw badRequest("Mapping id is required.");
+  }
+
+  if (!(await iosStoreMappingExists(id))) {
+    throw notFound("iOS mapping was not found.");
+  }
+
+  await deleteIosStoreMappingById(id);
+
+  return { deleted: id, message: "iOS app mapping deleted." };
+}

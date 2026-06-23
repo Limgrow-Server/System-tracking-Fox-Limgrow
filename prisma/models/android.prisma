@@ -1,0 +1,104 @@
+model AndroidStoreProfile {
+  id               String                @id @default(uuid()) @db.Uuid
+  storeAccountName String                @unique @map("store_account_name")
+  linkStore        String?               @map("link_store")
+  avatarUrl        String?               @map("avatar_url")
+  status           MappingStatus         @default(ACTIVE)
+  supabaseUserId   String?               @unique @map("supabase_user_id") @db.Uuid
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  mappings         AndroidStoreMapping[]
+  credentials      AndroidCredential[]
+  iapTransactions  IapAndroid[]
+
+  @@index([status, storeAccountName], map: "android_store_profiles_status_name_idx")
+  @@map("android_store_profiles")
+}
+
+model AndroidStoreMapping {
+  id               String              @id @default(uuid()) @db.Uuid
+  storeProfileId   String              @map("store_profile_id") @db.Uuid
+  storeAccountName String              @map("store_account_name")
+  appId            String?             @map("app_id")
+  appName          String              @map("app_name")
+  appIconUrl       String?             @map("app_icon_url")
+  appLink          String?             @map("app_link")
+  packageName      String              @map("package_name")
+  status           MappingStatus       @default(ACTIVE)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile     AndroidStoreProfile @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+
+  @@unique([storeProfileId, appName], map: "android_store_mappings_profile_app_name_key")
+  @@unique([storeProfileId, appId], map: "android_store_mappings_profile_app_id_key")
+  @@unique([packageName], map: "android_store_mappings_package_key")
+  @@index([appId, status], map: "android_store_mappings_app_id_status_idx")
+  @@index([packageName, status], map: "android_store_mappings_package_status_idx")
+  @@index([storeAccountName], map: "android_store_mappings_store_name_idx")
+  @@map("android_store_mappings")
+}
+
+model AndroidCredential {
+  id                 String              @id @default(uuid()) @db.Uuid
+  storeProfileId     String              @map("store_profile_id") @db.Uuid
+  credentialRef      String              @unique @map("credential_ref")
+  vaultSecretId      String?             @map("vault_secret_id") @db.Uuid
+  vaultSecretName    String?             @map("vault_secret_name")
+  vaultSecretVersion Int                 @default(1) @map("vault_secret_version")
+  storeAccountName   String              @map("store_account_name")
+  linkStore          String?             @map("link_store")
+  avatarUrl          String?             @map("avatar_url")
+  privateKeyId       String?             @map("private_key_id")
+  clientEmail        String?             @map("client_email")
+  projectId          String?             @map("project_id")
+  status             CredentialStatus    @default(ACTIVE)
+  description        String?
+  createdBy          String?             @map("created_by")
+  rotatedBy          String?             @map("rotated_by")
+  lastUsedAt         DateTime?           @map("last_used_at") @db.Timestamptz(6)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile       AndroidStoreProfile @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+
+  @@unique([storeProfileId], map: "android_credentials_profile_key")
+  @@index([credentialRef, status], map: "android_credentials_lookup_idx")
+  @@index([storeAccountName, status], map: "android_credentials_store_status_idx")
+  @@index([vaultSecretId], map: "android_credentials_vault_secret_id_idx")
+  @@index([vaultSecretName], map: "android_credentials_vault_secret_name_idx")
+  @@map("android_credentials")
+}
+
+model IapAndroid {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeProfileId      String?   @map("store_profile_id") @db.Uuid
+  packageName         String    @map("package_name")
+  productId           String    @map("product_id")
+  purchaseKind        String    @map("purchase_kind")
+  purchaseToken       String    @map("purchase_token")
+  orderId             String?   @map("order_id")
+  linkedPurchaseToken String?   @map("linked_purchase_token")
+  state               String
+  acknowledged        Boolean   @default(false)
+  consumed            Boolean?
+  autoRenewing        Boolean?  @map("auto_renewing")
+  purchaseDate        DateTime? @map("purchase_date") @db.Timestamptz(6)
+  expiresDate         DateTime? @map("expires_date") @db.Timestamptz(6)
+  revenueMicros       BigInt?   @map("revenue_micros")
+  currency            String?
+  regionCode          String?   @map("region_code")
+  basePlanId          String?   @map("base_plan_id")
+  offerId             String?   @map("offer_id")
+  isTestPurchase      Boolean   @default(false) @map("is_test_purchase")
+  rawReceipt          Json?     @map("raw_receipt")
+  verifiedAt          DateTime  @map("verified_at") @db.Timestamptz(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  storeProfile AndroidStoreProfile? @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([packageName, purchaseToken])
+  @@index([packageName, productId])
+  @@index([state, purchaseDate])
+  @@index([storeProfileId])
+  @@map("iap_android")
+}

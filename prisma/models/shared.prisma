@@ -1,0 +1,29 @@
+enum MappingStatus {
+  ACTIVE   @map("active")
+  INACTIVE @map("inactive")
+  ARCHIVED @map("archived")
+
+  @@map("mapping_status")
+}
+
+enum CredentialStatus {
+  ACTIVE   @map("active")
+  DISABLED @map("disabled")
+
+  @@map("credential_status")
+}
+
+enum SecretFormat {
+  JSON @map("json")
+  P8   @map("p8")
+
+  @@map("secret_format")
+}
+
+enum CredentialPurpose {
+  FIREBASE_ADMIN @map("firebase_admin")
+  REVIEW         @map("review")
+  IAP            @map("iap")
+
+  @@map("credential_purpose")
+}
