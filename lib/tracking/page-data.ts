@@ -64,8 +64,11 @@ export type ReviewAppCard = {
   appLink: string | null;
   storeAvatarUrl: string | null;
   storeAccountName: string;
+  storeContactEmail: string | null;
   storeLink: string | null;
   storeProfileId: string;
+  storeSupportPhone: string | null;
+  storeWebsiteUrl: string | null;
   reviewCount: number;
   averageRating: number | null;
   repliedCount: number;
@@ -180,7 +183,10 @@ export type ReplyStoreSummary = {
   storeProfileId: string;
   storeAccountName: string;
   storeAvatarUrl: string | null;
+  contactEmail: string | null;
   storeLink: string | null;
+  supportPhone: string | null;
+  websiteUrl: string | null;
   apps: ReviewAppCard[];
   appCount: number;
   reviewCount: number;

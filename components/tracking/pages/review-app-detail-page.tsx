@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Calendar,
@@ -27,6 +28,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Select,
   SelectContent,
@@ -55,6 +57,7 @@ import type {
   ReviewAppDetailPageData,
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 function formatRating(value: number | null) {
   return value ? value.toFixed(1) : "N/A";
@@ -192,10 +195,6 @@ function CommentAuthorCell({ review }: { review: AndroidStoreReviewDto }) {
       <div className="font-medium text-foreground">
         {review.authorName ?? "Anonymous reviewer"}
       </div>
-      <Badge variant="outline" className="mt-2 gap-1">
-        <Smartphone size={12} />
-        {review.reviewerLanguage ?? "unknown"}
-      </Badge>
     </div>
   );
 }
@@ -222,19 +221,26 @@ function CommentContentCell({ review }: { review: AndroidStoreReviewDto }) {
 }
 
 function CommentReplyCell({
-  replyHref,
+  onSend,
   review,
+  sending,
 }: {
-  replyHref: string;
+  onSend: () => void;
   review: AndroidStoreReviewDto;
+  sending: boolean;
 }) {
   if (!review.developerReplyText) {
     return (
-      <Button asChild variant="outline" size="sm" className="gap-1.5">
-        <Link href={replyHref}>
-          <MessageSquareReply size={13} />
-          Send reply
-        </Link>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="gap-1.5"
+        disabled={sending}
+        onClick={onSend}
+      >
+        {sending ? <Spinner /> : <MessageSquareReply size={13} />}
+        Send reply
       </Button>
     );
   }
@@ -344,9 +350,11 @@ function CommentJsonDialog({ review }: { review: AndroidStoreReviewDto }) {
 }
 
 export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData }) {
+  const router = useRouter();
   const [search, setSearch] = useState("");
   const [ratingFilter, setRatingFilter] = useState("all");
   const [replyFilter, setReplyFilter] = useState("all");
+  const [replyingReviewId, setReplyingReviewId] = useState<string | null>(null);
 
   const filteredReviews = useMemo(() => {
     const query = search.toLowerCase();
@@ -369,14 +377,40 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       return matchesSearch && matchesRating && matchesReply;
     });
   }, [data.reviews, ratingFilter, replyFilter, search]);
-  const replyHrefFor = (reviewId: string) => {
-    const query = new URLSearchParams({
-      app: data.app.mappingId,
-      review: reviewId,
-    });
+  async function sendReply(review: AndroidStoreReviewDto) {
+    if (replyingReviewId) return;
 
-    return `/reply/${data.app.storeProfileId}?${query.toString()}`;
-  };
+    setReplyingReviewId(review.reviewId);
+
+    try {
+      const response = await fetch("/api/review-replies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reviewId: review.reviewId,
+          storeMappingId: data.app.mappingId,
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        message?: string;
+        ok?: boolean;
+      };
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "Reply could not be sent.");
+      }
+
+      toast.success(payload.message ?? "Reply sent.");
+      router.refresh();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Reply could not be sent.",
+      );
+    } finally {
+      setReplyingReviewId(null);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
@@ -518,8 +552,9 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                     </TableCell>
                     <TableCell className="align-top">
                       <CommentReplyCell
-                        replyHref={replyHrefFor(review.reviewId)}
+                        onSend={() => sendReply(review)}
                         review={review}
+                        sending={replyingReviewId === review.reviewId}
                       />
                     </TableCell>
                     <TableCell className="align-top">

@@ -1,25 +1,37 @@
 import "server-only";
 
+import { Prisma } from "@prisma/client";
 import type {
   AndroidStoreReview,
   AndroidStoreReviewFetchRun,
   AndroidStoreReviewReplyTemplate,
   AndroidStoreReviewSyncState,
-  Prisma,
 } from "@prisma/client";
 
 import { badRequest, notFound } from "@/lib/server/api/errors";
+import { getCredentialVaultSecret } from "@/lib/server/repositories/vault/secret.repository";
 import {
+  getActiveAndroidCredentialForStoreProfile,
   getActiveAndroidReviewMappings,
   getAndroidReviewFetchRuns,
   getAndroidReviewMappingById,
+  getAndroidReviewForReply,
   getAndroidReviewRatingGroups,
   getAndroidReviewReplyGroups,
+  getAndroidReviewReplyTemplateForRating,
   getAndroidReviewReplyTemplates,
   getAndroidReviewsForMapping,
+  updateAndroidReviewDeveloperReply,
+  updateAndroidStoreProfileReplyInfo,
   upsertAndroidReviewReplyTemplate,
 } from "@/lib/server/repositories/reviews/android-review.repository";
-import { cleanText } from "@/lib/server/services/credentials/credential.shared";
+import {
+  cleanText,
+  nullableText,
+  parseSecretPayload,
+  validateGoogleServiceAccountSecret,
+} from "@/lib/server/services/credentials/credential.shared";
+import { googleServiceAccountAccessToken } from "@/lib/server/services/google/google-service-account";
 import type {
   AndroidStoreReviewDto,
   AndroidDeviceMetadataDto,
@@ -55,6 +67,12 @@ function iso(value: Date | null | undefined) {
 
 function enumText(value: unknown) {
   return String(value ?? "").toLowerCase();
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 function jsonRecord(value: Prisma.JsonValue | null | undefined) {
@@ -170,8 +188,11 @@ function reviewAppCard(
     reviewCount,
     storeAccountName: mapping.storeAccountName,
     storeAvatarUrl: mapping.storeProfile.avatarUrl,
+    storeContactEmail: mapping.storeProfile.contactEmail,
     storeLink: mapping.storeProfile.linkStore,
     storeProfileId: mapping.storeProfileId,
+    storeSupportPhone: mapping.storeProfile.supportPhone,
+    storeWebsiteUrl: mapping.storeProfile.websiteUrl,
   };
 }
 
@@ -537,6 +558,18 @@ export type SaveReviewReplyTemplatesPayload = {
   }>;
 };
 
+export type SaveReplyStoreInfoPayload = {
+  contactEmail?: unknown;
+  storeProfileId?: unknown;
+  supportPhone?: unknown;
+  websiteUrl?: unknown;
+};
+
+export type SendAndroidReviewReplyPayload = {
+  reviewId?: unknown;
+  storeMappingId?: unknown;
+};
+
 function normalizeTemplatePayload(payload: SaveReviewReplyTemplatesPayload) {
   const storeMappingId = cleanText(payload.storeMappingId);
   const templates = Array.isArray(payload.templates) ? payload.templates : [];
@@ -612,5 +645,222 @@ export async function saveReviewReplyTemplates(
     templates: templates.map((template) =>
       templateDto(template, normalized.storeMappingId, template.rating),
     ),
+  };
+}
+
+function normalizeStoreInfoPayload(payload: SaveReplyStoreInfoPayload) {
+  const storeProfileId = cleanText(payload.storeProfileId);
+  const contactEmail = nullableText(payload.contactEmail);
+  const supportPhone = nullableText(payload.supportPhone);
+  const websiteUrl = nullableText(payload.websiteUrl);
+
+  if (!storeProfileId || !isUuid(storeProfileId)) {
+    throw badRequest("Store profile is required.");
+  }
+
+  if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
+    throw badRequest("Contact email is invalid.");
+  }
+
+  if (websiteUrl) {
+    try {
+      const url = new URL(websiteUrl);
+      if (!["http:", "https:"].includes(url.protocol)) {
+        throw new Error("unsupported_protocol");
+      }
+    } catch {
+      throw badRequest("Website URL is invalid.");
+    }
+  }
+
+  return {
+    contactEmail,
+    storeProfileId,
+    supportPhone,
+    websiteUrl,
+  };
+}
+
+export async function saveReplyStoreInfo(
+  payload: SaveReplyStoreInfoPayload,
+) {
+  const normalized = normalizeStoreInfoPayload(payload);
+  const store = await updateAndroidStoreProfileReplyInfo(
+    normalized.storeProfileId,
+    {
+      contactEmail: normalized.contactEmail,
+      supportPhone: normalized.supportPhone,
+      websiteUrl: normalized.websiteUrl,
+    },
+  ).catch((error: unknown) => {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
+      throw notFound("Android store profile was not found.");
+    }
+
+    throw error;
+  });
+
+  return {
+    message: `Store info for ${store.storeAccountName} has been saved.`,
+    store: {
+      contactEmail: store.contactEmail,
+      storeAccountName: store.storeAccountName,
+      storeProfileId: store.id,
+      supportPhone: store.supportPhone,
+      websiteUrl: store.websiteUrl,
+    },
+  };
+}
+
+function normalizeSendReplyPayload(payload: SendAndroidReviewReplyPayload) {
+  const storeMappingId = cleanText(payload.storeMappingId);
+  const reviewId = cleanText(payload.reviewId);
+
+  if (!storeMappingId || !isUuid(storeMappingId)) {
+    throw badRequest("Android app mapping is required.");
+  }
+
+  if (!reviewId) {
+    throw badRequest("Review ID is required.");
+  }
+
+  return { reviewId, storeMappingId };
+}
+
+function renderReplyText(
+  templateText: string,
+  storeInfo: {
+    contactEmail: string | null;
+    supportPhone: string | null;
+    websiteUrl: string | null;
+  },
+) {
+  const replyText = templateText
+    .replaceAll("{{contactEmail}}", storeInfo.contactEmail ?? "")
+    .replaceAll("{{supportPhone}}", storeInfo.supportPhone ?? "")
+    .replaceAll("{{websiteUrl}}", storeInfo.websiteUrl ?? "")
+    .trim();
+
+  if (!replyText) {
+    throw badRequest("Reply template is empty.");
+  }
+
+  if (replyText.length > MAX_REPLY_TEXT_LENGTH) {
+    throw badRequest("Reply text must be 350 characters or fewer.");
+  }
+
+  return replyText;
+}
+
+function timestampToDate(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const timestamp = value as Record<string, unknown>;
+  const seconds = Number(timestamp.seconds);
+  const nanos = Number(timestamp.nanos ?? 0);
+
+  if (!Number.isFinite(seconds)) return null;
+  return new Date(seconds * 1000 + Math.floor((Number.isFinite(nanos) ? nanos : 0) / 1_000_000));
+}
+
+async function replyToGooglePlayReview(input: {
+  accessToken: string;
+  packageName: string;
+  replyText: string;
+  reviewId: string;
+}) {
+  const url = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(
+    input.packageName,
+  )}/reviews/${encodeURIComponent(input.reviewId)}:reply`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${input.accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ replyText: input.replyText }),
+  });
+  const body = (await response.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+
+  if (!response.ok) {
+    throw new Error(`Google Play reviews.reply failed: ${JSON.stringify(body)}`);
+  }
+
+  return body;
+}
+
+export async function sendAndroidReviewReply(
+  payload: SendAndroidReviewReplyPayload,
+) {
+  const { reviewId, storeMappingId } = normalizeSendReplyPayload(payload);
+  const review = await getAndroidReviewForReply(storeMappingId, reviewId);
+  if (!review) throw notFound("Android review was not found.");
+
+  if (!review.rating) {
+    throw badRequest("Review does not have a rating for template lookup.");
+  }
+
+  const template = await getAndroidReviewReplyTemplateForRating(
+    storeMappingId,
+    review.rating,
+  );
+
+  if (!template?.isActive || !template.replyText.trim()) {
+    throw badRequest(`${review.rating}-star reply template is not active.`);
+  }
+
+  const storeProfile = review.storeMapping.storeProfile;
+  const replyText = renderReplyText(template.replyText, {
+    contactEmail: storeProfile.contactEmail,
+    supportPhone: storeProfile.supportPhone,
+    websiteUrl: storeProfile.websiteUrl,
+  });
+  const credential = await getActiveAndroidCredentialForStoreProfile(
+    review.storeMapping.storeProfileId,
+  );
+  if (!credential) {
+    throw badRequest("No active Android service-account credential was found.");
+  }
+
+  const secretText = await getCredentialVaultSecret(credential.vaultSecretId);
+  const serviceAccount = parseSecretPayload(secretText, "json");
+  if (!validateGoogleServiceAccountSecret(serviceAccount)) {
+    throw badRequest("Android service-account credential is invalid.");
+  }
+
+  const accessToken = await googleServiceAccountAccessToken(serviceAccount);
+  const googleResponse = await replyToGooglePlayReview({
+    accessToken,
+    packageName: review.storeMapping.packageName,
+    replyText,
+    reviewId,
+  });
+  const result =
+    googleResponse.result &&
+    typeof googleResponse.result === "object" &&
+    !Array.isArray(googleResponse.result)
+      ? (googleResponse.result as Record<string, unknown>)
+      : {};
+  const appliedReplyText =
+    typeof result.replyText === "string" ? result.replyText : replyText;
+  const repliedAt = timestampToDate(result.lastEdited) ?? new Date();
+
+  await updateAndroidReviewDeveloperReply(review.id, {
+    developerReplyText: appliedReplyText,
+    developerReplyUpdatedAt: repliedAt,
+  });
+
+  return {
+    developerReplyText: appliedReplyText,
+    developerReplyUpdatedAt: repliedAt.toISOString(),
+    message: "Reply sent to Google Play.",
+    reviewId,
+    storeMappingId,
   };
 }

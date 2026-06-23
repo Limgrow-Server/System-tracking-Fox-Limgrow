@@ -23,6 +23,7 @@ function buildStoreSummaries(data: Awaited<ReturnType<typeof getReplyConfigPageD
         activeTemplateCount: 0,
         appCount: 0,
         apps: [],
+        contactEmail: app.storeContactEmail,
         lastFetchedAt: null,
         pendingReplyCount: 0,
         reviewCount: 0,
@@ -30,6 +31,8 @@ function buildStoreSummaries(data: Awaited<ReturnType<typeof getReplyConfigPageD
         storeAvatarUrl: app.storeAvatarUrl,
         storeLink: app.storeLink,
         storeProfileId: app.storeProfileId,
+        supportPhone: app.storeSupportPhone,
+        websiteUrl: app.storeWebsiteUrl,
       } satisfies ReplyStoreSummary);
 
     const activeTemplateCount =
