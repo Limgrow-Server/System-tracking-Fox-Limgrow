@@ -1,0 +1,38 @@
+enum StaffRole {
+  ADMIN     @map("Admin")
+  DEV       @map("Dev")
+  MARKETING @map("Marketing")
+
+  @@map("staff_role")
+}
+
+enum TeamMemberStatus {
+  ACTIVE    @map("active")
+  INVITED   @map("invited")
+  SUSPENDED @map("suspended")
+  DISABLED  @map("disabled")
+
+  @@map("team_member_status")
+}
+
+model TeamMember {
+  id           String           @id @default(uuid()) @db.Uuid
+  authUserId   String?          @unique @map("auth_user_id") @db.Uuid
+  name         String
+  email        String           @unique
+  role         StaffRole
+  status       TeamMemberStatus @default(INVITED)
+  globalAccess Boolean          @default(false) @map("global_access")
+  appScope     String[]         @default([]) @map("app_scope")
+  storeScope   String[]         @default([]) @map("store_scope")
+  createdBy    String?          @map("created_by")
+  invitedAt    DateTime?        @default(now()) @map("invited_at") @db.Timestamptz(6)
+  lastLoginAt  DateTime?        @map("last_login_at") @db.Timestamptz(6)
+  lastActiveAt DateTime?        @map("last_active_at") @db.Timestamptz(6)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([role, status], map: "team_members_role_status_idx")
+  @@index([email, status], map: "team_members_email_status_idx")
+  @@map("team_members")
+}
