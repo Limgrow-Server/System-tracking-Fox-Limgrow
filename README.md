@@ -393,7 +393,22 @@ npm run check
 
 Nếu GitHub branch protection đang yêu cầu check `quality`, tên required check phải trùng với job `quality`.
 
-SonarCloud đang dùng host mặc định `https://sonarcloud.io`. Secret bắt buộc:
+SonarCloud hiện đang bật `Automatic Analysis`, nên workflow không chạy manual Sonar scan mặc định để tránh lỗi phân tích trùng:
+
+```text
+You are running CI analysis while Automatic Analysis is enabled
+```
+
+Nếu muốn chuyển sang manual scan trong GitHub Action:
+
+1. Tắt `Automatic Analysis` trong SonarCloud project.
+2. Tạo GitHub repository variable:
+
+```text
+ENABLE_SONAR_SCAN=true
+```
+
+3. Tạo secret:
 
 ```text
 SONAR_TOKEN

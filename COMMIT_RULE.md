@@ -106,16 +106,27 @@ npm ci
 npm run check
 ```
 
-SonarCloud dùng host mặc định:
+SonarCloud hiện đang bật `Automatic Analysis`, nên workflow không chạy manual Sonar scan mặc định để tránh lỗi phân tích trùng.
 
-```text
-https://sonarcloud.io
+Nếu muốn chuyển sang manual scan trong GitHub Action:
+
+1. Tắt `Automatic Analysis` trong SonarCloud project.
+2. Tạo repository variable:
+
+```bash
+ENABLE_SONAR_SCAN=true
 ```
 
-Secret bắt buộc:
+3. Tạo secret:
 
 ```bash
 SONAR_TOKEN
+```
+
+Manual scan dùng host mặc định:
+
+```text
+https://sonarcloud.io
 ```
 
 ## Discord notification
