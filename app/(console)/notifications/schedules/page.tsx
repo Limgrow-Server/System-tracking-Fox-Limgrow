@@ -1,4 +1,4 @@
-import { NotificationSchedulesPage } from "@/components/tracking/pages/notifications/notification-schedules-page";
+import { NotificationSchedulesPage } from "@/components/notifications/notification-schedules-page";
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getNotificationsPageData } from "@/lib/server/page-loaders/notifications/notifications.loader";
 

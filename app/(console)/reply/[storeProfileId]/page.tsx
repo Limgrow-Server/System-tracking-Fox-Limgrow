@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getReplyConfigPageDataLoader } from "@/lib/server/page-loaders/reviews/reply-config.loader";
-import { ReplyConfigPage } from "@/components/tracking/pages/reply-config-page";
+import { ReplyConfigPage } from "@/components/tracking/pages/reviews/reply-config-page";
 
 export default async function ReplyStoreRoutePage({
   params,

@@ -1,4 +1,4 @@
-import { NotificationHistoryPage } from "@/components/tracking/pages/notifications/notification-history-page";
+import { NotificationHistoryPage } from "@/components/notifications/notification-history-page";
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getNotificationsPageData } from "@/lib/server/page-loaders/notifications/notifications.loader";
 

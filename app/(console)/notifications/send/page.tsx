@@ -1,4 +1,4 @@
-import { NotificationSendPage } from "@/components/tracking/pages/notifications/notification-send-page";
+import { NotificationSendPage } from "@/components/notifications/notification-send-page";
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getNotificationsPageData } from "@/lib/server/page-loaders/notifications/notifications.loader";
 
