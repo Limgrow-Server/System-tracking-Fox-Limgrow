@@ -1,6 +1,6 @@
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getReviewAppDetailPageData } from "@/lib/server/page-loaders/reviews/review-app-detail.loader";
-import { ReviewAppDetailPage } from "@/components/tracking/pages/review-app-detail-page";
+import { ReviewAppDetailPage } from "@/components/tracking/pages/reviews/review-app-detail-page";
 
 export default async function ReviewAppDetailRoutePage({
   params,

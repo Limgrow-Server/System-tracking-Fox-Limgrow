@@ -7,7 +7,7 @@ import {
   getAndroidTransactionsByPackageAndProfile,
   getIosTransactionsByBundleId,
 } from "@/lib/server/repositories/iap/iap-app.repository";
-import { IapAppCard } from "@/lib/tracking/page-data";
+import type { IapAppCard, IapAppDetailPageData } from "@/lib/tracking/page-data";
 import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
 import { iosIapTransactionToSummary } from "@/lib/tracking/mappers/ios";
 
@@ -41,15 +41,15 @@ export async function getIapAppCards(): Promise<IapAppCard[]> {
   );
 }
 
-export async function getIapAppDetail(mappingId: string, platform: string) {
-  let appCard: IapAppCard | null = null;
-  let transactions: any[] = [];
-
+export async function getIapAppDetail(
+  mappingId: string,
+  platform: string,
+): Promise<{ appCard: IapAppCard; transactions: IapAppDetailPageData["transactions"] }> {
   if (platform === "android") {
     const mapping = await getAndroidMappingById(mappingId);
     if (!mapping) throw new Error("Android mapping not found");
 
-    appCard = {
+    const appCard: IapAppCard = {
       mappingId: mapping.id,
       platform: "android",
       appName: mapping.appName,
@@ -64,12 +64,15 @@ export async function getIapAppDetail(mappingId: string, platform: string) {
       mapping.packageName,
       mapping.storeProfileId
     );
-    transactions = rawTransactions.map(iapAndroidToDto);
+    return {
+      appCard,
+      transactions: rawTransactions.map(iapAndroidToDto),
+    };
   } else if (platform === "ios") {
     const mapping = await getIosMappingById(mappingId);
     if (!mapping) throw new Error("iOS mapping not found");
 
-    appCard = {
+    const appCard: IapAppCard = {
       mappingId: mapping.id,
       platform: "ios",
       appName: mapping.appName,
@@ -81,10 +84,11 @@ export async function getIapAppDetail(mappingId: string, platform: string) {
     };
 
     const rawTransactions = await getIosTransactionsByBundleId(mapping.bundleId);
-    transactions = rawTransactions.map(iosIapTransactionToSummary);
-  } else {
-    throw new Error("Invalid platform");
+    return {
+      appCard,
+      transactions: rawTransactions.map(iosIapTransactionToSummary),
+    };
   }
 
-  return { appCard, transactions };
+  throw new Error("Invalid platform");
 }

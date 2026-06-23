@@ -13,10 +13,6 @@ import {
   FileJson,
   CreditCard,
   MoreHorizontal,
-  ReceiptText,
-  ClipboardCheck,
-  Sparkles,
-  Receipt,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,21 +31,63 @@ import {
 import type { IapAppDetailPageData } from "@/lib/tracking/page-data";
 
 const pageSize = 10;
+const mockBaseTime = new Date("2026-06-22T00:00:00Z").getTime();
+const statsReferenceTime = new Date("2026-06-23T00:00:00Z").getTime();
 
-function formatRevenue(micros: string | null, currency: string | null) {
+type IapDetailTransaction = {
+  id?: string;
+  transaction_id?: string;
+  original_transaction_id?: string | null;
+  orderId?: string | null;
+  productId?: string | null;
+  product_id?: string | null;
+  state?: string | null;
+  purchaseKind?: string | null;
+  isTestPurchase?: boolean | null;
+  environment?: string | null;
+  revenueMicros?: string | number | null;
+  revenue_micros?: string | number | null;
+  purchaseDate?: string | number | null;
+  purchase_date?: string | number | null;
+  currency?: string | null;
+  regionCode?: string | null;
+  purchaseToken?: string | null;
+  rawReceipt?: unknown;
+};
+
+function seededRandom(seed: number) {
+  const value = Math.sin(seed * 9301 + 49297) * 233280;
+  return value - Math.floor(value);
+}
+
+function textValue(value: unknown) {
+  return typeof value === "string" ? value : value === null || value === undefined ? "" : String(value);
+}
+
+function microsToNumber(micros: string | number | null | undefined) {
+  if (typeof micros === "number") return micros;
+  if (!micros) return null;
+  const parsed = Number.parseInt(micros, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function formatRevenue(micros: string | number | null | undefined, currency: string | null | undefined) {
   if (!micros) return "N/A";
-  const num = parseInt(micros);
-  if (isNaN(num)) return "N/A";
+  const num = microsToNumber(micros);
+  if (num === null) return "N/A";
   return new Intl.NumberFormat("vi-VN", { style: "currency", currency: currency || "VND" }).format(num / 1000000);
 }
 
-function formatDate(dateVal: any) {
+function formatDate(dateVal: unknown) {
   if (!dateVal) return "N/A";
-  let d = new Date(dateVal);
-  if (isNaN(d.getTime()) && !isNaN(Number(dateVal))) {
+  const dateInput = dateVal instanceof Date || typeof dateVal === "string" || typeof dateVal === "number"
+    ? dateVal
+    : String(dateVal);
+  let d = new Date(dateInput);
+  if (Number.isNaN(d.getTime()) && !Number.isNaN(Number(dateVal))) {
     d = new Date(Number(dateVal));
   }
-  if (isNaN(d.getTime())) return "N/A";
+  if (Number.isNaN(d.getTime())) return "N/A";
   return d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
@@ -113,15 +151,18 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
 
   const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx: any) => {
+    return transactions.map((tx) => tx as IapDetailTransaction).filter((tx) => {
       const txId = isIos ? tx.transaction_id : tx.orderId;
       const tState = tx.state;
       const tKind = isIos ? "unknown" : tx.purchaseKind;
-      const matchSearch = !search || (txId?.toLowerCase().includes(search.toLowerCase())) || (tx.productId || tx.product_id || "").toLowerCase().includes(search.toLowerCase());
+      const matchSearch =
+        !search ||
+        textValue(txId).toLowerCase().includes(search.toLowerCase()) ||
+        textValue(tx.productId || tx.product_id).toLowerCase().includes(search.toLowerCase());
       const matchState = filterState === "all" || (tState?.toLowerCase() === filterState);
       const matchKind = filterKind === "all" || (tKind?.toLowerCase() === filterKind);
       return matchSearch && matchState && matchKind;
-    }).sort((a: any, b: any) => {
+    }).sort((a, b) => {
       const dA = new Date((isIos ? a.purchase_date : a.purchaseDate) || 0).getTime();
       const dB = new Date((isIos ? b.purchase_date : b.purchaseDate) || 0).getTime();
       return dB - dA;
@@ -131,31 +172,28 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   // MOCK DATA INJECTION ONLY FOR CHART & STATS UI TESTING
   const chartTransactions = useMemo(() => {
     if (filteredTransactions.length >= 10) return filteredTransactions;
-    // Deterministic seeded PRNG to avoid hydration mismatch
-    let seed = 42;
-    const rand = () => { seed = (seed * 16807 + 0) % 2147483647; return (seed - 1) / 2147483646; };
-    const baseTime = new Date("2026-06-22T00:00:00Z").getTime();
-    const mockTxs = [];
+    const mockTxs: IapDetailTransaction[] = [];
     for (let i = 0; i < 80; i++) {
-      const daysAgo = Math.floor(rand() * 360);
-      const isTest = rand() > 0.8;
-      const state = rand() > 0.2 ? "active" : "canceled";
-      const revenue = Math.floor(rand() * 500000 + 50000) * 1000000;
-      const txHash = Math.floor(rand() * 1e9).toString(36);
+      const rand = (offset: number) => seededRandom(i * 11 + offset);
+      const daysAgo = Math.floor(rand(1) * 360);
+      const isTest = rand(2) > 0.8;
+      const state = rand(3) > 0.2 ? "active" : "canceled";
+      const revenue = Math.floor(rand(4) * 500000 + 50000) * 1000000;
+      const txHash = Math.floor(rand(5) * 1e9).toString(36);
       mockTxs.push({
         id: `mock-${i}`,
         transaction_id: `mock-tx-${txHash}`,
-        orderId: `GPA.3300-${Math.floor(rand() * 9999)}-${Math.floor(rand() * 9999)}`,
-        productId: `com.limgrow.app.premium_${Math.floor(rand() * 3 + 1)}m`,
-        product_id: `com.limgrow.app.premium_${Math.floor(rand() * 3 + 1)}m`,
+        orderId: `GPA.3300-${Math.floor(rand(6) * 9999)}-${Math.floor(rand(7) * 9999)}`,
+        productId: `com.limgrow.app.premium_${Math.floor(rand(8) * 3 + 1)}m`,
+        product_id: `com.limgrow.app.premium_${Math.floor(rand(9) * 3 + 1)}m`,
         state,
         purchaseKind: "subscription",
         isTestPurchase: isTest,
         environment: isTest ? "Sandbox" : "Production",
-        revenueMicros: revenue.toString(),
-        revenue_micros: revenue.toString(),
-        purchaseDate: new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
-        purchase_date: new Date(baseTime - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
+        revenueMicros: revenue,
+        revenue_micros: revenue,
+        purchaseDate: new Date(mockBaseTime - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
+        purchase_date: new Date(mockBaseTime - daysAgo * 24 * 60 * 60 * 1000).toISOString(),
         currency: "VND",
         regionCode: "VN",
       });
@@ -165,13 +203,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
 
   const stats = useMemo(() => {
     let rev = 0; let active = 0; let canceled = 0;
-    const now = Date.now(); const week = 7*24*60*60*1000;
+    const now = statsReferenceTime; const week = 7*24*60*60*1000;
     let revL7 = 0; let revP7 = 0; let ordL7 = 0; let ordP7 = 0;
-    chartTransactions.forEach((tx: any) => {
+    chartTransactions.forEach((tx) => {
       const test = isIos ? tx.environment === "Sandbox" : tx.isTestPurchase;
       const st = (tx.state || "").toLowerCase();
       const m = isIos ? tx.revenue_micros : tx.revenueMicros;
-      const v = m ? parseInt(m) / 1e6 : 0;
+      const v = microsToNumber(m) !== null ? microsToNumber(m)! / 1e6 : 0;
       const d = new Date((isIos ? tx.purchase_date : tx.purchaseDate) || 0).getTime();
       if (!test && m) { rev += v; if (d >= now - week) { revL7 += v; ordL7++; } else if (d >= now - 2*week) { revP7 += v; ordP7++; } }
       if (st === "active" || st === "purchased") active++;
@@ -186,14 +224,16 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const { buckets, maxVal } = useMemo(() => {
     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const b: { label: string; prod: number; sand: number }[] = [];
-    const now = new Date();
+    const now = new Date(statsReferenceTime);
     for (let i = 11; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); b.push({ label: months[d.getMonth()], prod: 0, sand: 0 }); }
-    chartTransactions.forEach((tx: any) => {
+    chartTransactions.forEach((tx) => {
       const test = isIos ? tx.environment === "Sandbox" : tx.isTestPurchase;
       const pd = new Date((isIos ? tx.purchase_date : tx.purchaseDate) || 0);
       const m = isIos ? tx.revenue_micros : tx.revenueMicros;
       if (!m) return;
-      const v = parseInt(m) / 1e6;
+      const parsedMicros = microsToNumber(m);
+      if (parsedMicros === null) return;
+      const v = parsedMicros / 1e6;
       const mIdx = b.findIndex((_, idx) => { const ref = new Date(now.getFullYear(), now.getMonth() - (11 - idx), 1); return ref.getMonth() === pd.getMonth() && ref.getFullYear() === pd.getFullYear(); });
       if (mIdx >= 0) { if (test) b[mIdx].sand += v; else b[mIdx].prod += v; }
     });
@@ -201,7 +241,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     return { buckets: b, maxVal: mx };
   }, [chartTransactions, isIos]);
 
-  const uniqueStates = useMemo(() => { const s = new Set<string>(); transactions.forEach((tx: any) => { if (tx.state) s.add(tx.state.toLowerCase()); }); return Array.from(s).sort(); }, [transactions]);
+  const uniqueStates = useMemo(() => {
+    const states = new Set<string>();
+    transactions.map((tx) => tx as IapDetailTransaction).forEach((tx) => {
+      if (tx.state) states.add(tx.state.toLowerCase());
+    });
+    return Array.from(states).sort();
+  }, [transactions]);
 
   const totalPages = Math.ceil(filteredTransactions.length / pageSize);
   const currentPage = Math.min(page, Math.max(1, totalPages));
@@ -309,14 +355,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
               <tr><th className="px-4 py-3">Transaction / Order</th><th className="px-4 py-3">Product Info</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Revenue / Price</th><th className="px-4 py-3">Purchase time</th><th className="px-4 py-3">Receipt</th></tr>
             </thead>
             <tbody className="divide-y border-b bg-background">
-              {visible.map((tx: any) => {
+              {visible.map((tx) => {
                 const txId = isIos ? tx.transaction_id : (tx.orderId || "N/A");
                 const productId = isIos ? tx.product_id : tx.productId;
                 const isTest = isIos ? tx.environment === "Sandbox" : tx.isTestPurchase;
                 const revenue = isIos ? tx.revenue_micros : tx.revenueMicros;
                 const currency = tx.currency || "VND";
                 const purchaseDate = isIos ? tx.purchase_date : tx.purchaseDate;
-                const expiresDate = isIos ? tx.expires_date : tx.expiresDate;
                 return (
                   <tr key={tx.id || tx.transaction_id || tx.purchaseToken} className="hover:bg-muted/20 transition-colors">
                     <td className="px-4 py-3.5 max-w-[240px]">

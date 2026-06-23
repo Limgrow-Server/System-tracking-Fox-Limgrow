@@ -1,6 +1,6 @@
 import { requireConsoleSession } from "@/lib/auth/session";
 import { getIapAppDetailPageData } from "@/lib/server/page-loaders/iap/app-detail.loader";
-import { IapAppDetailPage } from "@/components/tracking/pages/iap-app-detail-page";
+import { IapAppDetailPage } from "@/components/tracking/pages/iap/iap-app-detail-page";
 import { notFound } from "next/navigation";
 
 export default async function IapAppDetailRoutePage({

@@ -1,6 +1,10 @@
 import type {
   CredentialSecretMetadata,
+  DeviceToken,
   IosIapTransactionSummary,
+  NotificationEvent,
+  NotificationJob,
+  NotificationSchedule,
   StoreMapping,
 } from "@/lib/tracking/types";
 import type {
@@ -26,6 +30,15 @@ export type ConfigsPageData = {
 export type IosIapVerifyPageData = {
   credentialSecrets: CredentialSecretMetadata[];
   recentTransactions: IosIapTransactionSummary[];
+  storeMappings: StoreMapping[];
+};
+
+export type NotificationsPageData = {
+  credentialSecrets: CredentialSecretMetadata[];
+  deviceTokens: DeviceToken[];
+  notificationEvents: NotificationEvent[];
+  notificationJobs: NotificationJob[];
+  notificationSchedules: NotificationSchedule[];
   storeMappings: StoreMapping[];
 };
 

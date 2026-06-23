@@ -12,3 +12,12 @@ verify_jwt = true
 
 [functions.fetch-google-play-reviews]
 verify_jwt = false
+
+[functions.send-notification]
+verify_jwt = true
+
+[functions.dispatch-notifications]
+verify_jwt = true
+
+[functions.notification-event]
+verify_jwt = false

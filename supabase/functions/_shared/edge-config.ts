@@ -1,10 +1,17 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+import {
+  normalizeAppId,
+  normalizeBundleId,
+  normalizePackageName,
+} from "./mobile-normalize.ts";
+
 export type MobilePlatform = "android" | "ios";
 export type StorePlatform = "google_play" | "apple_app_store";
 export type CredentialPurpose = "firebase_admin" | "iap" | "review";
 
 export type ConfigLookup = {
+  appId?: string;
   appName?: string;
   bundleId?: string;
   credentialRef?: string;
@@ -18,6 +25,7 @@ export type ConfigLookup = {
 export type ResolvedMobileApp = {
   id: string;
   appIconUrl: string | null;
+  appId: string | null;
   appLink: string | null;
   appName: string;
   bundleId: string | null;
@@ -99,7 +107,7 @@ export type AppleIapRuntimeConfig = ResolvedRuntimeConfig & {
 
 export const corsHeaders = {
   "access-control-allow-origin": "*",
-  "access-control-allow-headers": "authorization, x-client-info, apikey, content-type, x-review-fetch-secret",
+  "access-control-allow-headers": "authorization, x-client-info, apikey, x-api-key, content-type, x-review-fetch-secret",
   "access-control-allow-methods": "POST, OPTIONS",
 };
 
@@ -115,7 +123,7 @@ export function createAdminClient() {
   const serviceRoleKey =
     secretKeyFromDictionary() ??
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
-    Deno.env.get("SUPABASE_SECRET_KEY");
+    Deno.env.get("NEXT_PUBLIC_SUPABASE_SECRET_KEY");
 
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error("Missing SUPABASE_URL or service-role secret");
@@ -157,6 +165,10 @@ function appNameLookup(input: ConfigLookup) {
   return clean(input.appName) || clean(input.productAppId);
 }
 
+function appIdLookup(input: ConfigLookup) {
+  return normalizeAppId(input.appId) || normalizeAppId(input.productAppId);
+}
+
 function storePlatformFor(platform: MobilePlatform): StorePlatform {
   return platform === "android" ? "google_play" : "apple_app_store";
 }
@@ -184,6 +196,7 @@ function normalizeApp(row: Record<string, unknown>, platform: MobilePlatform): R
   return {
     id: clean(row.id),
     appIconUrl: nullableString(row.app_icon_url),
+    appId: nullableString(row.app_id),
     appLink: nullableString(row.app_link),
     appName: clean(row.app_name),
     bundleId: platform === "ios" ? nullableString(row.bundle_id) : null,
@@ -245,15 +258,27 @@ async function findMobileApp(
   const table = platform === "android" ? "android_store_mappings" : "ios_store_mappings";
   const select =
     platform === "android"
-      ? "id,store_profile_id,store_account_name,app_name,app_icon_url,app_link,package_name,status"
-      : "id,store_profile_id,store_account_name,app_name,app_icon_url,app_link,bundle_id,status";
+      ? "id,store_profile_id,store_account_name,app_id,app_name,app_icon_url,app_link,package_name,status"
+      : "id,store_profile_id,store_account_name,app_id,app_name,app_icon_url,app_link,bundle_id,status";
+  const appId = appIdLookup(input);
   const appName = appNameLookup(input);
-  const identifier = platform === "android" ? clean(input.packageName) : clean(input.bundleId);
+  const identifier = platform === "android" ? normalizePackageName(input.packageName) : normalizeBundleId(input.bundleId);
 
   let query = supabase.from(table).select(select).eq("status", "active").limit(1);
 
   if (clean(input.storeProfileId)) {
     query = query.eq("store_profile_id", clean(input.storeProfileId));
+    if (appId) {
+      query = query.eq("app_id", appId);
+    } else if (identifier) {
+      query = query.eq(platform === "android" ? "package_name" : "bundle_id", identifier);
+    } else if (appName) {
+      query = query.eq("app_name", appName);
+    }
+  } else if (clean(input.storeAccountName) && appId) {
+    query = query.eq("store_account_name", clean(input.storeAccountName)).eq("app_id", appId);
+  } else if (appId) {
+    query = query.eq("app_id", appId);
   } else if (clean(input.storeAccountName) && appName) {
     query = query.eq("store_account_name", clean(input.storeAccountName)).eq("app_name", appName);
   } else if (identifier) {

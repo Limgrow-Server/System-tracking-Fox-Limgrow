@@ -17,6 +17,7 @@ export function androidStoreMappingToTracking(mapping: AndroidStoreMappingRecord
     store_profile_id: mapping.storeProfileId,
     store_platform: "google_play",
     store_account_name: mapping.storeAccountName,
+    app_id: mapping.appId,
     app_name: mapping.appName,
     app_icon_url: mapping.appIconUrl,
     app_link: mapping.appLink,
