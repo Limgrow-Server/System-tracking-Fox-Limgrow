@@ -1,5 +1,5 @@
 import { requireConsoleSession } from "@/lib/auth/session";
-import { ReviewAppDetailPage } from "@/components/tracking/pages/review-app-detail-page";
+import { ReviewAppDetailPage } from "@/components/tracking/pages/reviews/review-app-detail-page";
 import { getReviewAppDetailPageData } from "@/lib/server/page-loaders/reviews/review-app-detail.loader";
 
 export default async function CommentsAppDetailRoutePage({

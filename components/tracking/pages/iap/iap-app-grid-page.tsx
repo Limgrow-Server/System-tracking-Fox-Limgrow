@@ -32,7 +32,6 @@ import {
 import { PageHeader } from "@/components/tracking/primitives";
 import { cn } from "@/lib/utils";
 import type { IapAppGridPageData } from "@/lib/tracking/page-data";
-import { PageHeader } from "../primitives";
 
 export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
   const router = useRouter();

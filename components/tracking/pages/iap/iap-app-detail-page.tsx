@@ -49,8 +49,6 @@ import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.servic
 import type { IosIapTransactionSummary } from "@/lib/tracking/types";
 
 const pageSize = 10;
-const mockBaseTime = new Date("2026-06-22T00:00:00Z").getTime();
-const statsReferenceTime = new Date("2026-06-23T00:00:00Z").getTime();
 
 function formatRevenue(
   micros: number | string | null,

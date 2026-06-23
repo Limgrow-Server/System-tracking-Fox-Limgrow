@@ -45,9 +45,6 @@ export async function getIapAppDetail(
   mappingId: string,
   platform: string,
 ): Promise<{ appCard: IapAppCard; transactions: IapAppTransaction[] }> {
-  let appCard: IapAppCard | null = null;
-  let transactions: IapAppTransaction[] = [];
-
   if (platform === "android") {
     const mapping = await getAndroidMappingById(mappingId);
     if (!mapping) throw new Error("Android mapping not found");
@@ -90,12 +87,11 @@ export async function getIapAppDetail(
       mapping.bundleId,
       mapping.storeProfileId,
     );
-    transactions = rawTransactions.map(iosIapTransactionToSummary);
-  } else {
-    throw new Error("Invalid platform");
+    return {
+      appCard,
+      transactions: rawTransactions.map(iosIapTransactionToSummary),
+    };
   }
 
-  if (!appCard) throw new Error("App mapping not found");
-
-  return { appCard, transactions };
+  throw new Error("Invalid platform");
 }
