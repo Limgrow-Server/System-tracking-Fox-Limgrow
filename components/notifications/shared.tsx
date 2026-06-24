@@ -32,7 +32,7 @@ import type {
 import { cn } from "@/lib/utils";
 
 export type PlatformFilter = "android" | "ios";
-export type NotificationFunctionSection = "send" | "schedules" | "history";
+export type NotificationFunctionSection = "overview" | "send" | "schedules" | "history";
 export type ScheduleMode = "now" | "once" | "daily" | "monthly";
 
 export type LocaleRow = {
@@ -47,6 +47,7 @@ export type SendResult = {
   deviceId: string | null;
   error: string | null;
   fcmErrorCode?: string | null;
+  fcmToken?: string | null;
   invalidToken?: boolean;
   ok: boolean;
   providerMessageId: string | null;
@@ -291,15 +292,28 @@ export function appMatchesSearch(app: StoreMapping, search: string) {
   ].some((value) => value?.toLowerCase().includes(query));
 }
 
-function deviceMatchesApp(device: DeviceToken, app: StoreMapping) {
-  if (device.platform !== app.platform || device.status !== "active") return false;
-  if (app.app_id && device.app_id === app.app_id) return true;
-  if (app.app_id && device.product_app_id === app.app_id) return true;
-  if (device.app_id && device.app_id === app.app_name) return true;
+export function deviceTokenMatchesApp(
+  device: DeviceToken,
+  app: StoreMapping,
+  options: { activeOnly?: boolean } = {}
+) {
+  if (device.platform !== app.platform) return false;
+  if (options.activeOnly && device.status !== "active") return false;
+
+  const appKeys = [app.app_id, app.app_name].filter(Boolean) as string[];
+  const deviceKeys = [device.app_id, device.product_app_id].filter(Boolean) as string[];
+  if (appKeys.length && deviceKeys.length) {
+    return deviceKeys.some((deviceKey) => appKeys.includes(deviceKey));
+  }
+
   if (app.package_name && device.package_name === app.package_name) return true;
   if (app.bundle_id && device.bundle_id === app.bundle_id) return true;
-  if (device.product_app_id === app.app_name) return true;
-  return device.store_account_name === app.store_account_name;
+  return !deviceKeys.length && device.store_account_name === app.store_account_name;
+}
+
+export function tokensForApp(app: StoreMapping | null, devices: DeviceToken[], options: { activeOnly?: boolean } = {}) {
+  if (!app) return [];
+  return devices.filter((device) => deviceTokenMatchesApp(device, app, options));
 }
 
 export function devicesForApp(app: StoreMapping | null, devices: DeviceToken[]) {
@@ -307,7 +321,7 @@ export function devicesForApp(app: StoreMapping | null, devices: DeviceToken[]) 
 
   const seen = new Set<string>();
   return devices.filter((device) => {
-    if (!deviceMatchesApp(device, app)) return false;
+    if (!deviceTokenMatchesApp(device, app, { activeOnly: true })) return false;
     if (seen.has(device.device_id)) return false;
     seen.add(device.device_id);
     return true;
@@ -401,6 +415,11 @@ export function jobFailedCount(job: NotificationJob) {
 export function jobSuccessRate(job: NotificationJob) {
   const requested = jobRequestedCount(job);
   return requested ? (Math.max(0, job.sent_count) / requested) * 100 : 0;
+}
+
+export function notificationJobBadgeStatus(job: NotificationJob) {
+  if (Math.max(0, job.sent_count) > 0 && Math.max(0, job.error_count) > 0) return "sent_with_issues";
+  return job.status;
 }
 
 export function valuesMatchSearch(values: Array<string | null | undefined>, search: string) {
@@ -552,8 +571,8 @@ function DeliveryLineChart({
           <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
         </linearGradient>
       </defs>
-      {tickValues.map((tick) => (
-        <g key={tick}>
+      {tickValues.map((tick, index) => (
+        <g key={`${index}-${tick}`}>
           <line x1={left} x2={width - right} y1={yFor(tick)} y2={yFor(tick)} stroke="hsl(var(--border))" strokeDasharray="4 6" />
           <text x={left - 10} y={yFor(tick) + 4} textAnchor="end" className="fill-muted-foreground text-[11px]">
             {numberLabel(tick)}
@@ -712,12 +731,17 @@ export function DeliveryDashboard({
                         : "border-transparent bg-muted/50 text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    <Checkbox
+                    <span
                       aria-hidden="true"
-                      checked={checked}
-                      className="pointer-events-none size-3.5"
-                      tabIndex={-1}
-                    />
+                      className={cn(
+                        "flex size-3.5 items-center justify-center rounded-[4px] border transition",
+                        checked
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-input bg-background"
+                      )}
+                    >
+                      {checked ? <CheckCircle2 size={10} /> : null}
+                    </span>
                     <span className={cn("size-2 rounded-full", metric.color)} />
                     {metric.label}
                   </button>
@@ -746,6 +770,7 @@ export function notificationHref(section: NotificationFunctionSection, app?: Sto
 }
 
 export function sectionLabel(section: NotificationFunctionSection) {
+  if (section === "overview") return "Overview";
   if (section === "schedules") return "Schedules";
   if (section === "history") return "History";
   return "Send";

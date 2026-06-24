@@ -114,6 +114,7 @@ export function deviceTokenToTracking(device: DeviceTokenRecord): DeviceToken {
     platform: device.platform,
     firebase_app_id: device.firebaseAppId,
     firebase_project_id: device.firebaseProjectId,
+    fcm_token: device.fcmToken,
     app_version: device.appVersion,
     os_version: device.osVersion,
     locale: device.locale,

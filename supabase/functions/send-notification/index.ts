@@ -29,6 +29,14 @@ Deno.serve(async (request) => {
       result,
     });
   } catch (error) {
+    console.error("[send-notification] request failed", {
+      error: error instanceof Error
+        ? { message: error.message, name: error.name, stack: error.stack }
+        : { message: String(error) },
+      method: request.method,
+      url: request.url,
+    });
+
     return json(
       {
         ok: false,

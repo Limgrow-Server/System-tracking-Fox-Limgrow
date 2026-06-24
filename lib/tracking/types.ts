@@ -183,6 +183,7 @@ export type DeviceToken = {
   platform: "android" | "ios" | string;
   firebase_app_id: string | null;
   firebase_project_id: string | null;
+  fcm_token: string;
   app_version: string | null;
   os_version: string | null;
   locale: string | null;

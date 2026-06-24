@@ -1,17 +1,19 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowLeft, ChevronRight, History, RefreshCw } from "lucide-react";
+import { ArrowLeft, ChevronRight, Eye, History, MessageSquareText, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData } from "@/lib/tracking/page-data";
-import type { NotificationEvent } from "@/lib/tracking/types";
+import type { DeviceToken, NotificationEvent, NotificationJob } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
 import {
@@ -23,6 +25,9 @@ import {
   jobMatchesApp,
   jobRequestedCount,
   jobSuccessRate,
+  localePayloadForRows,
+  localeRowsFromPayload,
+  notificationJobBadgeStatus,
   notificationImpressionEventCount,
   notificationOpenEventCount,
   notificationReceivedEventCount,
@@ -31,9 +36,99 @@ import {
   notificationUniqueReceivedCount,
   numberLabel,
   platformLabel,
+  primaryLocaleRow,
   rateLabel,
   valuesMatchSearch,
 } from "./shared";
+
+type SentContent = {
+  message: string;
+  title: string;
+  topicCode: string | null;
+};
+
+type DeliveryRow = {
+  content: SentContent;
+  event: NotificationEvent;
+  fcmErrorCode: string | null;
+  fcmToken: string | null;
+  invalidToken: boolean;
+  metadata: Record<string, unknown>;
+  token: DeviceToken | null;
+  topicCode: string | null;
+};
+
+function metadataRecord(metadata: unknown) {
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
+}
+
+function metadataString(event: NotificationEvent, key: string) {
+  const value = metadataRecord(event.metadata)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function tokenMatchesJob(token: DeviceToken, job: NotificationJob) {
+  if (job.platform && token.platform !== job.platform) return false;
+  if (job.app_id && [token.app_id, token.product_app_id].includes(job.app_id)) return true;
+  if (job.package_name && token.package_name === job.package_name) return true;
+  if (job.bundle_id && token.bundle_id === job.bundle_id) return true;
+  return !job.app_id && !job.package_name && !job.bundle_id;
+}
+
+function tokenForEvent(
+  event: NotificationEvent,
+  job: NotificationJob,
+  tokensById: Map<string, DeviceToken>,
+  tokensByDeviceId: Map<string, DeviceToken[]>
+) {
+  const tokenId = metadataString(event, "deviceTokenId");
+  if (tokenId) {
+    const token = tokensById.get(tokenId);
+    if (token) return token;
+  }
+
+  const deviceId = event.device_id ?? event.target_value;
+  if (!deviceId) return null;
+  return (tokensByDeviceId.get(deviceId) ?? []).find((token) => tokenMatchesJob(token, job)) ?? null;
+}
+
+function eventLogDetail(event: NotificationEvent) {
+  const fcmErrorCode = metadataString(event, "fcmErrorCode") ?? event.error_code;
+  if (fcmErrorCode === "THIRD_PARTY_AUTH_ERROR") {
+    return "Thiếu hoặc sai APNs Auth Key/Certificate trong Firebase project của iOS app.";
+  }
+  if (fcmErrorCode === "UNREGISTERED") return "Người dùng đã tắt thông báo.";
+
+  return event.error_detail
+    ?? event.error_code
+    ?? fcmErrorCode
+    ?? event.provider_message_id
+    ?? "No log detail";
+}
+
+function sentContentForTopic(
+  rows: Array<{ message: string; title: string; topicCode: string }>,
+  job: NotificationJob,
+  topicCode: string | null
+): SentContent {
+  const normalizedTopicCode = topicCode?.trim().toLowerCase() || null;
+  const matched = normalizedTopicCode ? rows.find((row) => row.topicCode === normalizedTopicCode) : null;
+  const primary = primaryLocaleRow(rows);
+  const row = matched ?? primary;
+
+  return {
+    message: row?.message || job.message || "No content",
+    title: row?.title || job.title || "Untitled notification",
+    topicCode: row?.topicCode ?? normalizedTopicCode,
+  };
+}
+
+function metadataJson(metadata: Record<string, unknown>) {
+  const keys = Object.keys(metadata);
+  return keys.length ? JSON.stringify(metadata, null, 2) : "{}";
+}
 
 export function NotificationHistoryPage({
   data,
@@ -50,6 +145,7 @@ export function NotificationHistoryPage({
   const [recordSearch, setRecordSearch] = useState("");
   const [recordAppFilter, setRecordAppFilter] = useState(resolvedInitialAppId || ALL_FILTER_VALUE);
   const [recordStoreFilter, setRecordStoreFilter] = useState(ALL_FILTER_VALUE);
+  const [selectedDeliveryEventId, setSelectedDeliveryEventId] = useState<string | null>(null);
 
   const storeFilterOptions = useMemo(
     () =>
@@ -92,7 +188,10 @@ export function NotificationHistoryPage({
   }, [data.notificationEvents]);
 
   const historyDetailJob = historyJobId ? data.notificationJobs.find((job) => job.id === historyJobId) ?? null : null;
-  const historyDetailEvents = historyDetailJob ? data.notificationEvents.filter((event) => event.job_id === historyDetailJob.id) : [];
+  const historyDetailEvents = useMemo(
+    () => historyDetailJob ? data.notificationEvents.filter((event) => event.job_id === historyDetailJob.id) : [],
+    [data.notificationEvents, historyDetailJob]
+  );
   const historyDetailRequested = historyDetailJob ? jobRequestedCount(historyDetailJob) : 0;
   const historyDetailFailed = historyDetailJob ? jobFailedCount(historyDetailJob) : 0;
   const historyDetailSent = historyDetailJob ? Math.max(0, historyDetailJob.sent_count) : 0;
@@ -102,6 +201,53 @@ export function NotificationHistoryPage({
   const historyDetailReceivedEvents = notificationReceivedEventCount(historyDetailEvents);
   const historyDetailOpenEvents = notificationOpenEventCount(historyDetailEvents);
   const historyDetailImpressionEvents = notificationImpressionEventCount(historyDetailEvents);
+  const deviceTokensById = useMemo(() => new Map(data.deviceTokens.map((token) => [token.id, token])), [data.deviceTokens]);
+  const deviceTokensByDeviceId = useMemo(() => {
+    const byDeviceId = new Map<string, DeviceToken[]>();
+    data.deviceTokens.forEach((token) => {
+      const current = byDeviceId.get(token.device_id) ?? [];
+      current.push(token);
+      byDeviceId.set(token.device_id, current);
+    });
+    return byDeviceId;
+  }, [data.deviceTokens]);
+  const historyContentRows = useMemo(
+    () => historyDetailJob
+      ? localePayloadForRows(localeRowsFromPayload(historyDetailJob.locale_payload, historyDetailJob.title ?? "", historyDetailJob.message ?? ""))
+        .filter((row) => row.title || row.message)
+      : [],
+    [historyDetailJob]
+  );
+  const historyPrimaryContent = historyDetailJob
+    ? sentContentForTopic(historyContentRows, historyDetailJob, null)
+    : null;
+  const historyDeliveryEvents = useMemo(
+    () => historyDetailEvents
+      .filter((event) => event.target_type === "device" || event.device_id || event.event_type.startsWith("fcm_"))
+      .sort((first, second) => new Date(second.created_at).getTime() - new Date(first.created_at).getTime()),
+    [historyDetailEvents]
+  );
+  const historyDeliveryRows: DeliveryRow[] = historyDetailJob
+    ? historyDeliveryEvents.map((event) => {
+      const token = tokenForEvent(event, historyDetailJob, deviceTokensById, deviceTokensByDeviceId);
+      const metadata = metadataRecord(event.metadata);
+      const topicCode = metadataString(event, "topicCode");
+
+      return {
+        content: sentContentForTopic(historyContentRows, historyDetailJob, topicCode),
+        event,
+        fcmErrorCode: metadataString(event, "fcmErrorCode"),
+        fcmToken: metadataString(event, "fcmToken") ?? token?.fcm_token ?? null,
+        invalidToken: metadata.invalidToken === true,
+        metadata,
+        token,
+        topicCode,
+      };
+    })
+    : [];
+  const selectedDeliveryRow = selectedDeliveryEventId
+    ? historyDeliveryRows.find((row) => row.event.id === selectedDeliveryEventId) ?? null
+    : null;
 
   const pageTitle = historyJobId ? "Notification detail" : "Notification history";
   const pageDescription = historyJobId
@@ -217,7 +363,7 @@ export function NotificationHistoryPage({
                           <div className="text-xs text-muted-foreground">{rateLabel(jobSuccessRate(job))} success</div>
                         </TableCell>
                         <TableCell>
-                          <StatusBadge status={job.status} />
+                          <StatusBadge status={notificationJobBadgeStatus(job)} />
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{dateTime(job.sent_at ?? job.created_at)}</TableCell>
                         <TableCell>
@@ -249,7 +395,7 @@ export function NotificationHistoryPage({
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="font-heading text-lg font-semibold">{historyDetailJob.app_name}</h2>
-                      <StatusBadge status={historyDetailJob.status} />
+                      <StatusBadge status={notificationJobBadgeStatus(historyDetailJob)} />
                       <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
                         <PlatformIcon platform={historyDetailJob.platform} />
                         {platformLabel(historyDetailJob.platform)}
@@ -288,19 +434,225 @@ export function NotificationHistoryPage({
                       <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailOpenEvents}</div>
                       <div className="mt-0.5 text-[11px] opacity-75">{historyDetailOpened} token(s)</div>
                     </div>
-                    <div className="rounded-md bg-emerald-50 p-3 text-emerald-700">
-                      <div className="text-xs">Rate</div>
-                      <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{rateLabel(jobSuccessRate(historyDetailJob))}</div>
+                      <div className="rounded-md bg-emerald-50 p-3 text-emerald-700">
+                        <div className="text-xs">Rate</div>
+                        <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{rateLabel(jobSuccessRate(historyDetailJob))}</div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </section>
+                  <div className="border-t bg-background p-4">
+                    <div className="flex flex-wrap items-center gap-2 font-heading text-base font-semibold">
+                      <MessageSquareText size={17} />
+                      Sent content
+                      {historyPrimaryContent?.topicCode ? (
+                        <Badge variant="secondary" className="h-6 rounded-md px-2 font-mono text-xs">
+                          {historyPrimaryContent.topicCode}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+                      <div className="min-w-0 rounded-md border bg-muted/15 p-3">
+                        <div className="text-xs text-muted-foreground">Title</div>
+                        <div className="mt-1 min-w-0 break-words text-sm font-medium">
+                          {historyPrimaryContent?.title ?? "Untitled notification"}
+                        </div>
+                      </div>
+                      <div className="min-w-0 rounded-md border bg-muted/15 p-3">
+                        <div className="text-xs text-muted-foreground">Content</div>
+                        <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">
+                          {historyPrimaryContent?.message ?? "No content"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
 
-              <DeliveryDashboard
-                events={historyDetailEvents}
-                jobs={[historyDetailJob]}
-              />
-            </>
+                <Tabs defaultValue="dashboard" className="space-y-3">
+                  <TabsList>
+                    <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+                    <TabsTrigger value="tokens">FCM tokens</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="dashboard" className="m-0">
+                    <DeliveryDashboard
+                      events={historyDetailEvents}
+                      jobs={[historyDetailJob]}
+                    />
+                  </TabsContent>
+                  <TabsContent value="tokens" className="m-0">
+                    <section className="overflow-hidden rounded-xl border bg-background shadow-sm shadow-slate-200/50">
+                      <div className="border-b bg-muted/20 p-4">
+                        <div className="flex items-center gap-2 font-heading text-base font-semibold">
+                          <History size={17} />
+                          FCM tokens sent
+                        </div>
+                        <div className="mt-1 text-sm text-muted-foreground">
+                          {historyDeliveryRows.length} event(s) for this send job. Open Detail to view the full provider log and metadata.
+                        </div>
+                      </div>
+                      <div className="overflow-auto">
+                        <Table className="min-w-[1420px] text-sm">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>FCM token</TableHead>
+                              <TableHead className="w-44">Device ID</TableHead>
+                              <TableHead className="w-72">Content</TableHead>
+                              <TableHead className="w-36">Event</TableHead>
+                              <TableHead className="w-28">Status</TableHead>
+                              <TableHead className="w-52">Provider</TableHead>
+                              <TableHead className="w-44">Time</TableHead>
+                              <TableHead className="w-28">Log</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {historyDeliveryRows.length ? (
+                              historyDeliveryRows.map((row) => (
+                                <TableRow key={row.event.id}>
+                                  <TableCell className="max-w-[34rem]">
+                                    <div className="truncate font-mono text-sm font-medium" title={row.fcmToken ?? undefined}>
+                                      {row.fcmToken ?? "No FCM token"}
+                                    </div>
+                                    <div className="mt-1 truncate text-xs text-muted-foreground">
+                                      {row.token?.package_name ?? row.token?.bundle_id ?? historyDetailJob.package_name ?? historyDetailJob.bundle_id ?? "No identifier"}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="font-mono text-xs">{row.event.device_id ?? row.event.target_value ?? "No device id"}</TableCell>
+                                  <TableCell className="max-w-72">
+                                    <div className="truncate text-sm font-medium" title={row.content.title}>
+                                      {row.content.title}
+                                    </div>
+                                    <div className="mt-1 truncate text-xs text-muted-foreground" title={row.content.message}>
+                                      {row.content.message}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="font-mono text-xs">{row.event.event_type}</div>
+                                    {row.topicCode ? <div className="mt-1 text-xs text-muted-foreground">topic {row.topicCode}</div> : null}
+                                  </TableCell>
+                                  <TableCell>
+                                    <StatusBadge status={row.event.status ?? "unknown"} />
+                                  </TableCell>
+                                  <TableCell className="max-w-52">
+                                    <div className="truncate font-mono text-xs">{row.event.provider_message_id ?? "No provider id"}</div>
+                                    {row.fcmErrorCode ? <div className="mt-1 text-xs text-muted-foreground">{row.fcmErrorCode}</div> : null}
+                                  </TableCell>
+                                  <TableCell className="text-sm text-muted-foreground">{dateTime(row.event.created_at)}</TableCell>
+                                  <TableCell>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setSelectedDeliveryEventId(row.event.id)}
+                                    >
+                                      <Eye size={14} />
+                                      Detail
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))
+                            ) : (
+                              <TableEmptyState colSpan={8} icon={History} title="No delivery events" description="FCM send and mobile delivery events for this job will appear here." />
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </section>
+                  </TabsContent>
+                </Tabs>
+
+                <Dialog open={Boolean(selectedDeliveryRow)} onOpenChange={(open) => !open && setSelectedDeliveryEventId(null)}>
+                  {selectedDeliveryRow ? (
+                    <DialogContent className="max-h-[86dvh] gap-0 overflow-hidden p-0 sm:max-w-[min(920px,calc(100vw-2rem))]">
+                      <DialogHeader className="border-b px-4 py-3 pr-12">
+                        <DialogTitle className="text-base">FCM send log detail</DialogTitle>
+                        <DialogDescription className="text-xs">
+                          Token, status, provider response, sent content, and stored metadata for this notification event.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="max-h-[calc(86dvh-5rem)] space-y-4 overflow-auto p-4">
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div className="rounded-md border bg-muted/15 p-3">
+                            <div className="text-xs text-muted-foreground">FCM token</div>
+                            <div className="mt-1 break-all font-mono text-xs">{selectedDeliveryRow.fcmToken ?? "No FCM token"}</div>
+                          </div>
+                          <div className="rounded-md border bg-muted/15 p-3">
+                            <div className="text-xs text-muted-foreground">Device ID</div>
+                            <div className="mt-1 break-all font-mono text-xs">
+                              {selectedDeliveryRow.event.device_id ?? selectedDeliveryRow.event.target_value ?? "No device id"}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-md border p-3">
+                          <div className="flex flex-wrap items-center gap-2 font-heading text-sm font-semibold">
+                            <MessageSquareText size={15} />
+                            Sent content
+                            {selectedDeliveryRow.content.topicCode ? (
+                              <Badge variant="secondary" className="h-6 rounded-md px-2 font-mono text-xs">
+                                {selectedDeliveryRow.content.topicCode}
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+                            <div className="min-w-0 rounded-md bg-muted/25 p-3">
+                              <div className="text-xs text-muted-foreground">Title</div>
+                              <div className="mt-1 break-words text-sm font-medium">{selectedDeliveryRow.content.title}</div>
+                            </div>
+                            <div className="min-w-0 rounded-md bg-muted/25 p-3">
+                              <div className="text-xs text-muted-foreground">Content</div>
+                              <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{selectedDeliveryRow.content.message}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <div className="rounded-md border bg-muted/15 p-3">
+                            <div className="text-xs text-muted-foreground">Status</div>
+                            <div className="mt-2">
+                              <StatusBadge status={selectedDeliveryRow.event.status ?? "unknown"} />
+                            </div>
+                          </div>
+                          <div className="rounded-md border bg-muted/15 p-3">
+                            <div className="text-xs text-muted-foreground">Event</div>
+                            <div className="mt-1 font-mono text-xs">{selectedDeliveryRow.event.event_type}</div>
+                          </div>
+                          <div className="rounded-md border bg-muted/15 p-3">
+                            <div className="text-xs text-muted-foreground">Time</div>
+                            <div className="mt-1 text-sm">{dateTime(selectedDeliveryRow.event.created_at)}</div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-md border p-3">
+                          <div className="font-heading text-sm font-semibold">Provider log</div>
+                          <div className={cn("mt-2 whitespace-pre-wrap break-words text-sm", selectedDeliveryRow.event.error_detail ? "text-rose-700" : "text-muted-foreground")}>
+                            {eventLogDetail(selectedDeliveryRow.event)}
+                          </div>
+                          <div className="mt-3 grid gap-3 text-xs md:grid-cols-3">
+                            <div>
+                              <div className="text-muted-foreground">Provider ID</div>
+                              <div className="mt-1 break-all font-mono">{selectedDeliveryRow.event.provider_message_id ?? "No provider id"}</div>
+                            </div>
+                            <div>
+                              <div className="text-muted-foreground">FCM error code</div>
+                              <div className="mt-1 break-all font-mono">{selectedDeliveryRow.fcmErrorCode ?? "No FCM error"}</div>
+                            </div>
+                            <div>
+                              <div className="text-muted-foreground">Invalid token</div>
+                              <div className="mt-1 font-mono">{selectedDeliveryRow.invalidToken ? "true" : "false"}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-md border p-3">
+                          <div className="font-heading text-sm font-semibold">Metadata</div>
+                          <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-muted p-3 font-mono text-xs leading-5">
+                            {metadataJson(selectedDeliveryRow.metadata)}
+                          </pre>
+                        </div>
+                      </div>
+                    </DialogContent>
+                  ) : null}
+                </Dialog>
+              </>
           ) : (
             <Card>
               <CardHeader>

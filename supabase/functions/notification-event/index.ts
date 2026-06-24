@@ -207,6 +207,8 @@ Deno.serve(async (request) => {
       appName: app?.appName ?? null,
       appVersion: clean(payload.appVersion) || null,
       bundleId: app?.bundleId ?? bundleId ?? null,
+      deviceTokenId: clean(device?.id) || null,
+      fcmToken: fcmToken || clean(device?.fcm_token) || null,
       locale: locale || clean(device?.locale) || null,
       localeCode: primaryLocaleCode(locale || clean(device?.locale)),
       osVersion: clean(payload.osVersion) || null,
