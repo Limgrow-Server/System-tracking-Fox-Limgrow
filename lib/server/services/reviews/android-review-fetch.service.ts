@@ -44,6 +44,7 @@ type NormalizedReview = {
 };
 
 export type FetchAndroidReviewsPayload = {
+  fetchAllPages?: unknown;
   fromDate?: unknown;
   maxPages?: unknown;
   maxResults?: unknown;
@@ -65,6 +66,12 @@ function boundedInteger(value: unknown, fallback: number, min: number, max: numb
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(Math.trunc(parsed), min), max);
+}
+
+function booleanValue(value: unknown) {
+  if (typeof value === "boolean") return value;
+  const text = cleanText(value).toLowerCase();
+  return text === "true" || text === "1";
 }
 
 function normalizeTriggerType(value: unknown): ReviewFetchTrigger {
@@ -379,6 +386,7 @@ function normalizeFetchPayload(payload: FetchAndroidReviewsPayload) {
   if (!storeMappingId || !isUuid(storeMappingId)) {
     throw badRequest("Android app mapping is required.");
   }
+  const triggerType = normalizeTriggerType(payload.triggerType);
   const dateRange = normalizeDateRange({
     fromDate: payload.fromDate,
     timezoneOffsetMinutes: payload.timezoneOffsetMinutes,
@@ -387,6 +395,7 @@ function normalizeFetchPayload(payload: FetchAndroidReviewsPayload) {
 
   return {
     dateRange,
+    fetchAllPages: triggerType === "SCHEDULED" && booleanValue(payload.fetchAllPages),
     maxPages: boundedInteger(
       payload.maxPages,
       DEFAULT_MAX_PAGES,
@@ -402,7 +411,7 @@ function normalizeFetchPayload(payload: FetchAndroidReviewsPayload) {
     pageToken: cleanText(payload.pageToken),
     storeMappingId,
     translationLanguage: cleanText(payload.translationLanguage),
-    triggerType: normalizeTriggerType(payload.triggerType),
+    triggerType,
   };
 }
 
@@ -465,7 +474,7 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
     syncStarted = true;
 
     const run = await createAndroidReviewFetchRun({
-      maxPages: normalized.maxPages,
+      maxPages: normalized.fetchAllPages ? 0 : normalized.maxPages,
       maxResults: normalized.maxResults,
       startedAt,
       storeMappingId: mapping.id,
@@ -475,7 +484,7 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
 
     const accessToken = await googleServiceAccountAccessToken(serviceAccount);
 
-    for (let page = 0; page < normalized.maxPages; page += 1) {
+    while (normalized.fetchAllPages || pagesFetched < normalized.maxPages) {
       const fetchedAt = new Date();
       const body = await listGooglePlayReviews({
         accessToken,

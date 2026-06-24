@@ -165,6 +165,12 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         roles: ["Admin", "Marketing"],
       },
       {
+        title: "Schedule",
+        href: "/comments-schedule",
+        icon: <CalendarClock size={17} />,
+        roles: ["Admin", "Marketing"],
+      },
+      {
         title: "Reply",
         href: "/reply",
         icon: <MessageSquareReply size={17} />,

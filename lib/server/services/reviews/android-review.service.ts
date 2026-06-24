@@ -14,6 +14,7 @@ import {
   getActiveAndroidCredentialForStoreProfile,
   getActiveAndroidReviewMappings,
   getAndroidReviewFetchRuns,
+  getAndroidReviewFetchSchedule,
   getAndroidReviewMappingById,
   getAndroidReviewForReply,
   getAndroidReviewRatingGroups,
@@ -25,6 +26,7 @@ import {
   updateAndroidStoreProfileReplyInfo,
   upsertAndroidReviewReplyTemplate,
 } from "@/lib/server/repositories/reviews/android-review.repository";
+import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/android-review-schedule.service";
 import {
   cleanText,
   nullableText,
@@ -515,11 +517,12 @@ export async function getReviewAppDetail(
   const mapping = await getAndroidReviewMappingById(mappingId);
   if (!mapping) throw notFound("Android app mapping was not found.");
 
-  const [ratingGroups, replyGroups, reviews, fetchRuns, templates] = await Promise.all([
+  const [ratingGroups, replyGroups, reviews, fetchRuns, fetchSchedule, templates] = await Promise.all([
     getAndroidReviewRatingGroups([mappingId]),
     getAndroidReviewReplyGroups([mappingId]),
     getAndroidReviewsForMapping(mappingId),
     getAndroidReviewFetchRuns(mappingId),
+    getAndroidReviewFetchSchedule(mappingId),
     getAndroidReviewReplyTemplates([mappingId]),
   ]);
   const app = reviewAppCard(mapping, ratingGroups, replyCountByMapping(replyGroups));
@@ -534,6 +537,7 @@ export async function getReviewAppDetail(
 
   return {
     app,
+    fetchSchedule: reviewFetchScheduleDto(fetchSchedule),
     fetchRuns: fetchRuns.map(fetchRunDto),
     isMockData: useMockData,
     replyTemplates: RATINGS.map((rating) =>
