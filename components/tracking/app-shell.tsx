@@ -59,7 +59,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         roles: ["Admin", "Dev", "Marketing"],
       },
       {
-        title: "Users",
+        title: "User Management",
         href: "/users",
         icon: <UsersRound size={17} />,
         roles: ["Admin"],
