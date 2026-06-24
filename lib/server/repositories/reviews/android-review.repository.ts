@@ -1,6 +1,11 @@
 import "server-only";
 
-import { Prisma, type ReviewFetchRunStatus, type ReviewFetchTrigger } from "@prisma/client";
+import {
+  Prisma,
+  type ReviewFetchRunStatus,
+  type ReviewFetchScheduleStatus,
+  type ReviewFetchTrigger,
+} from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 
@@ -24,6 +29,19 @@ export type AndroidReviewUpsertInput = {
   thumbsDownCount: number | null;
   thumbsUpCount: number | null;
   userCommentUpdatedAt: Date | null;
+};
+
+type AndroidReviewFetchScheduleUpsertInput = {
+  createdBy: string;
+  lookbackDays: number;
+  maxPages: number;
+  maxResults: number;
+  nextRunAt: Date;
+  status: ReviewFetchScheduleStatus;
+  storeMappingId: string;
+  timeOfDay: string;
+  timezone: string;
+  updatedBy: string;
 };
 
 function nullableJson(value: Prisma.InputJsonValue | null) {
@@ -92,6 +110,200 @@ export function getAndroidReviewFetchRuns(mappingId: string, take = 10) {
     where: { storeMappingId: mappingId },
     orderBy: { startedAt: "desc" },
     take,
+  });
+}
+
+export function getAndroidReviewFetchSchedule(storeMappingId: string) {
+  return prisma.androidStoreReviewFetchSchedule.findUnique({
+    where: { storeMappingId },
+  });
+}
+
+export function getAndroidReviewFetchSchedules(storeMappingIds: string[]) {
+  if (!storeMappingIds.length) return Promise.resolve([]);
+
+  return prisma.androidStoreReviewFetchSchedule.findMany({
+    where: { storeMappingId: { in: storeMappingIds } },
+    orderBy: [{ status: "asc" }, { nextRunAt: "asc" }],
+  });
+}
+
+function upsertAndroidReviewFetchScheduleQuery(
+  input: AndroidReviewFetchScheduleUpsertInput,
+) {
+  return prisma.androidStoreReviewFetchSchedule.upsert({
+    where: { storeMappingId: input.storeMappingId },
+    create: {
+      createdBy: input.createdBy,
+      lookbackDays: input.lookbackDays,
+      maxPages: input.maxPages,
+      maxResults: input.maxResults,
+      nextRunAt: input.nextRunAt,
+      status: input.status,
+      storeMappingId: input.storeMappingId,
+      timeOfDay: input.timeOfDay,
+      timezone: input.timezone,
+      updatedBy: input.updatedBy,
+    },
+    update: {
+      lastErrorMessage: null,
+      lockedAt: null,
+      lockedBy: null,
+      lookbackDays: input.lookbackDays,
+      maxPages: input.maxPages,
+      maxResults: input.maxResults,
+      nextRunAt: input.nextRunAt,
+      status: input.status,
+      timeOfDay: input.timeOfDay,
+      timezone: input.timezone,
+      updatedBy: input.updatedBy,
+    },
+  });
+}
+
+export function upsertAndroidReviewFetchSchedule(
+  input: AndroidReviewFetchScheduleUpsertInput,
+) {
+  return upsertAndroidReviewFetchScheduleQuery(input);
+}
+
+export function upsertAndroidReviewFetchSchedules(
+  inputs: AndroidReviewFetchScheduleUpsertInput[],
+) {
+  if (!inputs.length) return Promise.resolve([]);
+
+  return prisma.$transaction(
+    inputs.map((input) => upsertAndroidReviewFetchScheduleQuery(input)),
+  );
+}
+
+export function updateAndroidReviewFetchScheduleStatus(
+  storeMappingId: string,
+  input: {
+    nextRunAt?: Date;
+    status: ReviewFetchScheduleStatus;
+    updatedBy: string;
+  },
+) {
+  return prisma.androidStoreReviewFetchSchedule.update({
+    where: { storeMappingId },
+    data: {
+      lockedAt: null,
+      lockedBy: null,
+      nextRunAt: input.nextRunAt,
+      status: input.status,
+      updatedBy: input.updatedBy,
+    },
+  });
+}
+
+export function updateAndroidReviewFetchScheduleStatuses(
+  inputs: Array<{
+    nextRunAt?: Date;
+    status: ReviewFetchScheduleStatus;
+    storeMappingId: string;
+    updatedBy: string;
+  }>,
+) {
+  if (!inputs.length) return Promise.resolve([]);
+
+  return prisma.$transaction(
+    inputs.map((input) =>
+      prisma.androidStoreReviewFetchSchedule.update({
+        where: { storeMappingId: input.storeMappingId },
+        data: {
+          lockedAt: null,
+          lockedBy: null,
+          nextRunAt: input.nextRunAt,
+          status: input.status,
+          updatedBy: input.updatedBy,
+        },
+      }),
+    ),
+  );
+}
+
+export function deleteAndroidReviewFetchSchedule(storeMappingId: string) {
+  return prisma.androidStoreReviewFetchSchedule.delete({
+    where: { storeMappingId },
+  });
+}
+
+export function deleteAndroidReviewFetchSchedules(storeMappingIds: string[]) {
+  if (!storeMappingIds.length) return Promise.resolve({ count: 0 });
+
+  return prisma.androidStoreReviewFetchSchedule.deleteMany({
+    where: { storeMappingId: { in: storeMappingIds } },
+  });
+}
+
+export async function claimDueAndroidReviewFetchSchedules(input: {
+  limit?: number;
+  lockedBy: string;
+  lockStaleBefore: Date;
+  now: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const dueSchedules = await tx.androidStoreReviewFetchSchedule.findMany({
+      where: {
+        nextRunAt: { lte: input.now },
+        status: "ACTIVE",
+        OR: [
+          { lockedAt: null },
+          { lockedAt: { lt: input.lockStaleBefore } },
+        ],
+      },
+      orderBy: { nextRunAt: "asc" },
+      select: { id: true },
+      take: input.limit,
+    });
+    const ids = dueSchedules.map((schedule) => schedule.id);
+    if (!ids.length) return [];
+
+    await tx.androidStoreReviewFetchSchedule.updateMany({
+      where: {
+        id: { in: ids },
+        nextRunAt: { lte: input.now },
+        status: "ACTIVE",
+        OR: [
+          { lockedAt: null },
+          { lockedAt: { lt: input.lockStaleBefore } },
+        ],
+      },
+      data: {
+        lockedAt: input.now,
+        lockedBy: input.lockedBy,
+      },
+    });
+
+    return tx.androidStoreReviewFetchSchedule.findMany({
+      where: { id: { in: ids }, lockedBy: input.lockedBy },
+      include: { storeMapping: true },
+      orderBy: { nextRunAt: "asc" },
+    });
+  });
+}
+
+export function finishAndroidReviewFetchScheduleRun(
+  scheduleId: string,
+  input: {
+    errorMessage?: string | null;
+    lastRunAt: Date;
+    lastStatus: ReviewFetchRunStatus;
+    nextRunAt: Date;
+  },
+) {
+  return prisma.androidStoreReviewFetchSchedule.update({
+    where: { id: scheduleId },
+    data: {
+      lastErrorMessage: input.errorMessage ?? null,
+      lastRunAt: input.lastRunAt,
+      lastStatus: input.lastStatus,
+      lockedAt: null,
+      lockedBy: null,
+      nextRunAt: input.nextRunAt,
+      runCount: { increment: 1 },
+    },
   });
 }
 

@@ -165,6 +165,34 @@ export type ReviewFetchRunDto = {
   finishedAt: string | null;
 };
 
+export type ReviewFetchScheduleDto = {
+  id: string;
+  status: string;
+  scheduleType: string;
+  storeMappingId: string;
+  timeOfDay: string;
+  timezone: string;
+  lookbackDays: number;
+  maxResults: number;
+  maxPages: number;
+  nextRunAt: string;
+  lastRunAt: string | null;
+  lastStatus: string | null;
+  lastErrorMessage: string | null;
+  runCount: number;
+  updatedAt: string;
+  updatedBy: string | null;
+};
+
+export type ReviewFetchScheduleApp = ReviewAppCard & {
+  fetchSchedule: ReviewFetchScheduleDto | null;
+};
+
+export type ReviewFetchSchedulePageData = {
+  apps: ReviewFetchScheduleApp[];
+  storeNames: string[];
+};
+
 export type ReviewAppStats = {
   totalReviews: number;
   averageRating: number | null;
@@ -193,6 +221,7 @@ export type ReviewAppDetailPageData = {
   replyTemplates: ReviewReplyTemplatePreviewDto[];
   syncState: ReviewSyncStateDto | null;
   fetchRuns: ReviewFetchRunDto[];
+  fetchSchedule: ReviewFetchScheduleDto | null;
   isMockData?: boolean;
 };
 

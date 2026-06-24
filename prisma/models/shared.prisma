@@ -53,3 +53,10 @@ enum ReviewFetchTrigger {
 
   @@map("review_fetch_trigger")
 }
+
+enum ReviewFetchScheduleStatus {
+  ACTIVE @map("active")
+  PAUSED @map("paused")
+
+  @@map("review_fetch_schedule_status")
+}
