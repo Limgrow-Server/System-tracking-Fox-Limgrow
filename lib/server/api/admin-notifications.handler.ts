@@ -53,6 +53,35 @@ function stringArray(value: unknown) {
   return Array.from(new Set(value.map((item) => clean(item)).filter(Boolean)));
 }
 
+function errorForLog(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+
+  return { message: String(error) };
+}
+
+function notificationRequestContext(body: Record<string, unknown>) {
+  return {
+    appId: clean(body.appId) || clean(body.productAppId) || null,
+    appName: clean(body.appName) || null,
+    bundleId: clean(body.bundleId) || null,
+    deviceIdsCount: stringArray(body.deviceIds || body.targetValues).length,
+    packageName: clean(body.packageName) || null,
+    platform: clean(body.platform) || null,
+    scheduleId: clean(body.scheduleId) || null,
+    targetType: clean(body.targetType) || null,
+  };
+}
+
+function logNotificationFailure(message: string, details: Record<string, unknown>) {
+  console.error(`[notifications] ${message}`, details);
+}
+
 function jsonObject(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
@@ -182,6 +211,7 @@ async function currentAccessToken() {
 }
 
 async function callEdgeFunction(functionName: string, body: Record<string, unknown>) {
+  const context = notificationRequestContext(body);
   const accessToken = await currentAccessToken();
   const response = await fetch(supabaseFunctionUrl(functionName), {
     method: "POST",
@@ -199,21 +229,75 @@ async function callEdgeFunction(functionName: string, body: Record<string, unkno
   };
 
   if (!response.ok || !payload.ok) {
+    logNotificationFailure("Edge Function request failed", {
+      context,
+      error: payload.error ?? null,
+      functionName,
+      responseOk: response.ok,
+      status: response.status,
+    });
     throw new ApiError(payload.error ?? `${functionName} failed.`, response.status);
+  }
+
+  const result = payload.result as Record<string, unknown>;
+  const errorCount = Number(result?.errorCount ?? 0);
+  if (errorCount > 0) {
+    const results = Array.isArray(result?.results) ? result.results as Array<Record<string, unknown>> : [];
+    logNotificationFailure("Edge Function completed with failed notification targets", {
+      context,
+      errorCount,
+      failedTargets: results
+        .filter((item) => item && item.ok === false)
+        .slice(0, 20)
+        .map((item) => ({
+          deviceId: clean(item.deviceId) || null,
+          error: clean(item.error) || null,
+          fcmErrorCode: clean(item.fcmErrorCode) || null,
+          status: Number(item.status ?? 0) || null,
+          targetType: clean(item.targetType) || null,
+          targetValue: clean(item.targetType) === "device" ? clean(item.deviceId) || "device-token-redacted" : clean(item.targetValue),
+          topicCode: clean(item.topicCode) || null,
+        })),
+      functionName,
+      sentCount: Number(result?.sentCount ?? 0),
+      targetType: clean(result?.targetType) || null,
+    });
+  }
+
+  const dispatched = Array.isArray(result?.dispatched) ? result.dispatched as Array<Record<string, unknown>> : [];
+  const failedDispatches = dispatched.filter((item) => Number(item?.errorCount ?? 0) > 0);
+  if (failedDispatches.length) {
+    logNotificationFailure("Dispatcher completed with failed schedules", {
+      context,
+      failedSchedules: failedDispatches.slice(0, 20).map((item) => ({
+        errorCount: Number(item.errorCount ?? 0),
+        scheduleId: clean(item.scheduleId) || null,
+        sentCount: Number(item.sentCount ?? 0),
+        status: clean(item.status) || null,
+      })),
+      functionName,
+      totalFailedSchedules: failedDispatches.length,
+    });
   }
 
   return payload.result as Record<string, unknown>;
 }
 
 export async function handleAdminNotificationSendPost(request: Request) {
+  let requestPayload: Record<string, unknown> | null = null;
   try {
     await requireAdminSession();
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    requestPayload = payload;
     return okJson({
       message: "Notification sent.",
       result: await callEdgeFunction("send-notification", payload),
     });
   } catch (error) {
+    logNotificationFailure("Send notification API failed", {
+      context: requestPayload ? notificationRequestContext(requestPayload) : null,
+      error: errorForLog(error),
+    });
     return errorJson(error, "Send notification failed.");
   }
 }
@@ -608,14 +692,20 @@ export async function handleAdminNotificationSchedulesDelete(request: Request) {
 }
 
 export async function handleAdminNotificationDispatchPost(request: Request) {
+  let requestPayload: Record<string, unknown> | null = null;
   try {
     await requireAdminSession();
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    requestPayload = payload;
     return okJson({
       message: "Dispatcher finished.",
       result: await callEdgeFunction("dispatch-notifications", payload),
     });
   } catch (error) {
+    logNotificationFailure("Dispatch notifications API failed", {
+      context: requestPayload ? notificationRequestContext(requestPayload) : null,
+      error: errorForLog(error),
+    });
     return errorJson(error, "Dispatch notifications failed.");
   }
 }

@@ -411,7 +411,12 @@ Repo dùng Husky để tự kiểm tra trước commit/push:
 
 - `pre-commit`: kiểm tra branch name và chạy `lint-staged`.
 - `commit-msg`: kiểm tra commit message bằng Commitlint.
-- `pre-push`: chạy `npm run check`.
+
+`git push` không tự chạy full build để tránh trùng với GitHub Action và làm push chậm. Trước khi push, chạy thủ công:
+
+```bash
+npm run check
+```
 
 Commit message bắt buộc theo format:
 
@@ -475,7 +480,7 @@ git push --force-with-lease origin staging:staging
 
 ### GitHub Action quality
 
-Workflow CI nằm ở [.github/workflows/quality.yml](.github/workflows/quality.yml). Workflow tên `quality` chạy trên pull request và push vào các branch chính, rồi chạy:
+Workflow CI nằm ở [.github/workflows/ci.yml](.github/workflows/ci.yml). Workflow tên `CI`, job required check tên `quality`, chạy trên pull request và push vào các branch chính, rồi chạy:
 
 ```bash
 npm ci
@@ -483,6 +488,27 @@ npm run check
 ```
 
 Nếu GitHub branch protection đang yêu cầu check `quality`, tên required check phải trùng với job `quality`.
+
+SonarCloud hiện đang bật `Automatic Analysis`, nên workflow không chạy manual Sonar scan mặc định để tránh lỗi phân tích trùng:
+
+```text
+You are running CI analysis while Automatic Analysis is enabled
+```
+
+Nếu muốn chuyển sang manual scan trong GitHub Action:
+
+1. Tắt `Automatic Analysis` trong SonarCloud project.
+2. Tạo GitHub repository variable:
+
+```text
+ENABLE_SONAR_SCAN=true
+```
+
+3. Tạo secret:
+
+```text
+SONAR_TOKEN
+```
 
 ### Discord webhook cho CI
 
