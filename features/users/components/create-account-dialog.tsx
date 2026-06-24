@@ -26,9 +26,12 @@ import { roleOptions } from "../constants";
 type CreateAccountDialogProps = {
   email: string;
   name: string;
+  password: string;
+  creating: boolean;
   onEmailChange: (value: string) => void;
   onNameChange: (value: string) => void;
   onOpenChange: (open: boolean) => void;
+  onPasswordChange: (value: string) => void;
   onRoleChange: (value: StaffRole) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   open: boolean;
@@ -36,11 +39,14 @@ type CreateAccountDialogProps = {
 };
 
 export function CreateAccountDialog({
+  creating,
   email,
   name,
+  password,
   onEmailChange,
   onNameChange,
   onOpenChange,
+  onPasswordChange,
   onRoleChange,
   onSubmit,
   open,
@@ -60,17 +66,18 @@ export function CreateAccountDialog({
         </DialogHeader>
 
         <form className="space-y-4" onSubmit={onSubmit}>
+          <div className="grid gap-2">
+            <Label htmlFor="name">Account name</Label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(event) => onNameChange(event.target.value)}
+              placeholder="Jane Nguyen"
+              required
+            />
+          </div>
+
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="grid gap-2">
-              <Label htmlFor="name">Account name</Label>
-              <Input
-                id="name"
-                value={name}
-                onChange={(event) => onNameChange(event.target.value)}
-                placeholder="Jane Nguyen"
-                required
-              />
-            </div>
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -79,6 +86,19 @@ export function CreateAccountDialog({
                 value={email}
                 onChange={(event) => onEmailChange(event.target.value)}
                 placeholder="jane@limgrow.com"
+                required
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(event) => onPasswordChange(event.target.value)}
+                placeholder="Enter password"
+                autoComplete="new-password"
+                minLength={6}
                 required
               />
             </div>
@@ -100,9 +120,9 @@ export function CreateAccountDialog({
             </Select>
           </div>
 
-          <Button className="w-full">
+          <Button className="w-full" disabled={creating}>
             <Plus size={15} />
-            Add preview account
+            {creating ? "Creating account..." : "Create account"}
           </Button>
         </form>
       </DialogContent>

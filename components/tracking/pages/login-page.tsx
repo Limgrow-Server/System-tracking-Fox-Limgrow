@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRight, KeyRound, LockKeyhole, Mail, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
@@ -13,12 +13,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 
-export function LoginPage({ nextPath }: { nextPath: string }) {
+export function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
-  const safeNext = useMemo(() => (nextPath.startsWith("/") ? nextPath : "/dashboard"), [nextPath]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -37,7 +36,7 @@ export function LoginPage({ nextPath }: { nextPath: string }) {
       }
 
       toast.success(payload.message ?? "Signed in.");
-      router.replace(safeNext);
+      router.replace("/dashboard");
       router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Login failed.");

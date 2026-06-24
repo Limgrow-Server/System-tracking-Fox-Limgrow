@@ -7,7 +7,7 @@ export default async function NotificationHistoryDetailRoutePage({
 }: {
   params: Promise<{ jobId: string }>;
 }) {
-  await requireConsoleSession(["Admin"]);
+  await requireConsoleSession(["Admin", "Marketing"]);
   const { jobId } = await params;
   const data = await getNotificationsPageData();
 

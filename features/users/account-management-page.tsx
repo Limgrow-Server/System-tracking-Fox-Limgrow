@@ -28,10 +28,17 @@ type AccountManagementPageProps = {
   users: TeamMember[];
 };
 
+type CreateAccountResponse = {
+  ok: boolean;
+  user?: TeamMember;
+  message?: string;
+  error?: string;
+};
+
 export function AccountManagementPage({
   users: initialUsers,
 }: AccountManagementPageProps) {
-  const [draftAccounts, setDraftAccounts] = useState<ManagedAccount[]>([]);
+  const [createdAccounts, setCreatedAccounts] = useState<ManagedAccount[]>([]);
   const [accountPatches, setAccountPatches] = useState<
     Record<string, AccountPatch>
   >({});
@@ -44,7 +51,9 @@ export function AccountManagementPage({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [role, setRole] = useState<StaffRole>("Marketing");
+  const [creating, setCreating] = useState(false);
   const [editAccount, setEditAccount] = useState<ManagedAccount | null>(null);
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
@@ -56,13 +65,13 @@ export function AccountManagementPage({
 
   const accounts = useMemo(
     () =>
-      [...draftAccounts, ...initialUsers.map(accountFromTeamMember)]
+      [...createdAccounts, ...initialUsers.map(accountFromTeamMember)]
         .filter((account) => !deletedAccountIds.has(account.id))
         .map((account) => ({
           ...account,
           ...(accountPatches[account.id] ?? {}),
         })),
-    [accountPatches, deletedAccountIds, draftAccounts, initialUsers],
+    [accountPatches, createdAccounts, deletedAccountIds, initialUsers],
   );
 
   const search = query.trim().toLowerCase();
@@ -88,35 +97,59 @@ export function AccountManagementPage({
     currentPage * accountPageSize,
   );
 
-  function submitPreviewAccount(event: FormEvent<HTMLFormElement>) {
+  async function submitCreateAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (creating) return;
 
     const cleanName = name.trim();
     const cleanEmail = email.trim().toLowerCase();
-    if (!cleanName || !cleanEmail) {
-      toast.error("Account name and email are required.");
+    if (!cleanName || !cleanEmail || !password) {
+      toast.error("Account name, email and password are required.");
       return;
     }
 
-    const newAccount: ManagedAccount = {
-      id: `draft-${Date.now()}`,
-      name: cleanName,
-      email: cleanEmail,
-      authUserId: `preview-${Date.now()}`,
-      role,
-      consoleStatus: "active",
-      authStatus: "confirmed",
-      createdAt: new Date().toISOString(),
-      isPreview: true,
-    };
+    if (password.length < 6) {
+      toast.error("Password must contain at least 6 characters.");
+      return;
+    }
 
-    setDraftAccounts((current) => [newAccount, ...current]);
-    setName("");
-    setEmail("");
-    setRole("Marketing");
-    setPage(1);
-    setDialogOpen(false);
-    toast.success("Preview account added to the table.");
+    setCreating(true);
+
+    try {
+      const response = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: cleanEmail,
+          name: cleanName,
+          password,
+          role,
+        }),
+      });
+      const payload = (await response.json()) as CreateAccountResponse;
+
+      if (!response.ok || !payload.ok || !payload.user) {
+        throw new Error(payload.error ?? "Account could not be created.");
+      }
+
+      setCreatedAccounts((current) => [
+        accountFromTeamMember(payload.user!),
+        ...current,
+      ]);
+      setName("");
+      setEmail("");
+      setPassword("");
+      setRole("Marketing");
+      setPage(1);
+      setDialogOpen(false);
+      toast.success(payload.message ?? "Account created.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Account could not be created.",
+      );
+    } finally {
+      setCreating(false);
+    }
   }
 
   function openEditAccount(account: ManagedAccount) {
@@ -202,13 +235,16 @@ export function AccountManagementPage({
         description="Manage users and Supabase Auth access."
         action={
           <CreateAccountDialog
+            creating={creating}
             email={email}
             name={name}
+            password={password}
             onEmailChange={setEmail}
             onNameChange={setName}
             onOpenChange={setDialogOpen}
+            onPasswordChange={setPassword}
             onRoleChange={setRole}
-            onSubmit={submitPreviewAccount}
+            onSubmit={submitCreateAccount}
             open={dialogOpen}
             role={role}
           />

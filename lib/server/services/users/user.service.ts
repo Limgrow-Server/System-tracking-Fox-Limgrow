@@ -11,7 +11,7 @@ import {
   teamMemberStatusToPrismaStatus,
   teamMemberToTracking,
 } from "@/lib/auth/team-members";
-import { badRequest, conflict } from "@/lib/server/api/errors";
+import { ApiError, badRequest, conflict } from "@/lib/server/api/errors";
 import {
   createTeamMember,
   deleteTeamMember,
@@ -25,6 +25,7 @@ export type UserPayload = {
   id?: string;
   name?: string;
   email?: string;
+  password?: string;
   role?: StaffRole;
   status?: TeamMember["status"];
   appScope?: string[];
@@ -43,25 +44,60 @@ function isPrismaUniqueError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
-async function inviteAuthUser(email: string, name: string, request: Request) {
+function passwordValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function isDuplicateAuthUserError(errorMessage: string) {
+  const normalized = errorMessage.toLowerCase();
+  return normalized.includes("already") || normalized.includes("registered");
+}
+
+async function createVerifiedAuthUser(email: string, name: string, password: string) {
   const supabase = createAdminClient();
   if (!supabase) {
-    return {
-      authUserId: null,
-      warning: "User row was saved, but SUPABASE_SERVICE_ROLE_KEY is not configured so no Auth invite was sent.",
-    };
+    throw new ApiError(
+      "SUPABASE_SERVICE_ROLE_KEY is required to create Supabase Auth users.",
+      500,
+    );
   }
 
-  const origin = new URL(request.url).origin;
-  const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
-    data: { name },
-    redirectTo: `${origin}/auth/callback?next=/dashboard`,
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: {
+      display_name: name,
+      name,
+    },
+    app_metadata: {
+      account_type: "console",
+    },
   });
 
+  if (error || !data.user?.id) {
+    const message = error?.message ?? "Supabase Auth user could not be created.";
+    if (isDuplicateAuthUserError(message)) {
+      throw conflict("A Supabase Auth user with this email already exists.");
+    }
+
+    throw new ApiError(message, error?.status ?? 500);
+  }
+
   return {
-    authUserId: data?.user?.id ?? null,
-    warning: error?.message ?? null,
+    authUserId: data.user.id,
+    supabase,
   };
+}
+
+async function deleteAuthUserBestEffort(input: Awaited<ReturnType<typeof createVerifiedAuthUser>>) {
+  const { error } = await input.supabase.auth.admin.deleteUser(input.authUserId);
+  if (error) {
+    console.error(
+      "Failed to rollback Supabase Auth user after team member create failed.",
+      error,
+    );
+  }
 }
 
 export async function getConsoleUsers() {
@@ -69,44 +105,48 @@ export async function getConsoleUsers() {
   return { users: users.map(teamMemberToTracking) };
 }
 
-export async function createConsoleUser(payload: UserPayload, admin: ConsoleSession, request: Request) {
+export async function createConsoleUser(payload: UserPayload, admin: ConsoleSession) {
   const name = cleanText(payload.name);
   const email = normalizeEmail(payload.email);
+  const password = passwordValue(payload.password);
   const role = payload.role ?? "Marketing";
-  const status = payload.status ?? "active";
 
-  if (!name || !email || !roles.has(role) || !statuses.has(status)) {
+  if (!name || !email || !password || !roles.has(role)) {
     throw badRequest("Invalid user payload.");
   }
 
-  const invite = await inviteAuthUser(email, name, request);
+  if (password.length < 6) {
+    throw badRequest("Password must contain at least 6 characters.");
+  }
+
+  const authUser = await createVerifiedAuthUser(email, name, password);
 
   try {
     const user = await createTeamMember({
-      authUserId: invite.authUserId,
+      authUserId: authUser.authUserId,
       name,
       email,
       role: staffRoleToPrismaRole[role],
-      status: teamMemberStatusToPrismaStatus[status],
+      status: teamMemberStatusToPrismaStatus.active,
       globalAccess: payload.globalAccess ?? role === "Admin",
       appScope: arrayScope(payload.appScope),
       storeScope: arrayScope(payload.storeScope),
       createdBy: admin.email,
-      invitedAt: new Date(),
+      invitedAt: null,
     });
     const dto = teamMemberToTracking(user);
     const metadataWarning = await syncConsoleAuthMetadata(dto.auth_user_id, dto);
-    const message = invite.warning
-      ? `User ${email} created. ${invite.warning}`
-      : metadataWarning
-        ? `User ${email} created and invited. Metadata sync warning: ${metadataWarning}`
-        : `User ${email} created and invited.`;
+    const message = metadataWarning
+      ? `User ${email} created. Metadata sync warning: ${metadataWarning}`
+      : `User ${email} created.`;
 
     return {
       user: dto,
       message,
     };
   } catch (error) {
+    await deleteAuthUserBestEffort(authUser);
+
     if (isPrismaUniqueError(error)) {
       throw conflict("A user with this email already exists.");
     }

@@ -73,19 +73,19 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "App Mapping",
         href: "/store-mapping",
         icon: <Cable size={17} />,
-        roles: ["Admin"],
+        roles: ["Admin", "Dev"],
         children: [
           {
             title: "Android",
             href: "/store-mapping/android",
             icon: <Smartphone size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Dev"],
           },
           {
             title: "iOS",
             href: "/store-mapping/ios",
             icon: <Apple size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Dev"],
           },
         ],
       },
@@ -94,19 +94,19 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         href: "/configs",
         icon: <Settings2 size={17} />,
         badge: "core",
-        roles: ["Admin"],
+        roles: ["Admin", "Dev"],
         children: [
           {
             title: "Android",
             href: "/configs/android",
             icon: <Smartphone size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Dev"],
           },
           {
             title: "iOS",
             href: "/configs/ios",
             icon: <Apple size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Dev"],
           },
         ],
       },
@@ -114,31 +114,31 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "Notifications",
         href: "/notifications/overview",
         icon: <Bell size={17} />,
-        roles: ["Admin"],
+        roles: ["Admin", "Marketing"],
         children: [
           {
             title: "Overview",
             href: "/notifications/overview",
             icon: <LayoutDashboard size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Marketing"],
           },
           {
             title: "Send",
             href: "/notifications/send",
             icon: <Send size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Marketing"],
           },
           {
             title: "Schedules",
             href: "/notifications/schedules",
             icon: <CalendarClock size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Marketing"],
           },
           {
             title: "History",
             href: "/notifications/history",
             icon: <History size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Marketing"],
           },
         ],
       },
@@ -151,7 +151,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "IAP",
         href: "/iap",
         icon: <CreditCard size={17} />,
-        roles: ["Admin", "Dev", "Marketing"],
+        roles: ["Admin", "Marketing"],
       },
     ],
   },
@@ -180,6 +180,27 @@ const navGroups: { title: string; items: NavItem[] }[] = [
   },
 ];
 
+function visibleNavItems(items: NavItem[], role: StaffRole): NavItem[] {
+  return items
+    .filter((item) => item.roles.includes(role))
+    .map((item) => ({
+      ...item,
+      children: item.children
+        ? visibleNavItems(item.children, role)
+        : undefined,
+    }))
+    .filter((item) => !item.children || item.children.length > 0);
+}
+
+function visibleNavGroups(role: StaffRole) {
+  return navGroups
+    .map((group) => ({
+      ...group,
+      items: visibleNavItems(group.items, role),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
 function SidebarContent({
   role,
   session,
@@ -198,6 +219,7 @@ function SidebarContent({
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>(
     {},
   );
+  const groups = visibleNavGroups(role);
 
   return (
     <div className="flex h-full flex-col">
@@ -243,7 +265,7 @@ function SidebarContent({
           collapsed ? "space-y-3 px-2" : "space-y-5",
         )}
       >
-        {navGroups.map((group) => (
+        {groups.map((group) => (
           <div key={group.title}>
             {!collapsed ? (
               <div className="mb-2 px-2 text-xs font-medium text-muted-foreground">
@@ -261,19 +283,13 @@ function SidebarContent({
                     )
                   : pathname === item.href ||
                     pathname.startsWith(`${item.href}/`);
-                const allowed = item.roles.includes(role);
                 const expanded = hasChildren
                   ? !collapsed && (expandedItems[item.href] ?? active)
                   : false;
 
                 if (hasChildren) {
                   return (
-                    <div
-                      key={item.href}
-                      className={cn(
-                        !allowed && "pointer-events-none opacity-35",
-                      )}
-                    >
+                    <div key={item.href}>
                       <button
                         type="button"
                         onClick={() => {
@@ -289,7 +305,6 @@ function SidebarContent({
                           }));
                         }}
                         aria-expanded={expanded}
-                        aria-disabled={!allowed}
                         title={item.title}
                         className={cn(
                           "flex h-9 w-full items-center rounded-lg text-sm font-medium transition-all duration-200",
@@ -378,9 +393,8 @@ function SidebarContent({
                 return (
                   <Link
                     key={item.href}
-                    href={allowed ? item.href : "#"}
+                    href={item.href}
                     onClick={onNavigate}
-                    aria-disabled={!allowed}
                     title={item.title}
                     className={cn(
                       "flex h-9 items-center rounded-lg text-sm font-medium transition-all duration-200",
@@ -390,7 +404,6 @@ function SidebarContent({
                       active
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                      !allowed && "pointer-events-none opacity-35",
                     )}
                   >
                     <span

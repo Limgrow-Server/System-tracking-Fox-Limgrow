@@ -10,7 +10,7 @@ export default async function IapAppDetailRoutePage({
   params: Promise<{ mappingId: string }>;
   searchParams: Promise<{ platform?: string }>;
 }) {
-  await requireConsoleSession(["Admin", "Dev", "Marketing"]);
+  await requireConsoleSession(["Admin", "Marketing"]);
 
   const { mappingId } = await params;
   const { platform } = await searchParams;

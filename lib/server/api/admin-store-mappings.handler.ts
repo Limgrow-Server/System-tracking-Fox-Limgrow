@@ -1,6 +1,6 @@
 import "server-only";
 
-import { requireAdminSession } from "@/lib/server/api/auth";
+import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
@@ -27,7 +27,7 @@ function platformFromPayload(payload: StoreMappingPayload) {
 
 export async function handleAdminStoreMappingsGet() {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Dev"]);
 
     const [android, ios] = await Promise.all([
       getAndroidStoreMappingsResult(),
@@ -42,7 +42,7 @@ export async function handleAdminStoreMappingsGet() {
 
 export async function handleAdminStoreMappingsPost(request: Request) {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Dev"]);
     const payload = await parseJsonBody<StoreMappingPayload>(request);
     return okJson(
       platformFromPayload(payload) === "android"
@@ -56,7 +56,7 @@ export async function handleAdminStoreMappingsPost(request: Request) {
 
 export async function handleAdminStoreMappingsPatch(request: Request) {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Dev"]);
     const payload = await parseJsonBody<StoreMappingPayload>(request);
     return okJson(
       platformFromPayload(payload) === "android"
@@ -70,7 +70,7 @@ export async function handleAdminStoreMappingsPatch(request: Request) {
 
 export async function handleAdminStoreMappingsDelete(request: Request) {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Dev"]);
     const payload = await parseJsonBody<StoreMappingPayload>(request);
     return okJson(
       platformFromPayload(payload) === "android"

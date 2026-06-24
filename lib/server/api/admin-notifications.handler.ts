@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "crypto";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { requireAdminSession } from "@/lib/server/api/auth";
+import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, ApiError } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
@@ -286,7 +286,7 @@ async function callEdgeFunction(functionName: string, body: Record<string, unkno
 export async function handleAdminNotificationSendPost(request: Request) {
   let requestPayload: Record<string, unknown> | null = null;
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Marketing"]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     return okJson({
@@ -536,7 +536,7 @@ async function openRouterGeneratedCopy(input: {
 
 export async function handleAdminNotificationGeneratePost(request: Request) {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Marketing"]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     const appName = clean(payload.appName) || "App";
     const intent = clean(payload.intent) === "translate" ? "translate" : "generate";
@@ -557,7 +557,7 @@ export async function handleAdminNotificationGeneratePost(request: Request) {
 
 export async function handleAdminNotificationSchedulesPost(request: Request) {
   try {
-    const admin = await requireAdminSession();
+    const admin = await requireConsoleApiSession(["Admin", "Marketing"]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     const notifications = normalizedNotifications(payload.notifications);
     const scheduleType = clean(payload.scheduleType);
@@ -615,7 +615,7 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
 
 export async function handleAdminNotificationSchedulesPatch(request: Request) {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Marketing"]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     const id = clean(payload.id);
     const status = clean(payload.status);
@@ -675,7 +675,7 @@ export async function handleAdminNotificationSchedulesPatch(request: Request) {
 
 export async function handleAdminNotificationSchedulesDelete(request: Request) {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Marketing"]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     const id = clean(payload.id);
     if (!id) throw badRequest("Schedule id is required.");
@@ -694,7 +694,7 @@ export async function handleAdminNotificationSchedulesDelete(request: Request) {
 export async function handleAdminNotificationDispatchPost(request: Request) {
   let requestPayload: Record<string, unknown> | null = null;
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Marketing"]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     return okJson({
@@ -712,7 +712,7 @@ export async function handleAdminNotificationDispatchPost(request: Request) {
 
 export async function handleAdminNotificationTestDevicePost(request: Request) {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession(["Admin", "Marketing"]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     const platform = clean(payload.platform) || "android";
     const deviceId = clean(payload.deviceId) || `test-device-${Date.now().toString(36)}`;
