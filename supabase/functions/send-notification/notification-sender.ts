@@ -52,8 +52,10 @@ type LocaleNotification = {
 
 export type SendResult = {
   deviceId: string | null;
+  deviceTokenId: string | null;
   error: string | null;
   fcmErrorCode: string | null;
+  fcmToken: string | null;
   invalidToken: boolean;
   ok: boolean;
   providerMessageId: string | null;
@@ -67,11 +69,37 @@ type DeviceTarget = {
   appId: string | null;
   bundleId: string | null;
   deviceId: string;
+  id: string;
   fcmToken: string;
   locale: string | null;
   packageName: string | null;
   productAppId: string | null;
 };
+
+function errorForLog(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+
+  return { message: String(error) };
+}
+
+function logSendFailure(message: string, details: Record<string, unknown>) {
+  console.error(`[send-notification] ${message}`, details);
+}
+
+function logTargetValue(input: {
+  deviceId?: string | null;
+  targetType: TargetType;
+  targetValue: string;
+}) {
+  if (input.targetType === "device") return input.deviceId ?? "fcm-token-redacted";
+  return input.targetValue;
+}
 
 function primaryLocale(locales: LocaleNotification[]) {
   return locales.find((locale) => locale.topicCode === "en") ?? locales[0];
@@ -341,6 +369,12 @@ function formatFcmError(body: unknown, projectId: string, clientEmail: string | 
   return message.slice(0, 600);
 }
 
+function userFacingFcmError(code: string | null, formattedError: string) {
+  if (code === "UNREGISTERED") return "Người dùng đã tắt thông báo.";
+  if (code === "THIRD_PARTY_AUTH_ERROR") return "Thiếu hoặc sai APNs Auth Key/Certificate trong Firebase project của iOS app.";
+  return formattedError;
+}
+
 function fcmDetailErrorCode(body: unknown) {
   const error = body && typeof body === "object" && "error" in body
     ? (body as Record<string, unknown>).error
@@ -389,6 +423,7 @@ async function sendFcm(input: {
   clientEmail: string | null;
   data: Record<string, string>;
   deviceId?: string | null;
+  deviceTokenId?: string | null;
   endpoint: string;
   imageUrl: string;
   projectId: string;
@@ -416,11 +451,28 @@ async function sendFcm(input: {
 
   if (!response.ok) {
     const formattedError = formatFcmError(body, input.projectId, input.clientEmail);
+    const code = fcmErrorCode(body);
+    const error = userFacingFcmError(code, formattedError);
+    const invalidToken = isInvalidFcmTokenError({ body, formattedError, status: response.status });
+    logSendFailure("FCM request failed", {
+      deviceId: input.deviceId ?? null,
+      error,
+      fcmErrorCode: code,
+      fcmToken: input.targetType === "device" ? input.targetValue : null,
+      invalidToken,
+      projectId: input.projectId,
+      status: response.status,
+      targetType: input.targetType,
+      targetValue: logTargetValue(input),
+      topicCode: input.topicCode ?? null,
+    });
+
     return {
       deviceId: input.deviceId ?? null,
-      error: formattedError,
-      fcmErrorCode: fcmErrorCode(body),
-      invalidToken: isInvalidFcmTokenError({ body, formattedError, status: response.status }),
+      deviceTokenId: input.deviceTokenId ?? null,
+      error,
+      fcmErrorCode: code,
+      invalidToken,
       ok: false,
       providerMessageId: null,
       status: response.status,
@@ -432,8 +484,10 @@ async function sendFcm(input: {
 
   return {
     deviceId: input.deviceId ?? null,
+    deviceTokenId: input.deviceTokenId ?? null,
     error: null,
     fcmErrorCode: null,
+    fcmToken: input.targetType === "device" ? input.targetValue : null,
     invalidToken: false,
     ok: true,
     providerMessageId: stringValue(body?.name),
@@ -466,7 +520,7 @@ async function getDeviceTargets(
 
   const query = supabase
     .from("device_tokens")
-    .select("app_id,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,status")
+    .select("id,app_id,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,status")
     .eq("platform", input.platform)
     .eq("status", "active")
     .in("device_id", input.deviceIds);
@@ -479,6 +533,7 @@ async function getDeviceTargets(
   const appName = clean(input.appName);
   const packageName = clean(input.packageName);
   const bundleId = clean(input.bundleId);
+  const requestedAppKeys = Array.from(new Set([appId, appId ? "" : appName].filter(Boolean)));
 
   return (data ?? []).map((row) => {
     const record = row as Record<string, unknown>;
@@ -486,18 +541,21 @@ async function getDeviceTargets(
       appId: stringValue(record.app_id),
       bundleId: stringValue(record.bundle_id),
       deviceId: clean(record.device_id),
+      id: clean(record.id),
       fcmToken: clean(record.fcm_token),
       locale: stringValue(record.locale),
       packageName: stringValue(record.package_name),
       productAppId: stringValue(record.product_app_id),
     };
   }).filter((device) => {
-    if (!device.deviceId || !device.fcmToken) return false;
-    if (appId && (device.appId === appId || device.productAppId === appId)) return true;
-    if (appName && (device.appId === appName || device.productAppId === appName)) return true;
+    if (!device.id || !device.deviceId || !device.fcmToken) return false;
+    const deviceAppKeys = [device.appId, device.productAppId].filter(Boolean);
+    if (requestedAppKeys.length && deviceAppKeys.length) {
+      return deviceAppKeys.some((deviceKey) => requestedAppKeys.includes(deviceKey));
+    }
     if (packageName && device.packageName === packageName) return true;
     if (bundleId && device.bundleId === bundleId) return true;
-    return !appId && !appName && !packageName && !bundleId;
+    return !requestedAppKeys.length && !packageName && !bundleId;
   });
 }
 
@@ -564,6 +622,8 @@ async function writeEvents(
     job_id: input.jobId,
     metadata: {
       fcmErrorCode: result.fcmErrorCode,
+      deviceTokenId: result.deviceTokenId,
+      fcmToken: result.fcmToken,
       invalidToken: result.invalidToken,
       topicCode: result.topicCode,
     },
@@ -587,12 +647,12 @@ async function markInvalidDeviceTokens(
     results: SendResult[];
   }
 ) {
-  const invalidDeviceIds = Array.from(new Set(input.results
-    .filter((result) => result.invalidToken && result.deviceId)
-    .map((result) => result.deviceId!)
+  const invalidDeviceTokenIds = Array.from(new Set(input.results
+    .filter((result) => result.invalidToken && result.deviceTokenId)
+    .map((result) => result.deviceTokenId!)
   ));
 
-  if (!invalidDeviceIds.length) return;
+  if (!invalidDeviceTokenIds.length) return;
 
   const { error } = await supabase
     .from("device_tokens")
@@ -601,7 +661,7 @@ async function markInvalidDeviceTokens(
       status: "invalid",
     })
     .eq("platform", input.platform)
-    .in("device_id", invalidDeviceIds);
+    .in("id", invalidDeviceTokenIds);
 
   if (error) throw error;
 }
@@ -619,7 +679,7 @@ async function updateJob(
     targetValues: string[];
   },
 ) {
-  const status = input.errorCount === 0 ? "sent" : input.sentCount > 0 ? "partial_failed" : "failed";
+  const status = input.sentCount > 0 ? "sent" : "failed";
   const updatePayload: Record<string, unknown> = {
     credential_ref: input.credentialRef ?? null,
     error_count: input.errorCount,
@@ -653,6 +713,7 @@ async function updateJob(
 
 function failedResult(input: {
   deviceId?: string | null;
+  deviceTokenId?: string | null;
   error: string;
   fcmErrorCode?: string | null;
   invalidToken?: boolean;
@@ -663,8 +724,10 @@ function failedResult(input: {
 }): SendResult {
   return {
     deviceId: input.deviceId ?? null,
+    deviceTokenId: input.deviceTokenId ?? null,
     error: input.error,
     fcmErrorCode: input.fcmErrorCode ?? null,
+    fcmToken: null,
     invalidToken: input.invalidToken ?? false,
     ok: false,
     providerMessageId: null,
@@ -785,6 +848,15 @@ export async function sendNotificationPayload(
       for (const deviceId of deviceIds) {
         const device = devicesById.get(deviceId);
         if (!device) {
+          logSendFailure("No active FCM token found for requested device", {
+            appId: normalizeAppId(resolvedPayload.appId) || appId || null,
+            bundleId: clean(resolvedPayload.bundleId) || null,
+            deviceId,
+            packageName: clean(resolvedPayload.packageName) || null,
+            platform,
+            targetType,
+          });
+
           results.push(failedResult({
             deviceId,
             error: `No active ${platform} FCM token found for device_id ${deviceId}`,
@@ -805,6 +877,7 @@ export async function sendNotificationPayload(
             notificationLocale: locale.topicCode,
           },
           deviceId,
+          deviceTokenId: device.id,
           endpoint,
           imageUrl,
           projectId,
@@ -818,6 +891,31 @@ export async function sendNotificationPayload(
 
     const sentCount = results.filter((result) => result.ok).length;
     const errorCount = results.length - sentCount;
+    if (errorCount > 0) {
+      logSendFailure("Notification job finished with failed targets", {
+        appId: normalizeAppId(resolvedPayload.appId) || appId || null,
+        errorCount,
+        failedTargets: results
+          .filter((result) => !result.ok)
+          .slice(0, 20)
+          .map((result) => ({
+            deviceId: result.deviceId,
+            error: result.error,
+            fcmErrorCode: result.fcmErrorCode,
+            invalidToken: result.invalidToken,
+            status: result.status,
+            targetType: result.targetType,
+            targetValue: result.targetType === "device" ? result.deviceId ?? "fcm-token-redacted" : result.targetValue,
+            topicCode: result.topicCode,
+          })),
+        jobId,
+        platform,
+        sentCount,
+        targetType,
+        totalTargets: results.length,
+      });
+    }
+
     await writeEvents(supabase, { jobId, platform, results });
     await markInvalidDeviceTokens(supabase, { platform, results });
     const updatedJob = await updateJob(supabase, {
@@ -845,6 +943,16 @@ export async function sendNotificationPayload(
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown notification send error";
+    logSendFailure("Notification job failed before FCM send completed", {
+      appId,
+      error: errorForLog(error),
+      jobId,
+      platform,
+      targetType,
+      targetValues: initialTargetValues,
+      topicBase,
+    });
+
     const failedTargets = initialTargetValues.length ? initialTargetValues : [topicBase];
     const results = failedTargets.map((targetValue) =>
       failedResult({

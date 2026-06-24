@@ -13,6 +13,7 @@ import {
   CreditCard,
   Gauge,
   History,
+  LayoutDashboard,
   LogOut,
   Menu,
   MessageSquareReply,
@@ -111,10 +112,16 @@ const navGroups: { title: string; items: NavItem[] }[] = [
       },
       {
         title: "Notifications",
-        href: "/notifications/send",
+        href: "/notifications/overview",
         icon: <Bell size={17} />,
         roles: ["Admin"],
         children: [
+          {
+            title: "Overview",
+            href: "/notifications/overview",
+            icon: <LayoutDashboard size={15} />,
+            roles: ["Admin"],
+          },
           {
             title: "Send",
             href: "/notifications/send",

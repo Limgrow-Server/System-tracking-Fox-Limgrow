@@ -316,7 +316,12 @@ export function NotificationSendPage({
                 event_type: result.ok ? "fcm_sent" : "fcm_failed",
                 id: `local-${resultJob.id}-${index}`,
                 job_id: resultJob.id,
-                metadata: { topicCode: result.topicCode },
+                metadata: {
+                  fcmErrorCode: result.fcmErrorCode ?? null,
+                  fcmToken: result.fcmToken ?? null,
+                  invalidToken: result.invalidToken ?? false,
+                  topicCode: result.topicCode,
+                },
                 notification_id: resultJob.id,
                 platform: app.platform,
                 provider_message_id: result.providerMessageId,
@@ -832,7 +837,7 @@ export function NotificationSendPage({
                       <div className="truncate font-medium">{summary.appName}</div>
                       <div className="mt-1 text-xs text-muted-foreground">{platformLabel(summary.platform)} · {total} token(s)</div>
                     </div>
-                    <StatusBadge status={failed ? summary.sentCount ? "partial_failed" : "failed" : "sent"} />
+                    <StatusBadge status={failed ? summary.sentCount ? "sent_with_issues" : "failed" : "sent"} />
                   </div>
                   <div className="mt-3 grid grid-cols-4 gap-2 text-xs">
                     <div className="rounded-md bg-muted/35 p-2">

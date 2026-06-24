@@ -66,7 +66,19 @@ export async function dispatchDueNotifications(
       prepared.payload,
       input.actorEmail,
     );
-    const failed = Number(result.errorCount ?? 0) > 0;
+    const hasErrors = Number(result.errorCount ?? 0) > 0;
+    const hasSent = Number(result.sentCount ?? 0) > 0;
+    const failed = hasErrors && !hasSent;
+    if (hasErrors) {
+      console.error("[dispatch-notifications] scheduled notification completed with failed targets", {
+        errorCount: result.errorCount,
+        firstError: result.results.find((item) => !item.ok)?.error ?? null,
+        jobId: clean(result.job?.id),
+        scheduleId: clean(schedule.id),
+        sentCount: result.sentCount,
+      });
+    }
+
     const scheduleType = clean(schedule.schedule_type);
     const nextRunAt = nextRunAfter(schedule, now);
     const nextStatus =
@@ -80,7 +92,7 @@ export async function dispatchDueNotifications(
     const updatePayload: Record<string, unknown> = {
       last_error: lastError,
       last_run_at: now.toISOString(),
-      last_status: failed ? "failed" : "sent",
+      last_status: hasSent ? "sent" : "failed",
       next_run_at: nextRunAt?.toISOString() ?? null,
       run_count: Number(schedule.run_count ?? 0) + 1,
       status: nextStatus,
@@ -105,7 +117,7 @@ export async function dispatchDueNotifications(
       job: result.job,
       scheduleId: clean(schedule.id),
       sentCount: result.sentCount,
-      status: failed ? "failed" : "sent",
+      status: hasSent ? "sent" : "failed",
     });
   }
 
