@@ -80,7 +80,14 @@ Không dùng Transaction pooler port `6543` cho migration trong repo này. Trans
 
 ## 5. Tạo file .env
 
-Copy file mẫu:
+Repo dùng 2 file env local:
+
+- `.env`: local/default development.
+- `.env.production`: production deploy/migration.
+
+Cả 2 file đều bị ignore bởi git. Chỉ commit `.env.example`.
+
+Copy file mẫu cho local/default:
 
 ```powershell
 Copy-Item .env.example .env
@@ -92,7 +99,13 @@ macOS/Linux:
 cp .env.example .env
 ```
 
-Điền đủ các biến:
+Nếu cần chuẩn bị production local file:
+
+```bash
+cp .env.example .env.production
+```
+
+Điền đủ các biến cho đúng môi trường trong từng file:
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL="https://<project-ref>.supabase.co"
@@ -101,6 +114,8 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="<publishable-key>"
 DATABASE_URL="postgresql://postgres.<project-ref>:<db-password>@<region>.pooler.supabase.com:5432/postgres?sslmode=require"
 DIRECT_URL="postgresql://postgres:<db-password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require"
 ```
+
+Không đặt production credentials trong `.env`; để production credentials trong `.env.production` hoặc secret store của nền tảng deploy.
 
 ## 6. Prisma schema và migration
 
@@ -125,8 +140,11 @@ Các script Prisma có sẵn:
 npm run prisma:format
 npm run prisma:validate
 npm run prisma:generate
-npm run prisma:migrate:dev
-npm run prisma:migrate:deploy
+npm run prisma:migrate:dev                 # dùng .env
+npm run prisma:migrate:deploy              # dùng .env
+npm run prisma:migrate:deploy:production   # dùng .env.production
+npm run prisma:migrate:status              # dùng .env
+npm run prisma:migrate:status:production   # dùng .env.production
 npm run prisma:studio
 ```
 
@@ -143,7 +161,7 @@ npm run prisma:generate
 Kiểm tra trạng thái migration:
 
 ```powershell
-npx prisma migrate status --schema prisma
+npm run prisma:migrate:status
 ```
 
 Mở Prisma Studio nếu cần xem dữ liệu:
@@ -163,13 +181,88 @@ npm run prisma:generate
 
 Không dùng `prisma db push` cho Supabase shared/staging/production của repo này, vì `db push` bỏ qua migration history.
 
+### Deploy migration lên production
+
+Sau khi migration đã được commit trong `prisma/migrations`, điền production database URLs vào `.env.production`, rồi chạy:
+
+```powershell
+npm run prisma:migrate:status:production
+npm run prisma:migrate:deploy:production
+```
+
+Không chạy `prisma:migrate:dev` với `.env.production`.
+
+### Flow develop -> production cho migration/Supabase/Git
+
+Nguồn chuẩn của schema app là Git:
+
+- Prisma schema nằm trong `prisma/schema.prisma` và `prisma/models/*.prisma`.
+- Migration nằm trong `prisma/migrations/<timestamp>_<name>/migration.sql`.
+- Mỗi Supabase database tự có bảng `_prisma_migrations` để ghi migration nào đã chạy.
+- Không copy bảng `_prisma_migrations` giữa local/staging/production.
+- Không tạo migration app schema trong `supabase/migrations` nếu repo vẫn dùng Prisma làm nguồn chính.
+
+Flow khi phát triển:
+
+```bash
+git fetch origin
+git checkout -b feature/<slug> origin/main
+
+npm install
+npm run prisma:migrate:status
+```
+
+Trước khi đổi schema, kiểm tra `.env` đang trỏ tới Supabase project development/local, không phải production. Sau đó sửa model Prisma và tạo migration:
+
+```bash
+npm run prisma:migrate:dev -- --name ten_migration_mo_ta
+npm run prisma:generate
+npm run prisma:migrate:status
+```
+
+Review file SQL vừa sinh trong `prisma/migrations/.../migration.sql` trước khi commit. Nếu migration chạm tới bảng trong schema exposed như `public`, cần kiểm tra RLS, policy, grant, function privilege và dữ liệu backfill. Với thay đổi destructive như drop column/table hoặc đổi kiểu dữ liệu, cần có plan backfill/rollback rõ ràng trước khi merge.
+
+Commit những file liên quan:
+
+```bash
+git status --short
+git add prisma/schema.prisma prisma/models prisma/migrations
+git add README.md docs supabase/functions supabase/config.toml
+git commit -m "feat(scope): describe schema change"
+```
+
+Chỉ `git add` các file thật sự đổi. Không commit `.env`, `.env.production`, database dump, secret, hay dữ liệu từ bảng `_prisma_migrations`.
+
+Trước khi push/PR:
+
+```bash
+npm run prisma:validate
+npm run check
+git push origin feature/<slug>
+```
+
+Trong PR, reviewer cần nhìn migration SQL như một phần của code review. Nếu migration đã được apply ở shared DB hoặc production, không sửa/xóa/rename migration cũ nữa; tạo migration mới để sửa tiếp.
+
+Sau khi PR được merge vào branch deploy production, chạy production migration bằng `.env.production`:
+
+```bash
+npm run prisma:migrate:status:production
+npm run prisma:migrate:deploy:production
+npm run prisma:migrate:status:production
+```
+
+Sau database migration, deploy Edge Functions vào đúng Supabase project production nếu có thay đổi trong `supabase/functions` hoặc `supabase/config.toml`.
+
 ## 7. Deploy Supabase Edge Functions
 
-Repo có 4 Edge Functions:
+Repo có các Edge Functions sau:
 
 ```text
 device-token-android
 device-token-ios
+dispatch-notifications
+notification-event
+send-notification
 verify-android
 verify-ios
 ```
@@ -194,6 +287,9 @@ Deploy:
 ```bash
 supabase functions deploy device-token-android --project-ref <project-ref>
 supabase functions deploy device-token-ios --project-ref <project-ref>
+supabase functions deploy dispatch-notifications --project-ref <project-ref>
+supabase functions deploy notification-event --project-ref <project-ref>
+supabase functions deploy send-notification --project-ref <project-ref>
 supabase functions deploy verify-android --project-ref <project-ref>
 supabase functions deploy verify-ios --project-ref <project-ref>
 ```
