@@ -1,0 +1,112 @@
+enum IosSecretType {
+  APPLE_ASC_P8             @map("apple_asc_p8")
+  APPLE_IAP_P8             @map("apple_iap_p8")
+  FIREBASE_SERVICE_ACCOUNT @map("firebase_service_account")
+
+  @@map("ios_secret_type")
+}
+
+model IosStoreProfile {
+  id               String              @id @default(uuid()) @db.Uuid
+  supabaseUserId   String?             @unique @map("supabase_user_id") @db.Uuid
+  storeAccountName String              @unique @map("store_account_name")
+  linkStore        String?             @map("link_store")
+  avatarUrl        String?             @map("avatar_url")
+  issuerId         String?             @map("issuer_id")
+  status           MappingStatus       @default(ACTIVE)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  mappings         IosStoreMapping[]
+  credentials      IosCredential[]
+  iapTransactions  IosIapTransaction[]
+
+  @@index([status, storeAccountName], map: "ios_store_profiles_status_name_idx")
+  @@map("ios_store_profiles")
+}
+
+model IosStoreMapping {
+  id               String          @id @default(uuid()) @db.Uuid
+  storeProfileId   String          @map("store_profile_id") @db.Uuid
+  storeAccountName String          @map("store_account_name")
+  appId            String?         @map("app_id")
+  appName          String          @map("app_name")
+  appIconUrl       String?         @map("app_icon_url")
+  appLink          String?         @map("app_link")
+  bundleId         String          @map("bundle_id")
+  status           MappingStatus   @default(ACTIVE)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile     IosStoreProfile @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+
+  @@unique([storeProfileId, appName], map: "ios_store_mappings_profile_app_name_key")
+  @@unique([storeProfileId, appId], map: "ios_store_mappings_profile_app_id_key")
+  @@unique([bundleId], map: "ios_store_mappings_bundle_key")
+  @@index([appId, status], map: "ios_store_mappings_app_id_status_idx")
+  @@index([bundleId, status], map: "ios_store_mappings_bundle_status_idx")
+  @@index([storeAccountName], map: "ios_store_mappings_store_name_idx")
+  @@map("ios_store_mappings")
+}
+
+model IosCredential {
+  id                 String            @id @default(uuid()) @db.Uuid
+  storeProfileId     String            @map("store_profile_id") @db.Uuid
+  credentialRef      String            @unique @map("credential_ref")
+  secretType         IosSecretType     @map("secret_type")
+  secretFormat       SecretFormat      @default(P8) @map("secret_format")
+  credentialPurpose  CredentialPurpose @map("credential_purpose")
+  vaultSecretId      String?           @map("vault_secret_id") @db.Uuid
+  vaultSecretName    String?           @map("vault_secret_name")
+  vaultSecretVersion Int               @default(1) @map("vault_secret_version")
+  storeAccountName   String            @map("store_account_name")
+  linkStore          String?           @map("link_store")
+  avatarUrl          String?           @map("avatar_url")
+  keyId              String?           @map("key_id")
+  issuerId           String?           @map("issuer_id")
+  clientEmail        String?           @map("client_email")
+  projectId          String?           @map("project_id")
+  status             CredentialStatus  @default(ACTIVE)
+  description        String?
+  createdBy          String?           @map("created_by")
+  rotatedBy          String?           @map("rotated_by")
+  lastUsedAt         DateTime?         @map("last_used_at") @db.Timestamptz(6)
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile       IosStoreProfile   @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+
+  @@unique([storeProfileId, credentialPurpose], map: "ios_credentials_profile_purpose_key")
+  @@index([credentialRef, status], map: "ios_credentials_lookup_idx")
+  @@index([storeAccountName, credentialPurpose, status], map: "ios_credentials_store_purpose_status_idx")
+  @@index([vaultSecretId], map: "ios_credentials_vault_secret_id_idx")
+  @@index([vaultSecretName], map: "ios_credentials_vault_secret_name_idx")
+  @@map("ios_credentials")
+}
+
+model IosIapTransaction {
+  id                    String    @id @default(uuid()) @db.Uuid
+  storeProfileId        String?   @map("store_profile_id") @db.Uuid
+  transactionId         String    @map("transaction_id")
+  originalTransactionId String?   @map("original_transaction_id")
+  productId             String    @map("product_id")
+  userId                String?   @map("user_id")
+  bundleId              String?   @map("bundle_id")
+  purchaseDate          DateTime? @map("purchase_date") @db.Timestamptz(6)
+  expiresDate           DateTime? @map("expires_date") @db.Timestamptz(6)
+  state                 String
+  revenueMicros         BigInt?   @map("revenue_micros")
+  priceMilliunits       BigInt?   @map("price_milliunits")
+  currency              String?
+  isTrial               Boolean?  @map("is_trial")
+  environment           String    @default("production")
+  rawReceipt            Json      @map("raw_receipt")
+  verifiedAt            DateTime  @map("verified_at") @db.Timestamptz(6)
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  storeProfile IosStoreProfile? @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
+
+  @@unique([transactionId], map: "ios_iap_transactions_transaction_key")
+  @@index([storeProfileId], map: "ios_iap_transactions_store_profile_id_idx")
+  @@index([bundleId, verifiedAt], map: "ios_iap_transactions_bundle_verified_idx")
+  @@index([productId, verifiedAt], map: "ios_iap_transactions_product_verified_idx")
+  @@index([userId, verifiedAt], map: "ios_iap_transactions_user_verified_idx")
+  @@map("ios_iap_transactions")
+}
