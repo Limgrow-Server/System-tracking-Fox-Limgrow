@@ -22,6 +22,7 @@ import {
   Power,
   PowerOff,
   RotateCcw,
+  Search,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -92,6 +93,17 @@ type WebkitTextSecurityStyle = CSSProperties & {
 type ConfigViewTarget =
   | { platform: "android"; credential: CredentialSecretMetadata }
   | { platform: "ios"; group: IosCredentialGroup };
+type CredentialListResponse = {
+  success?: boolean;
+  data?: CredentialSecretMetadata[];
+  error?: string;
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  totalPages?: number;
+};
+
+const CONFIG_PAGE_SIZE = 10;
 
 const credentialRefPrefixes: Record<SecretType, string> = {
   firebase_service_account: "FIREBASE_ADMIN_SERVICE_ACCOUNT",
@@ -950,9 +962,13 @@ export function CredentialConfigs({
 }) {
   const router = useRouter();
   const platformLabel = platformFilter === "android" ? "Android" : "iOS";
+  const [credentialSecrets, setCredentialSecrets] = useState(data.credentialSecrets);
+  const [credentialPagination, setCredentialPagination] = useState(data.credentialPagination);
+  const [credentialTableLoading, setCredentialTableLoading] = useState(false);
+  const [credentialSearchQuery, setCredentialSearchQuery] = useState("");
   const vaultOptions = useMemo(
-    () => credentialVaultOptions(data.credentialSecrets),
-    [data.credentialSecrets],
+    () => credentialVaultOptions(credentialSecrets),
+    [credentialSecrets],
   );
 
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -1019,18 +1035,68 @@ export function CredentialConfigs({
     (type) => secretTypeSupportsPlatform(type, platform),
   );
   const iosCredentialGroups = useMemo(
-    () => groupIosCredentials(data.credentialSecrets),
-    [data.credentialSecrets],
+    () => groupIosCredentials(credentialSecrets),
+    [credentialSecrets],
   );
   const selectedAndroidCredential = useMemo(
     () =>
-      data.credentialSecrets.find(
+      credentialSecrets.find(
         (credential) =>
           credential.platform === "android" &&
           credential.id === selectedCredentialId,
       ) ?? null,
-    [data.credentialSecrets, selectedCredentialId],
+    [credentialSecrets, selectedCredentialId],
   );
+
+  function updateCredentialSearchQuery(nextValue: string) {
+    setCredentialSearchQuery(nextValue);
+    void loadCredentialPage(1, { searchQuery: nextValue });
+  }
+
+  async function loadCredentialPage(
+    page: number,
+    overrides?: { searchQuery?: string },
+  ) {
+    const nextSearchQuery =
+      overrides?.searchQuery ?? credentialSearchQuery;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(CONFIG_PAGE_SIZE),
+      platform: platformFilter,
+    });
+    const search = nextSearchQuery.trim();
+
+    if (search) params.set("search", search);
+
+    setCredentialTableLoading(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/credentials?${params.toString()}`,
+      );
+      const payload = (await response.json()) as CredentialListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Load credential configs failed.");
+      }
+
+      setCredentialSecrets(payload.data);
+      setCredentialPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? CONFIG_PAGE_SIZE,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Load credential configs failed.",
+      );
+    } finally {
+      setCredentialTableLoading(false);
+    }
+  }
 
   function cacheVaultSecret(credentialId: string, secretText: string) {
     setVaultSecretCache((current) =>
@@ -1192,6 +1258,7 @@ export function CredentialConfigs({
       toast.success(
         `Android credential has been set to ${credentialStatusLabel(nextStatus)}.`,
       );
+      await loadCredentialPage(credentialPagination.page);
       router.refresh();
       setStatusConfirmTarget(null);
     } catch (error) {
@@ -1220,6 +1287,7 @@ export function CredentialConfigs({
       toast.success(
         `iOS credential group has been set to ${credentialStatusLabel(nextStatus)}.`,
       );
+      await loadCredentialPage(credentialPagination.page);
       router.refresh();
       setStatusConfirmTarget(null);
     } catch (error) {
@@ -1283,6 +1351,11 @@ export function CredentialConfigs({
       setHardDeleteConfirmationName("");
       setVaultSecretCache({});
       toast.success(payload.message ?? "Credential config hard deleted.");
+      await loadCredentialPage(
+        credentialSecrets.length <= ids.length && credentialPagination.page > 1
+          ? credentialPagination.page - 1
+          : credentialPagination.page,
+      );
       router.refresh();
     } catch (error) {
       toast.error(
@@ -1536,6 +1609,7 @@ export function CredentialConfigs({
     resetIosCredentialForm();
     setVaultSecretCache({});
     toast.success("iOS credential vault has been saved.");
+    await loadCredentialPage(credentialPagination.page);
     router.refresh();
   }
 
@@ -1591,6 +1665,7 @@ export function CredentialConfigs({
         setSelectedFileName("");
         setSheetOpen(false);
         toast.success(payload.message ?? "Credential metadata updated.");
+        await loadCredentialPage(credentialPagination.page);
         router.refresh();
         return;
       }
@@ -1617,11 +1692,12 @@ export function CredentialConfigs({
       body.set("platform", platform);
       body.set("storeAccountName", storeName);
       if (isAndroidCredentialOnlyFlow) {
-        const currentCredential = data.credentialSecrets.find(
+        const currentCredential = credentialSecrets.find(
           (credential) => credential.id === selectedCredentialId,
         );
-        if (currentCredential?.store_profile_id)
-        body.set("storeProfileId", currentCredential.store_profile_id);
+        if (currentCredential?.store_profile_id) {
+          body.set("storeProfileId", currentCredential.store_profile_id);
+        }
         body.set("linkStore", linkStore);
         body.set("avatarUrl", avatarUrl);
       }
@@ -1653,6 +1729,7 @@ export function CredentialConfigs({
       setVaultSecretCache({});
       setSheetOpen(false);
       toast.success(payload.message ?? "Credential operation completed.");
+      await loadCredentialPage(selectedCredentialId === "new" ? 1 : credentialPagination.page);
       router.refresh();
     } catch (error) {
       toast.error(
@@ -2214,8 +2291,27 @@ export function CredentialConfigs({
 
       {isAndroidConfigCredentialView ? (
         <Card className="rounded-lg">
-          <CardHeader className="border-b">
-            <CardTitle>Credential config</CardTitle>
+          <CardHeader className="gap-3 border-b">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <CardTitle className="flex items-center gap-2">
+                Credential config
+                {credentialTableLoading ? (
+                  <Spinner className="size-4" />
+                ) : null}
+              </CardTitle>
+              <div className="relative sm:w-[320px]">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="search"
+                  value={credentialSearchQuery}
+                  onChange={(event) =>
+                    updateCredentialSearchQuery(event.target.value)
+                  }
+                  placeholder="Search stores or credentials..."
+                  className="h-9 pl-9"
+                />
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="overflow-x-auto px-0">
             <Table className="min-w-[1040px]">
@@ -2231,7 +2327,7 @@ export function CredentialConfigs({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.credentialSecrets.slice(0, 24).map((secret) => {
+                {credentialSecrets.map((secret) => {
                   const metadata = credentialConfigMetadata(secret);
 
                   return (
@@ -2351,7 +2447,7 @@ export function CredentialConfigs({
                     </TableRow>
                   );
                 })}
-                {!data.credentialSecrets.length ? (
+                {!credentialSecrets.length ? (
                   <TableEmptyState
                     colSpan={8}
                     icon={KeyRound}
@@ -2362,15 +2458,47 @@ export function CredentialConfigs({
               </TableBody>
             </Table>
             <TablePaginationFooter
-              shown={Math.min(data.credentialSecrets.length, 24)}
-              total={data.credentialSecrets.length}
+              from={
+                (credentialPagination.page - 1) *
+                  credentialPagination.pageSize +
+                1
+              }
+              onPageChange={(page) => void loadCredentialPage(page)}
+              page={credentialPagination.page}
+              shown={credentialSecrets.length}
+              to={
+                (credentialPagination.page - 1) *
+                  credentialPagination.pageSize +
+                credentialSecrets.length
+              }
+              total={credentialPagination.total}
+              totalPages={credentialPagination.totalPages}
             />
           </CardContent>
         </Card>
       ) : isIosConfigCredentialView ? (
         <Card className="rounded-lg">
-          <CardHeader className="border-b">
-            <CardTitle>Credential config</CardTitle>
+          <CardHeader className="gap-3 border-b">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <CardTitle className="flex items-center gap-2">
+                Credential config
+                {credentialTableLoading ? (
+                  <Spinner className="size-4" />
+                ) : null}
+              </CardTitle>
+              <div className="relative sm:w-[320px]">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="search"
+                  value={credentialSearchQuery}
+                  onChange={(event) =>
+                    updateCredentialSearchQuery(event.target.value)
+                  }
+                  placeholder="Search stores or credentials..."
+                  className="h-9 pl-9"
+                />
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="overflow-x-auto px-0">
             <Table className="min-w-[1240px]">
@@ -2389,7 +2517,7 @@ export function CredentialConfigs({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {iosCredentialGroups.slice(0, 24).map((group) => (
+                {iosCredentialGroups.map((group) => (
                   <TableRow
                     key={group.id}
                     className={configRowClass(
@@ -2522,8 +2650,21 @@ export function CredentialConfigs({
               </TableBody>
             </Table>
             <TablePaginationFooter
-              shown={Math.min(iosCredentialGroups.length, 24)}
-              total={iosCredentialGroups.length}
+              from={
+                (credentialPagination.page - 1) *
+                  credentialPagination.pageSize +
+                1
+              }
+              onPageChange={(page) => void loadCredentialPage(page)}
+              page={credentialPagination.page}
+              shown={iosCredentialGroups.length}
+              to={
+                (credentialPagination.page - 1) *
+                  credentialPagination.pageSize +
+                iosCredentialGroups.length
+              }
+              total={credentialPagination.total}
+              totalPages={credentialPagination.totalPages}
             />
           </CardContent>
         </Card>

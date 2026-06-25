@@ -1,10 +1,11 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import { Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/tracking/primitives";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -14,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { UsersPageData } from "@/lib/tracking/page-data";
 import type { StaffRole, TeamMember } from "@/lib/tracking/types";
 import { AccountTableFooter } from "./components/account-table-footer";
 import { CreateAccountDialog } from "./components/create-account-dialog";
@@ -21,81 +23,143 @@ import { DeleteAccountDialog } from "./components/delete-account-dialog";
 import { EditAccountDrawer } from "./components/edit-account-drawer";
 import { UserTable } from "./components/user-table";
 import { accountPageSize, roleOptions } from "./constants";
-import type { AccountPatch, ManagedAccount } from "./types";
-import { accountFromTeamMember, isInactiveUser, searchAccount } from "./utils";
+import type { ManagedAccount } from "./types";
+import {
+  accountFromTeamMember,
+  isInactiveUser,
+  managedAppsForAccount,
+} from "./utils";
 
 type AccountManagementPageProps = {
-  users: TeamMember[];
+  data: UsersPageData;
 };
 
-type CreateAccountResponse = {
+type UserMutationResponse = {
+  deleted?: string;
+  error?: string;
+  message?: string;
   ok: boolean;
   user?: TeamMember;
-  message?: string;
-  error?: string;
 };
 
-export function AccountManagementPage({
-  users: initialUsers,
-}: AccountManagementPageProps) {
-  const [createdAccounts, setCreatedAccounts] = useState<ManagedAccount[]>([]);
-  const [accountPatches, setAccountPatches] = useState<
-    Record<string, AccountPatch>
-  >({});
-  const [deletedAccountIds, setDeletedAccountIds] = useState<Set<string>>(
-    new Set(),
+type UserListResponse = {
+  data?: TeamMember[];
+  error?: string;
+  page?: number;
+  pageSize?: number;
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
+};
+
+export function AccountManagementPage({ data }: AccountManagementPageProps) {
+  const [accounts, setAccounts] = useState<ManagedAccount[]>(() =>
+    data.users.map(accountFromTeamMember),
   );
+  const [usersPagination, setUsersPagination] = useState(data.usersPagination);
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | StaffRole>("all");
-  const [page, setPage] = useState(1);
+  const [appFilter, setAppFilter] = useState("all");
+  const [loadingUsers, setLoadingUsers] = useState(false);
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<StaffRole>("Marketing");
+  const [appScope, setAppScope] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
+
   const [editAccount, setEditAccount] = useState<ManagedAccount | null>(null);
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editRole, setEditRole] = useState<StaffRole>("Marketing");
-  const [deleteAccount, setDeleteAccount] = useState<ManagedAccount | null>(
-    null,
-  );
+  const [editAppScope, setEditAppScope] = useState<string[]>([]);
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const [deleteAccount, setDeleteAccount] = useState<ManagedAccount | null>(null);
   const [deleteConfirmEmail, setDeleteConfirmEmail] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [togglingAccountId, setTogglingAccountId] = useState<string | null>(null);
 
-  const accounts = useMemo(
-    () =>
-      [...createdAccounts, ...initialUsers.map(accountFromTeamMember)]
-        .filter((account) => !deletedAccountIds.has(account.id))
-        .map((account) => ({
-          ...account,
-          ...(accountPatches[account.id] ?? {}),
-        })),
-    [accountPatches, createdAccounts, deletedAccountIds, initialUsers],
-  );
+  const appOptions = data.appOptions;
+  async function loadUsersPage(
+    page: number,
+    overrides?: {
+      appFilter?: string;
+      query?: string;
+      roleFilter?: "all" | StaffRole;
+    },
+  ) {
+    const nextQuery = overrides?.query ?? query;
+    const nextRoleFilter = overrides?.roleFilter ?? roleFilter;
+    const nextAppFilter = overrides?.appFilter ?? appFilter;
+    const nextSelectedApp =
+      nextAppFilter === "all"
+        ? null
+        : appOptions.find((app) => app.id === nextAppFilter) ?? null;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(accountPageSize),
+    });
+    const cleanedQuery = nextQuery.trim();
 
-  const search = query.trim().toLowerCase();
-  const filteredAccounts = useMemo(
-    () =>
-      accounts.filter((account) => {
-        const matchesRole = roleFilter === "all" || account.role === roleFilter;
-        const matchesSearch =
-          !search || searchAccount(account).includes(search);
+    if (cleanedQuery) params.set("search", cleanedQuery);
+    if (nextRoleFilter !== "all") params.set("role", nextRoleFilter);
+    if (nextSelectedApp) {
+      params.set("appScopeKey", nextSelectedApp.id);
+      params.set("storeScopeKey", nextSelectedApp.store_profile_id);
+    }
 
-        return matchesRole && matchesSearch;
-      }),
-    [accounts, roleFilter, search],
-  );
+    setLoadingUsers(true);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredAccounts.length / accountPageSize),
-  );
-  const currentPage = Math.min(page, totalPages);
-  const visibleRows = filteredAccounts.slice(
-    (currentPage - 1) * accountPageSize,
-    currentPage * accountPageSize,
-  );
+    try {
+      const response = await fetch(`/api/admin/users?${params.toString()}`);
+      const payload = (await response.json()) as UserListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Load users failed.");
+      }
+
+      setAccounts(payload.data.map(accountFromTeamMember));
+      setUsersPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? accountPageSize,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Load users failed.");
+    } finally {
+      setLoadingUsers(false);
+    }
+  }
+
+  async function mutateUser(
+    method: "DELETE" | "PATCH" | "POST",
+    body: Record<string, unknown>,
+  ) {
+    const response = await fetch("/api/admin/users", {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = (await response.json()) as UserMutationResponse;
+
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error ?? "User operation failed.");
+    }
+
+    return payload;
+  }
+
+  function resetCreateForm() {
+    setName("");
+    setEmail("");
+    setPassword("");
+    setRole("Marketing");
+    setAppScope([]);
+  }
 
   async function submitCreateAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -113,34 +177,27 @@ export function AccountManagementPage({
       return;
     }
 
+    if (role !== "Admin" && !appScope.length) {
+      toast.error("Select at least one app for this user.");
+      return;
+    }
+
     setCreating(true);
 
     try {
-      const response = await fetch("/api/admin/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: cleanEmail,
-          name: cleanName,
-          password,
-          role,
-        }),
+      const payload = await mutateUser("POST", {
+        appScope: role === "Admin" ? [] : appScope,
+        email: cleanEmail,
+        name: cleanName,
+        password,
+        role,
+        storeScope: [],
       });
-      const payload = (await response.json()) as CreateAccountResponse;
 
-      if (!response.ok || !payload.ok || !payload.user) {
-        throw new Error(payload.error ?? "Account could not be created.");
-      }
+      if (!payload.user) throw new Error("Created user was missing.");
 
-      setCreatedAccounts((current) => [
-        accountFromTeamMember(payload.user!),
-        ...current,
-      ]);
-      setName("");
-      setEmail("");
-      setPassword("");
-      setRole("Marketing");
-      setPage(1);
+      resetCreateForm();
+      await loadUsersPage(1);
       setDialogOpen(false);
       toast.success(payload.message ?? "Account created.");
     } catch (error) {
@@ -157,29 +214,57 @@ export function AccountManagementPage({
     setEditName(account.name);
     setEditEmail(account.email);
     setEditRole(account.role);
+    setEditAppScope(
+      account.role === "Admin"
+        ? []
+        : managedAppsForAccount(account, appOptions).map((app) => app.id),
+    );
   }
 
-  function saveEditAccount(event: FormEvent<HTMLFormElement>) {
+  async function saveEditAccount(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!editAccount) return;
+    if (!editAccount || savingEdit) return;
 
     const cleanName = editName.trim();
-    const cleanEmail = editEmail.trim().toLowerCase();
-    if (!cleanName || !cleanEmail) {
-      toast.error("Account name and email are required.");
+    if (!cleanName) {
+      toast.error("Account name is required.");
       return;
     }
 
-    setAccountPatches((current) => ({
-      ...current,
-      [editAccount.id]: {
+    if (editRole !== "Admin" && !editAppScope.length) {
+      toast.error("Select at least one app for this user.");
+      return;
+    }
+
+    setSavingEdit(true);
+
+    try {
+      const payload = await mutateUser("PATCH", {
+        appScope: editRole === "Admin" ? [] : editAppScope,
+        id: editAccount.id,
         name: cleanName,
-        email: cleanEmail,
         role: editRole,
-      },
-    }));
-    setEditAccount(null);
-    toast.success("Preview account updated.");
+        storeScope: [],
+      });
+
+      if (!payload.user) throw new Error("Updated user was missing.");
+
+      setAccounts((current) =>
+        current.map((account) =>
+          account.id === payload.user!.id
+            ? accountFromTeamMember(payload.user!)
+            : account,
+        ),
+      );
+      setEditAccount(null);
+      toast.success(payload.message ?? "Account updated.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Account could not be updated.",
+      );
+    } finally {
+      setSavingEdit(false);
+    }
   }
 
   function openDeleteAccount(account: ManagedAccount) {
@@ -192,8 +277,8 @@ export function AccountManagementPage({
     setDeleteConfirmEmail("");
   }
 
-  function confirmDeleteAccount() {
-    if (!deleteAccount) return;
+  async function confirmDeleteAccount() {
+    if (!deleteAccount || deleting) return;
 
     if (
       deleteConfirmEmail.trim().toLowerCase() !==
@@ -203,28 +288,58 @@ export function AccountManagementPage({
       return;
     }
 
-    setDeletedAccountIds((current) => {
-      const next = new Set(current);
-      next.add(deleteAccount.id);
-      return next;
-    });
-    closeDeleteAccount();
-    toast.success("Preview account deleted.");
+    setDeleting(true);
+    try {
+      const payload = await mutateUser("DELETE", { id: deleteAccount.id });
+      await loadUsersPage(
+        accounts.length <= 1 && usersPagination.page > 1
+          ? usersPagination.page - 1
+          : usersPagination.page,
+      );
+      closeDeleteAccount();
+      toast.success(payload.message ?? "Account deleted.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Account could not be deleted.",
+      );
+    } finally {
+      setDeleting(false);
+    }
   }
 
-  function toggleUserActive(account: ManagedAccount) {
+  async function toggleUserActive(account: ManagedAccount) {
+    if (togglingAccountId) return;
+
     const inactive = isInactiveUser(account);
-    setAccountPatches((current) => ({
-      ...current,
-      [account.id]: {
-        ...(current[account.id] ?? {}),
-        consoleStatus: inactive ? "active" : "disabled",
-        authStatus: inactive ? "confirmed" : "disabled",
-      },
-    }));
-    toast.success(
-      inactive ? "Preview account activated." : "Preview account deactivated.",
-    );
+    setTogglingAccountId(account.id);
+
+    try {
+      const payload = await mutateUser("PATCH", {
+        appScope: account.role === "Admin" ? [] : account.appScope,
+        id: account.id,
+        name: account.name,
+        role: account.role,
+        status: inactive ? "active" : "disabled",
+        storeScope: account.storeScope,
+      });
+
+      if (!payload.user) throw new Error("Updated user was missing.");
+
+      setAccounts((current) =>
+        current.map((item) =>
+          item.id === payload.user!.id ? accountFromTeamMember(payload.user!) : item,
+        ),
+      );
+      toast.success(
+        inactive ? "Account activated." : "Account deactivated.",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Account status could not be changed.",
+      );
+    } finally {
+      setTogglingAccountId(null);
+    }
   }
 
   return (
@@ -232,18 +347,27 @@ export function AccountManagementPage({
       <PageHeader
         eyebrow="General / User Management"
         title="User Management"
-        description="Manage users and Supabase Auth access."
+        description="Manage console access and assign app ownership."
         action={
           <CreateAccountDialog
+            appOptions={appOptions}
+            appScope={appScope}
             creating={creating}
             email={email}
             name={name}
             password={password}
+            onAppScopeChange={setAppScope}
             onEmailChange={setEmail}
             onNameChange={setName}
-            onOpenChange={setDialogOpen}
+            onOpenChange={(open) => {
+              setDialogOpen(open);
+              if (!open && !creating) resetCreateForm();
+            }}
             onPasswordChange={setPassword}
-            onRoleChange={setRole}
+            onRoleChange={(value) => {
+              setRole(value);
+              if (value === "Admin") setAppScope([]);
+            }}
             onSubmit={submitCreateAccount}
             open={dialogOpen}
             role={role}
@@ -253,11 +377,15 @@ export function AccountManagementPage({
 
       <Card className="rounded-lg">
         <CardHeader className="gap-4 border-b">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <CardTitle>Users</CardTitle>
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex items-center gap-2">
+              <CardTitle>Members</CardTitle>
+              <Badge variant="secondary">{usersPagination.total}</Badge>
+              {loadingUsers ? <Badge variant="outline">Loading</Badge> : null}
+            </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <label className="relative min-w-0 sm:w-72">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <label className="relative min-w-0 md:w-72">
                 <Search
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
                   size={15}
@@ -266,20 +394,22 @@ export function AccountManagementPage({
                   className="h-9 pl-9"
                   value={query}
                   onChange={(event) => {
-                    setQuery(event.target.value);
-                    setPage(1);
+                    const nextValue = event.target.value;
+                    setQuery(nextValue);
+                    void loadUsersPage(1, { query: nextValue });
                   }}
-                  placeholder="Search accounts..."
+                  placeholder="Search members..."
                 />
               </label>
               <Select
                 value={roleFilter}
                 onValueChange={(value) => {
-                  setRoleFilter(value as typeof roleFilter);
-                  setPage(1);
+                  const nextValue = value as typeof roleFilter;
+                  setRoleFilter(nextValue);
+                  void loadUsersPage(1, { roleFilter: nextValue });
                 }}
               >
-                <SelectTrigger className="h-9 w-full sm:w-36">
+                <SelectTrigger className="h-9 w-full md:w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -291,42 +421,72 @@ export function AccountManagementPage({
                   ))}
                 </SelectContent>
               </Select>
+              <Select
+                value={appFilter}
+                onValueChange={(value) => {
+                  setAppFilter(value);
+                  void loadUsersPage(1, { appFilter: value });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full md:w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All apps</SelectItem>
+                  {appOptions.map((app) => (
+                    <SelectItem key={app.id} value={app.id}>
+                      {app.app_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </CardHeader>
         <CardContent className="px-0">
           <UserTable
-            accounts={visibleRows}
+            accounts={accounts}
+            appOptions={appOptions}
             onDelete={openDeleteAccount}
             onEdit={openEditAccount}
             onToggleActive={toggleUserActive}
+            togglingAccountId={togglingAccountId}
           />
 
           <AccountTableFooter
-            currentPage={currentPage}
-            onPageChange={setPage}
-            shown={visibleRows.length}
-            total={filteredAccounts.length}
-            totalPages={totalPages}
+            currentPage={usersPagination.page}
+            onPageChange={(page) => void loadUsersPage(page)}
+            shown={accounts.length}
+            total={usersPagination.total}
+            totalPages={usersPagination.totalPages}
           />
         </CardContent>
       </Card>
 
       <EditAccountDrawer
         account={editAccount}
+        appOptions={appOptions}
+        appScope={editAppScope}
         email={editEmail}
         name={editName}
-        onEmailChange={setEditEmail}
+        onAppScopeChange={setEditAppScope}
         onNameChange={setEditName}
-        onOpenChange={(open) => !open && setEditAccount(null)}
-        onRoleChange={setEditRole}
+        onOpenChange={(open) => {
+          if (!open) setEditAccount(null);
+        }}
+        onRoleChange={(value) => {
+          setEditRole(value);
+          if (value === "Admin") setEditAppScope([]);
+        }}
         onSubmit={saveEditAccount}
         role={editRole}
+        saving={savingEdit}
       />
 
       <DeleteAccountDialog
         account={deleteAccount}
         confirmEmail={deleteConfirmEmail}
+        deleting={deleting}
         onConfirm={confirmDeleteAccount}
         onConfirmEmailChange={setDeleteConfirmEmail}
         onOpenChange={(open) => {

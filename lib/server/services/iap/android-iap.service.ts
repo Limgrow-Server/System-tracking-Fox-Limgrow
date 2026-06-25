@@ -1,29 +1,9 @@
 import "server-only";
 
-import {
-  getAndroidIapTransactions,
-  getAndroidStoreProfilesWithMappings,
-} from "@/lib/server/repositories/android/iap.repository";
 import type { IapAndroid, AndroidStoreProfile } from "@prisma/client";
 
 export type IapAndroidRecord = IapAndroid & {
   storeProfile: AndroidStoreProfile | null;
-};
-
-export type AndroidAppSummary = {
-  id: string;
-  appName: string;
-  packageName: string;
-  appIconUrl: string | null;
-  appLink: string | null;
-};
-
-export type AndroidStoreProfileSummary = {
-  id: string;
-  storeAccountName: string;
-  avatarUrl: string | null;
-  linkStore: string | null;
-  apps: AndroidAppSummary[];
 };
 
 export type IapAndroidDto = {
@@ -82,27 +62,4 @@ export function iapAndroidToDto(tx: IapAndroidRecord): IapAndroidDto {
     updatedAt: tx.updatedAt.toISOString(),
     storeAccountName: tx.storeProfile?.storeAccountName ?? null,
   };
-}
-
-export async function getAndroidIapDtos(options?: { take?: number }) {
-  const transactions = await getAndroidIapTransactions(options);
-  return transactions.map(iapAndroidToDto);
-}
-
-export async function getAndroidStoreProfileSummaries(): Promise<AndroidStoreProfileSummary[]> {
-  const profiles = await getAndroidStoreProfilesWithMappings();
-  
-  return profiles.map((p) => ({
-    id: p.id,
-    storeAccountName: p.storeAccountName,
-    avatarUrl: p.avatarUrl,
-    linkStore: p.linkStore,
-    apps: p.mappings.map((m) => ({
-      id: m.id,
-      appName: m.appName,
-      packageName: m.packageName,
-      appIconUrl: m.appIconUrl,
-      appLink: m.appLink,
-    })),
-  }));
 }

@@ -1,10 +1,27 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowLeft, ChevronRight, Eye, History, MessageSquareText, RefreshCw } from "lucide-react";
+import { ArrowLeft, BarChart3, ChevronRight, Eye, History, MessageSquareText, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  LabelList,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
-import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
+import {
+  PageHeader,
+  StatusBadge,
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,17 +29,15 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
-import type { NotificationsPageData } from "@/lib/tracking/page-data";
+import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
 import type { DeviceToken, NotificationEvent, NotificationJob } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
 import {
   ALL_FILTER_VALUE,
-  DeliveryDashboard,
-  PlatformIcon,
+  PlatformBadge,
   RecordFilterControls,
   jobFailedCount,
-  jobMatchesApp,
   jobRequestedCount,
   jobSuccessRate,
   localePayloadForRows,
@@ -35,10 +50,8 @@ import {
   notificationUniqueOpenCount,
   notificationUniqueReceivedCount,
   numberLabel,
-  platformLabel,
   primaryLocaleRow,
   rateLabel,
-  valuesMatchSearch,
 } from "./shared";
 
 type SentContent = {
@@ -50,12 +63,38 @@ type SentContent = {
 type DeliveryRow = {
   content: SentContent;
   event: NotificationEvent;
+  events: NotificationEvent[];
   fcmErrorCode: string | null;
   fcmToken: string | null;
   invalidToken: boolean;
   metadata: Record<string, unknown>;
+  status: "failed" | "opened" | "sent";
   token: DeviceToken | null;
   topicCode: string | null;
+};
+
+type HistoryJobsResponse = {
+  data?: NotificationJob[];
+  error?: string;
+  notificationEvents?: NotificationEvent[];
+  page?: number;
+  pageSize?: number;
+  storeOptions?: string[];
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
+};
+
+type HistoryEventsResponse = {
+  data?: NotificationEvent[];
+  error?: string;
+  notificationEvents?: NotificationEvent[];
+  notificationJobs?: NotificationJob[];
+  page?: number;
+  pageSize?: number;
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
 };
 
 function metadataRecord(metadata: unknown) {
@@ -108,6 +147,53 @@ function eventLogDetail(event: NotificationEvent) {
     ?? "No log detail";
 }
 
+function eventText(event: NotificationEvent) {
+  return [event.event_type, event.status, event.error_code]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function eventDeliveryStatus(event: NotificationEvent): DeliveryRow["status"] {
+  const text = eventText(event);
+  if (text.includes("open") || text.includes("click") || text.includes("tap")) {
+    return "opened";
+  }
+  if (
+    text.includes("fail") ||
+    text.includes("error") ||
+    Boolean(event.error_code) ||
+    Boolean(event.error_detail)
+  ) {
+    return "failed";
+  }
+
+  return "sent";
+}
+
+function deliveryStatusRank(status: DeliveryRow["status"]) {
+  if (status === "opened") return 3;
+  if (status === "failed") return 2;
+  return 1;
+}
+
+function newerEvent(left: NotificationEvent, right: NotificationEvent) {
+  return new Date(right.created_at).getTime() > new Date(left.created_at).getTime()
+    ? right
+    : left;
+}
+
+function betterDeliveryEvent(left: NotificationEvent, right: NotificationEvent) {
+  const leftStatus = eventDeliveryStatus(left);
+  const rightStatus = eventDeliveryStatus(right);
+  const leftRank = deliveryStatusRank(leftStatus);
+  const rightRank = deliveryStatusRank(rightStatus);
+
+  if (rightRank > leftRank) return right;
+  if (rightRank < leftRank) return left;
+  return newerEvent(left, right);
+}
+
 function sentContentForTopic(
   rows: Array<{ message: string; title: string; topicCode: string }>,
   job: NotificationJob,
@@ -130,6 +216,195 @@ function metadataJson(metadata: Record<string, unknown>) {
   return keys.length ? JSON.stringify(metadata, null, 2) : "{}";
 }
 
+function deliveryRowKey(row: DeliveryRow) {
+  return [
+    row.fcmToken,
+    metadataString(row.event, "deviceTokenId"),
+    row.token?.id,
+    row.event.device_id,
+    row.event.target_value,
+    row.event.provider_message_id,
+    row.event.id,
+  ].find((value) => value && value.trim())!;
+}
+
+function mergeDeliveryRows(left: DeliveryRow, right: DeliveryRow): DeliveryRow {
+  const event = betterDeliveryEvent(left.event, right.event);
+  const source = event.id === right.event.id ? right : left;
+  const events = [...left.events, ...right.events].sort(
+    (first, second) =>
+      new Date(second.created_at).getTime() - new Date(first.created_at).getTime(),
+  );
+
+  return {
+    ...left,
+    content: source.content,
+    event,
+    events,
+    fcmErrorCode: source.fcmErrorCode ?? left.fcmErrorCode,
+    fcmToken: left.fcmToken ?? right.fcmToken,
+    invalidToken: left.invalidToken || right.invalidToken,
+    metadata: source.metadata,
+    status: eventDeliveryStatus(event),
+    token: left.token ?? right.token,
+    topicCode: source.topicCode ?? left.topicCode,
+  };
+}
+
+function aggregateDeliveryRows(rows: DeliveryRow[]) {
+  const byTarget = new Map<string, DeliveryRow>();
+
+  for (const row of rows) {
+    const key = deliveryRowKey(row);
+    const current = byTarget.get(key);
+    byTarget.set(key, current ? mergeDeliveryRows(current, row) : row);
+  }
+
+  return Array.from(byTarget.values()).sort(
+    (first, second) =>
+      new Date(second.event.created_at).getTime() -
+      new Date(first.event.created_at).getTime(),
+  );
+}
+
+function percent(value: number, total: number) {
+  if (!total) return 0;
+  return Math.min(100, Math.round((value / total) * 100));
+}
+
+function niceChartMax(value: number) {
+  if (value <= 5) return 5;
+  if (value <= 10) return 10;
+  const step = value <= 50 ? 5 : value <= 100 ? 10 : 25;
+  return Math.ceil(value / step) * step;
+}
+
+function HistoryJobDashboard({
+  failed,
+  impressions,
+  opened,
+  received,
+  requested,
+  rows,
+  sent,
+}: {
+  failed: number;
+  impressions: number;
+  opened: number;
+  received: number;
+  requested: number;
+  rows: DeliveryRow[];
+  sent: number;
+}) {
+  const finalSent = rows.filter((row) => row.status === "sent").length;
+  const finalOpened = rows.filter((row) => row.status === "opened").length;
+  const finalFailed = rows.filter((row) => row.status === "failed").length;
+  const totalTargets = Math.max(requested, rows.length, sent + failed);
+  const bars = [
+    { color: "#c7d137", label: "Requested", value: requested },
+    { color: "#54b8be", label: "Sent", value: sent },
+    { color: "#255f76", label: "Received", value: received },
+    { color: "#ef5965", label: "Impressions", value: impressions },
+    { color: "#f7b933", label: "Opened", value: opened },
+    { color: "#8b73aa", label: "Failed", value: failed },
+  ].map((item) => ({
+    ...item,
+    percent: percent(item.value, totalTargets),
+  }));
+  const maxBarValue = niceChartMax(Math.max(1, ...bars.map((item) => item.value)));
+  const finalStatuses = [
+    { label: "Sent only", status: "sent", value: finalSent },
+    { label: "Opened", status: "opened", value: finalOpened },
+    { label: "Failed", status: "failed", value: finalFailed },
+  ] as const;
+
+  return (
+    <section className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_18rem]">
+      <div className="rounded-xl border bg-background">
+        <div className="border-b bg-muted/20 p-4">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <BarChart3 size={16} />
+            Delivery breakdown
+          </CardTitle>
+          <CardDescription className="text-xs">
+            One send job, grouped by final token state.
+          </CardDescription>
+        </div>
+        <div className="p-4">
+          <div className="overflow-x-auto rounded-lg border bg-white p-4 shadow-inner dark:bg-background">
+            <div className="h-[340px] min-w-[760px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={bars}
+                  barCategoryGap="30%"
+                  margin={{ bottom: 6, left: 2, right: 14, top: 18 }}
+                >
+                  <CartesianGrid stroke="#9ca3af" strokeDasharray="4 6" vertical={false} />
+                  <XAxis
+                    axisLine={{ stroke: "#6b7280", strokeWidth: 2 }}
+                    dataKey="label"
+                    interval={0}
+                    tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    domain={[0, maxBarValue]}
+                    tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                    tickCount={6}
+                    tickFormatter={(value) => numberLabel(Number(value))}
+                    tickLine={false}
+                    width={52}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: "hsl(var(--background))",
+                      border: "1px solid hsl(var(--border))",
+                      borderRadius: "8px",
+                      boxShadow: "0 12px 30px rgb(15 23 42 / 0.12)",
+                      fontSize: "12px",
+                    }}
+                    formatter={(value, name, item) => [
+                      `${numberLabel(Number(value))} (${item.payload.percent}%)`,
+                      name === "value" ? "Count" : String(name),
+                    ]}
+                    labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
+                  />
+                  <Bar dataKey="value" radius={[2, 2, 0, 0]}>
+                    {bars.map((item) => (
+                      <Cell key={item.label} fill={item.color} opacity={0.92} />
+                    ))}
+                    <LabelList
+                      dataKey="value"
+                      formatter={(value: unknown) => numberLabel(Number(value))}
+                      position="top"
+                      style={{ fill: "hsl(var(--foreground))", fontFamily: "monospace", fontSize: 13, fontWeight: 600 }}
+                    />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+        {finalStatuses.map((item) => (
+          <div key={item.status} className="rounded-xl border bg-background p-4">
+            <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
+            <div className="mt-2 font-mono text-2xl font-semibold tabular-nums">
+              {numberLabel(item.value)}
+            </div>
+            <div className="mt-2">
+              <StatusBadge status={item.status} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function NotificationHistoryPage({
   data,
   historyJobId,
@@ -142,55 +417,58 @@ export function NotificationHistoryPage({
   const router = useRouter();
   const platformApps = useMemo(() => data.storeMappings, [data.storeMappings]);
   const resolvedInitialAppId = platformApps.find((app) => app.id === initialAppId)?.id ?? "";
+  const [notificationJobs, setNotificationJobs] = useState(data.notificationJobs);
+  const [notificationEvents, setNotificationEvents] = useState(
+    data.notificationEvents,
+  );
+  const [deliveryEvents, setDeliveryEvents] = useState(
+    data.notificationDeliveryEvents.length
+      ? data.notificationDeliveryEvents
+      : data.notificationEvents,
+  );
+  const [historyPagination, setHistoryPagination] = useState<PaginationMeta>(
+    data.notificationPagination.historyJobs ?? {
+      page: 1,
+      pageSize: 10,
+      total: data.notificationJobs.length,
+      totalPages: 1,
+    },
+  );
+  const [deliveryPagination, setDeliveryPagination] = useState<PaginationMeta>(
+    data.notificationPagination.deliveryEvents ?? {
+      page: 1,
+      pageSize: 10,
+      total: data.notificationDeliveryEvents.length || data.notificationEvents.length,
+      totalPages: 1,
+    },
+  );
+  const [storeFilterOptions, setStoreFilterOptions] = useState(
+    data.notificationStoreOptions,
+  );
+  const [loadingHistoryJobs, setLoadingHistoryJobs] = useState(false);
+  const [loadingDeliveryEvents, setLoadingDeliveryEvents] = useState(false);
   const [recordSearch, setRecordSearch] = useState("");
   const [recordAppFilter, setRecordAppFilter] = useState(resolvedInitialAppId || ALL_FILTER_VALUE);
   const [recordStoreFilter, setRecordStoreFilter] = useState(ALL_FILTER_VALUE);
   const [selectedDeliveryEventId, setSelectedDeliveryEventId] = useState<string | null>(null);
 
-  const storeFilterOptions = useMemo(
-    () =>
-      Array.from(new Set(platformApps.flatMap((app) => (app.store_account_name ? [app.store_account_name] : []))))
-        .sort((first, second) => first.localeCompare(second)),
-    [platformApps]
-  );
-
-  const historyListJobs = useMemo(() => {
-    const filterApp = recordAppFilter === ALL_FILTER_VALUE
-      ? null
-      : platformApps.find((app) => app.id === recordAppFilter) ?? null;
-
-    return data.notificationJobs.filter((job) => {
-      if (filterApp && !jobMatchesApp(job, filterApp)) return false;
-      if (recordStoreFilter !== ALL_FILTER_VALUE && job.store_account_name !== recordStoreFilter) return false;
-      return valuesMatchSearch([
-        job.app_name,
-        job.app_id,
-        job.store_account_name,
-        job.package_name,
-        job.bundle_id,
-        job.platform,
-        job.status,
-        job.topic_base,
-        job.id,
-      ], recordSearch);
-    });
-  }, [data.notificationJobs, platformApps, recordAppFilter, recordSearch, recordStoreFilter]);
+  const historyListJobs = notificationJobs;
 
   const eventsByJobId = useMemo(() => {
     const byJobId = new Map<string, NotificationEvent[]>();
-    data.notificationEvents.forEach((event) => {
+    notificationEvents.forEach((event) => {
       if (!event.job_id) return;
       const current = byJobId.get(event.job_id) ?? [];
       current.push(event);
       byJobId.set(event.job_id, current);
     });
     return byJobId;
-  }, [data.notificationEvents]);
+  }, [notificationEvents]);
 
-  const historyDetailJob = historyJobId ? data.notificationJobs.find((job) => job.id === historyJobId) ?? null : null;
+  const historyDetailJob = historyJobId ? notificationJobs.find((job) => job.id === historyJobId) ?? null : null;
   const historyDetailEvents = useMemo(
-    () => historyDetailJob ? data.notificationEvents.filter((event) => event.job_id === historyDetailJob.id) : [],
-    [data.notificationEvents, historyDetailJob]
+    () => historyDetailJob ? notificationEvents.filter((event) => event.job_id === historyDetailJob.id) : [],
+    [notificationEvents, historyDetailJob]
   );
   const historyDetailRequested = historyDetailJob ? jobRequestedCount(historyDetailJob) : 0;
   const historyDetailFailed = historyDetailJob ? jobFailedCount(historyDetailJob) : 0;
@@ -222,13 +500,13 @@ export function NotificationHistoryPage({
     ? sentContentForTopic(historyContentRows, historyDetailJob, null)
     : null;
   const historyDeliveryEvents = useMemo(
-    () => historyDetailEvents
+    () => deliveryEvents
       .filter((event) => event.target_type === "device" || event.device_id || event.event_type.startsWith("fcm_"))
       .sort((first, second) => new Date(second.created_at).getTime() - new Date(first.created_at).getTime()),
-    [historyDetailEvents]
+    [deliveryEvents]
   );
   const historyDeliveryRows: DeliveryRow[] = historyDetailJob
-    ? historyDeliveryEvents.map((event) => {
+    ? aggregateDeliveryRows(historyDeliveryEvents.map((event) => {
       const token = tokenForEvent(event, historyDetailJob, deviceTokensById, deviceTokensByDeviceId);
       const metadata = metadataRecord(event.metadata);
       const topicCode = metadataString(event, "topicCode");
@@ -236,18 +514,111 @@ export function NotificationHistoryPage({
       return {
         content: sentContentForTopic(historyContentRows, historyDetailJob, topicCode),
         event,
+        events: [event],
         fcmErrorCode: metadataString(event, "fcmErrorCode"),
         fcmToken: metadataString(event, "fcmToken") ?? token?.fcm_token ?? null,
         invalidToken: metadata.invalidToken === true,
         metadata,
+        status: eventDeliveryStatus(event),
         token,
         topicCode,
       };
-    })
+    }))
     : [];
   const selectedDeliveryRow = selectedDeliveryEventId
     ? historyDeliveryRows.find((row) => row.event.id === selectedDeliveryEventId) ?? null
     : null;
+
+  async function loadHistoryJobsPage(
+    page: number,
+    overrides?: {
+      appFilter?: string;
+      search?: string;
+      storeFilter?: string;
+    },
+  ) {
+    const nextSearch = overrides?.search ?? recordSearch;
+    const nextAppFilter = overrides?.appFilter ?? recordAppFilter;
+    const nextStoreFilter = overrides?.storeFilter ?? recordStoreFilter;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: "10",
+    });
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextAppFilter !== ALL_FILTER_VALUE) params.set("appId", nextAppFilter);
+    if (nextStoreFilter !== ALL_FILTER_VALUE) params.set("store", nextStoreFilter);
+
+    setLoadingHistoryJobs(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/history-jobs?${params.toString()}`,
+      );
+      const payload = (await response.json()) as HistoryJobsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Notification history could not be loaded.");
+      }
+
+      setNotificationJobs(payload.data);
+      setNotificationEvents(payload.notificationEvents ?? []);
+      setHistoryPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.storeOptions) setStoreFilterOptions(payload.storeOptions);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Notification history could not be loaded.",
+      );
+    } finally {
+      setLoadingHistoryJobs(false);
+    }
+  }
+
+  async function loadDeliveryEventsPage(page: number) {
+    if (!historyJobId) return;
+
+    const params = new URLSearchParams({
+      jobId: historyJobId,
+      page: String(page),
+      pageSize: "10",
+    });
+
+    setLoadingDeliveryEvents(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/history-events?${params.toString()}`,
+      );
+      const payload = (await response.json()) as HistoryEventsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Delivery events could not be loaded.");
+      }
+
+      setDeliveryEvents(payload.data);
+      if (payload.notificationEvents) setNotificationEvents(payload.notificationEvents);
+      if (payload.notificationJobs) setNotificationJobs(payload.notificationJobs);
+      setDeliveryPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Delivery events could not be loaded.",
+      );
+    } finally {
+      setLoadingDeliveryEvents(false);
+    }
+  }
 
   const pageTitle = historyJobId ? "Notification detail" : "Notification history";
   const pageDescription = historyJobId
@@ -272,7 +643,7 @@ export function NotificationHistoryPage({
                   Send history
                 </div>
                 <div className="text-sm text-muted-foreground">
-                  {historyListJobs.length} send job(s). Open a row to view the dashboard.
+                  {historyPagination.total} send job(s). Open a row to view the dashboard.
                 </div>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
@@ -283,9 +654,18 @@ export function NotificationHistoryPage({
             <RecordFilterControls
               apps={platformApps}
               appFilter={recordAppFilter}
-              onAppFilterChange={setRecordAppFilter}
-              onSearchChange={setRecordSearch}
-              onStoreFilterChange={setRecordStoreFilter}
+              onAppFilterChange={(value) => {
+                setRecordAppFilter(value);
+                void loadHistoryJobsPage(1, { appFilter: value });
+              }}
+              onSearchChange={(value) => {
+                setRecordSearch(value);
+                void loadHistoryJobsPage(1, { search: value });
+              }}
+              onStoreFilterChange={(value) => {
+                setRecordStoreFilter(value);
+                void loadHistoryJobsPage(1, { storeFilter: value });
+              }}
               placeholder="Search job, app, package, bundle, store..."
               search={recordSearch}
               storeFilter={recordStoreFilter}
@@ -330,10 +710,7 @@ export function NotificationHistoryPage({
                         <TableCell className="max-w-96">
                           <div className="flex min-w-0 items-center gap-2">
                             <div className="truncate font-medium">{job.app_name}</div>
-                            <Badge variant="secondary" className="h-6 shrink-0 gap-1.5 rounded-md px-2 text-xs">
-                              <PlatformIcon platform={job.platform} />
-                              {platformLabel(job.platform)}
-                            </Badge>
+                            <PlatformBadge platform={job.platform} className="shrink-0" />
                           </div>
                           <div className="mt-1 truncate text-xs text-muted-foreground">
                             {job.app_id ?? job.package_name ?? job.bundle_id ?? job.topic_base}
@@ -373,11 +750,27 @@ export function NotificationHistoryPage({
                     );
                   })
                 ) : (
-                  <TableEmptyState colSpan={9} icon={History} title="No send jobs" description="Send attempts will appear here after a notification is sent." />
+                  <TableEmptyState
+                    colSpan={9}
+                    icon={History}
+                    title={loadingHistoryJobs ? "Loading send jobs" : "No send jobs"}
+                    description={
+                      loadingHistoryJobs
+                        ? "The current page is being loaded."
+                        : "Send attempts will appear here after a notification is sent."
+                    }
+                  />
                 )}
               </TableBody>
             </Table>
           </div>
+          <TablePaginationFooter
+            onPageChange={(page) => void loadHistoryJobsPage(page)}
+            page={historyPagination.page}
+            shown={historyListJobs.length}
+            total={historyPagination.total}
+            totalPages={historyPagination.totalPages}
+          />
         </section>
       ) : null}
 
@@ -396,10 +789,7 @@ export function NotificationHistoryPage({
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="font-heading text-lg font-semibold">{historyDetailJob.app_name}</h2>
                       <StatusBadge status={notificationJobBadgeStatus(historyDetailJob)} />
-                      <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                        <PlatformIcon platform={historyDetailJob.platform} />
-                        {platformLabel(historyDetailJob.platform)}
-                      </Badge>
+                      <PlatformBadge platform={historyDetailJob.platform} />
                     </div>
                     <div className="mt-1 truncate text-sm text-muted-foreground">
                       {historyDetailJob.package_name ?? historyDetailJob.bundle_id ?? historyDetailJob.topic_base}
@@ -473,9 +863,14 @@ export function NotificationHistoryPage({
                     <TabsTrigger value="tokens">FCM tokens</TabsTrigger>
                   </TabsList>
                   <TabsContent value="dashboard" className="m-0">
-                    <DeliveryDashboard
-                      events={historyDetailEvents}
-                      jobs={[historyDetailJob]}
+                    <HistoryJobDashboard
+                      failed={historyDetailFailed}
+                      impressions={historyDetailImpressionEvents}
+                      opened={historyDetailOpenEvents}
+                      received={historyDetailReceivedEvents}
+                      requested={historyDetailRequested}
+                      rows={historyDeliveryRows}
+                      sent={historyDetailSent}
                     />
                   </TabsContent>
                   <TabsContent value="tokens" className="m-0">
@@ -486,7 +881,7 @@ export function NotificationHistoryPage({
                           FCM tokens sent
                         </div>
                         <div className="mt-1 text-sm text-muted-foreground">
-                          {historyDeliveryRows.length} event(s) for this send job. Open Detail to view the full provider log and metadata.
+                          {deliveryPagination.total} token(s) for this send job. Open Detail to view the latest provider log and metadata.
                         </div>
                       </div>
                       <div className="overflow-auto">
@@ -526,10 +921,11 @@ export function NotificationHistoryPage({
                                   </TableCell>
                                   <TableCell>
                                     <div className="font-mono text-xs">{row.event.event_type}</div>
+                                    <div className="mt-1 text-xs text-muted-foreground">{row.events.length} event(s)</div>
                                     {row.topicCode ? <div className="mt-1 text-xs text-muted-foreground">topic {row.topicCode}</div> : null}
                                   </TableCell>
                                   <TableCell>
-                                    <StatusBadge status={row.event.status ?? "unknown"} />
+                                    <StatusBadge status={row.status} />
                                   </TableCell>
                                   <TableCell className="max-w-52">
                                     <div className="truncate font-mono text-xs">{row.event.provider_message_id ?? "No provider id"}</div>
@@ -550,11 +946,27 @@ export function NotificationHistoryPage({
                                 </TableRow>
                               ))
                             ) : (
-                              <TableEmptyState colSpan={8} icon={History} title="No delivery events" description="FCM send and mobile delivery events for this job will appear here." />
+                              <TableEmptyState
+                                colSpan={8}
+                                icon={History}
+                                title={loadingDeliveryEvents ? "Loading delivery events" : "No delivery events"}
+                                description={
+                                  loadingDeliveryEvents
+                                    ? "The current page is being loaded."
+                                    : "FCM send and mobile delivery events for this job will appear here."
+                                }
+                              />
                             )}
                           </TableBody>
                         </Table>
                       </div>
+                      <TablePaginationFooter
+                        onPageChange={(page) => void loadDeliveryEventsPage(page)}
+                        page={deliveryPagination.page}
+                        shown={historyDeliveryRows.length}
+                        total={deliveryPagination.total}
+                        totalPages={deliveryPagination.totalPages}
+                      />
                     </section>
                   </TabsContent>
                 </Tabs>
@@ -565,7 +977,7 @@ export function NotificationHistoryPage({
                       <DialogHeader className="border-b px-4 py-3 pr-12">
                         <DialogTitle className="text-base">FCM send log detail</DialogTitle>
                         <DialogDescription className="text-xs">
-                          Token, status, provider response, sent content, and stored metadata for this notification event.
+                          Token, final status, provider response, sent content, and stored metadata for this notification target.
                         </DialogDescription>
                       </DialogHeader>
                       <div className="max-h-[calc(86dvh-5rem)] space-y-4 overflow-auto p-4">
@@ -608,12 +1020,13 @@ export function NotificationHistoryPage({
                           <div className="rounded-md border bg-muted/15 p-3">
                             <div className="text-xs text-muted-foreground">Status</div>
                             <div className="mt-2">
-                              <StatusBadge status={selectedDeliveryRow.event.status ?? "unknown"} />
+                              <StatusBadge status={selectedDeliveryRow.status} />
                             </div>
                           </div>
                           <div className="rounded-md border bg-muted/15 p-3">
                             <div className="text-xs text-muted-foreground">Event</div>
                             <div className="mt-1 font-mono text-xs">{selectedDeliveryRow.event.event_type}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">{selectedDeliveryRow.events.length} event(s) grouped</div>
                           </div>
                           <div className="rounded-md border bg-muted/15 p-3">
                             <div className="text-xs text-muted-foreground">Time</div>

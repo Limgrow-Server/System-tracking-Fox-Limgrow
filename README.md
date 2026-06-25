@@ -290,6 +290,8 @@ supabase functions deploy device-token-ios --project-ref <project-ref>
 supabase functions deploy dispatch-notifications --project-ref <project-ref>
 supabase functions deploy notification-event --project-ref <project-ref>
 supabase functions deploy send-notification --project-ref <project-ref>
+supabase functions deploy device-token-android --project-ref <project-ref> --no-verify-jwt
+supabase functions deploy device-token-ios --project-ref <project-ref> --no-verify-jwt
 supabase functions deploy verify-android --project-ref <project-ref>
 supabase functions deploy verify-ios --project-ref <project-ref>
 ```

@@ -15,6 +15,7 @@ import {
   deleteIosCredential,
   deleteIosCredentialsByIds,
   getCurrentIosCredentialForStorePurpose,
+  getIosCredentialGroupsPage,
   getIosCredentials,
   getIosCredentialsByIds,
   getIosCredentialTarget,
@@ -26,6 +27,7 @@ import {
   upsertIosStoreProfile,
 } from "@/lib/server/repositories/ios/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import {
   deleteCredentialVaultSecret,
   getCredentialVaultSecret,
@@ -71,6 +73,19 @@ export async function getIosCredentialConfigs(take = 200) {
   return {
     credentials: credentials.map(iosCredentialToMetadata),
   };
+}
+
+export async function getIosCredentialConfigsPage(options: PaginationQuery & {
+  search?: string;
+}) {
+  const [profiles, total] = await getIosCredentialGroupsPage({
+    search: options.search,
+    skip: options.skip,
+    take: options.take,
+  });
+  const credentials = profiles.flatMap((profile) => profile.credentials);
+
+  return paginatedResult(credentials.map(iosCredentialToMetadata), total, options);
 }
 
 export async function getIosCredentialSecret(input: {

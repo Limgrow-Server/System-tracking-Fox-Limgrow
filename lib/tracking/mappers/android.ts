@@ -6,7 +6,9 @@ import type {
 
 import type { AndroidCredential, AndroidStoreMapping } from "@prisma/client";
 
-export type AndroidStoreMappingRecord = AndroidStoreMapping;
+export type AndroidStoreMappingRecord = AndroidStoreMapping & {
+  storeProfile?: { storeAccountName: string } | null;
+};
 export type AndroidCredentialRecord = AndroidCredential;
 
 export function androidStoreMappingToTracking(mapping: AndroidStoreMappingRecord): StoreMapping {
@@ -14,7 +16,7 @@ export function androidStoreMappingToTracking(mapping: AndroidStoreMappingRecord
     id: mapping.id,
     store_profile_id: mapping.storeProfileId,
     store_platform: "google_play",
-    store_account_name: mapping.storeAccountName,
+    store_account_name: mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
     app_id: mapping.appId,
     app_name: mapping.appName,
     app_icon_url: mapping.appIconUrl,

@@ -29,9 +29,11 @@ import {
   EmptyPanel,
   PageHeader,
   StatusBadge,
+  TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
 import type {
+  PaginationMeta,
   ReplyConfigPageData,
   ReviewAppCard,
   ReviewReplyTemplateDto,
@@ -66,6 +68,17 @@ type SaveStoreInfoResponse = {
   };
 };
 
+type ReplyStoreAppsResponse = {
+  data?: ReviewAppCard[];
+  error?: string;
+  page?: number;
+  pageSize?: number;
+  success?: boolean;
+  templatesByMappingId?: Record<string, ReviewReplyTemplateDto[]>;
+  total?: number;
+  totalPages?: number;
+};
+
 function defaultTemplates(storeMappingId: string): ReviewReplyTemplateDto[] {
   return RATINGS.map((rating) => ({
     id: null,
@@ -78,13 +91,20 @@ function defaultTemplates(storeMappingId: string): ReviewReplyTemplateDto[] {
   }));
 }
 
-function initialDrafts(data: ReplyConfigPageData): DraftTemplates {
+function draftsForApps(
+  apps: ReviewAppCard[],
+  templatesByMappingId: Record<string, ReviewReplyTemplateDto[]>,
+): DraftTemplates {
   return Object.fromEntries(
-    data.apps.map((app) => [
+    apps.map((app) => [
       app.mappingId,
-      data.templatesByMappingId[app.mappingId] ?? defaultTemplates(app.mappingId),
+      templatesByMappingId[app.mappingId] ?? defaultTemplates(app.mappingId),
     ]),
   );
+}
+
+function initialDrafts(data: ReplyConfigPageData): DraftTemplates {
+  return draftsForApps(data.apps, data.templatesByMappingId);
 }
 
 function ratingLabel(rating: number) {
@@ -284,7 +304,13 @@ function TemplateEditor({
 }
 
 export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
-  const [search, setSearch] = useState("");
+  const [apps, setApps] = useState(data.apps);
+  const [appPagination, setAppPagination] =
+    useState<PaginationMeta>(data.appPagination);
+  const [templatesByMappingId, setTemplatesByMappingId] = useState(
+    data.templatesByMappingId,
+  );
+  const [search, setSearch] = useState(data.filters.search);
   const [selectedAppId, setSelectedAppId] = useState(
     data.apps[0]?.mappingId ?? "",
   );
@@ -298,24 +324,55 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
   );
   const [saving, setSaving] = useState(false);
   const [savingStoreInfo, setSavingStoreInfo] = useState(false);
+  const [loadingApps, setLoadingApps] = useState(false);
 
   const selectedApp = useMemo(
-    () => data.apps.find((app) => app.mappingId === selectedAppId) ?? null,
-    [data.apps, selectedAppId],
+    () => apps.find((app) => app.mappingId === selectedAppId) ?? null,
+    [apps, selectedAppId],
   );
   const selectedTemplates = selectedApp
     ? drafts[selectedApp.mappingId] ?? defaultTemplates(selectedApp.mappingId)
     : [];
-  const filteredApps = useMemo(() => {
-    const query = search.toLowerCase();
 
-    return data.apps.filter(
-      (app) =>
-        !query ||
-        app.appName.toLowerCase().includes(query) ||
-        app.identifier.toLowerCase().includes(query),
-    );
-  }, [data.apps, search]);
+  async function loadAppsPage(page: number, nextSearch = search) {
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: "10",
+      storeProfileId: data.store.storeProfileId,
+    });
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+
+    setLoadingApps(true);
+
+    try {
+      const response = await fetch(`/api/reply/store-apps?${params.toString()}`);
+      const payload = (await response.json()) as ReplyStoreAppsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Reply apps could not be loaded.");
+      }
+
+      const nextTemplates = payload.templatesByMappingId ?? {};
+      setApps(payload.data);
+      setAppPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      setTemplatesByMappingId(nextTemplates);
+      setDrafts(draftsForApps(payload.data, nextTemplates));
+      setSelectedAppId(payload.data[0]?.mappingId ?? "");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Reply apps could not be loaded.",
+      );
+    } finally {
+      setLoadingApps(false);
+    }
+  }
+
   function updateTemplate(
     rating: number,
     patch: Partial<Pick<ReviewReplyTemplateDto, "replyText" | "isActive">>,
@@ -341,7 +398,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
     setDrafts((current) => ({
       ...current,
       [selectedApp.mappingId]:
-        data.templatesByMappingId[selectedApp.mappingId] ??
+        templatesByMappingId[selectedApp.mappingId] ??
         defaultTemplates(selectedApp.mappingId),
     }));
     toast.success("Reply templates reset.");
@@ -420,6 +477,10 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         ...current,
         [selectedApp.mappingId]: payload.templates!,
       }));
+      setTemplatesByMappingId((current) => ({
+        ...current,
+        [selectedApp.mappingId]: payload.templates!,
+      }));
       toast.success(payload.message ?? "Reply templates saved.");
     } catch (error) {
       toast.error(
@@ -432,7 +493,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
     }
   }
 
-  if (!data.apps.length) {
+  if (data.appPagination.total === 0) {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6">
         <PageHeader
@@ -558,11 +619,15 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
                 value={search}
                 className="pl-8"
                 placeholder="Search apps..."
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setSearch(nextValue);
+                  void loadAppsPage(1, nextValue);
+                }}
               />
             </div>
             <div className="max-h-[56rem] space-y-2 overflow-y-auto pr-1">
-              {filteredApps.map((app) => (
+              {apps.map((app) => (
                 <AppListItem
                   key={app.mappingId}
                   app={app}
@@ -570,15 +635,26 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
                   onSelect={() => setSelectedAppId(app.mappingId)}
                 />
               ))}
-              {!filteredApps.length ? (
+              {!apps.length ? (
                 <EmptyPanel
                   icon={Search}
-                  title="No apps found"
-                  description="No mapped Android app matches the current search."
+                  title={loadingApps ? "Loading apps" : "No apps found"}
+                  description={
+                    loadingApps
+                      ? "The current page is being loaded."
+                      : "No mapped Android app matches the current search."
+                  }
                   className="rounded-lg border"
                 />
               ) : null}
             </div>
+            <TablePaginationFooter
+              onPageChange={(page) => void loadAppsPage(page)}
+              page={appPagination.page}
+              shown={apps.length}
+              total={appPagination.total}
+              totalPages={appPagination.totalPages}
+            />
           </CardContent>
         </Card>
 

@@ -3,23 +3,45 @@ import { getIapAppDetailPageData } from "@/lib/server/page-loaders/iap/app-detai
 import { IapAppDetailPage } from "@/components/tracking/pages/iap/iap-app-detail-page";
 import { notFound } from "next/navigation";
 
+function single(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function pageNumber(value: string | string[] | undefined) {
+  const parsed = Number.parseInt(single(value) ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
 export default async function IapAppDetailRoutePage({
   params,
   searchParams,
 }: {
   params: Promise<{ mappingId: string }>;
-  searchParams: Promise<{ platform?: string }>;
+  searchParams: Promise<{
+    kind?: string | string[];
+    page?: string | string[];
+    platform?: string | string[];
+    search?: string | string[];
+    state?: string | string[];
+  }>;
 }) {
-  await requireConsoleSession(["Admin", "Marketing"]);
+  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
   const { mappingId } = await params;
-  const { platform } = await searchParams;
+  const query = await searchParams;
+  const platform = single(query.platform);
   
   if (!platform) {
     notFound();
   }
 
-  const data = await getIapAppDetailPageData(mappingId, platform);
+  const data = await getIapAppDetailPageData(mappingId, platform, session, {
+    kind: single(query.kind),
+    page: pageNumber(query.page),
+    search: single(query.search),
+    state: single(query.state),
+  });
+  if (!data) notFound();
 
   return <IapAppDetailPage data={data} />;
 }

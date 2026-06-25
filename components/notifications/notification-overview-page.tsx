@@ -3,24 +3,27 @@
 import { useMemo, useState } from "react";
 import { Bell, ChevronRight, ListFilter, RefreshCw, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
-import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
-import { Badge } from "@/components/ui/badge";
+import {
+  PageHeader,
+  StatusBadge,
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
-import type { NotificationsPageData } from "@/lib/tracking/page-data";
-import type { DeviceToken, StoreMapping } from "@/lib/tracking/types";
+import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
+import type { DeviceToken, NotificationSchedule, StoreMapping } from "@/lib/tracking/types";
 
 import {
   ALL_FILTER_VALUE,
   AppIcon,
-  PlatformIcon,
-  appMatchesSearch,
+  PlatformBadge,
   numberLabel,
-  platformLabel,
   scheduleMatchesApp,
   tokensForApp,
 } from "./shared";
@@ -40,25 +43,49 @@ function latestSeen(tokens: DeviceToken[]) {
     .sort((first, second) => second - first)[0] ?? null;
 }
 
+type OverviewAppsResponse = {
+  data?: StoreMapping[];
+  deviceTokens?: DeviceToken[];
+  error?: string;
+  notificationSchedules?: NotificationSchedule[];
+  page?: number;
+  pageSize?: number;
+  storeOptions?: string[];
+  success?: boolean;
+  summary?: NotificationsPageData["notificationSummary"];
+  total?: number;
+  totalPages?: number;
+};
+
 export function NotificationOverviewPage({ data }: { data: NotificationsPageData }) {
   const router = useRouter();
+  const [storeMappings, setStoreMappings] = useState(data.storeMappings);
+  const [deviceTokens, setDeviceTokens] = useState(data.deviceTokens);
+  const [notificationSchedules, setNotificationSchedules] = useState(
+    data.notificationSchedules,
+  );
+  const [overviewPagination, setOverviewPagination] =
+    useState<PaginationMeta>(
+      data.notificationPagination.overviewApps ?? {
+        page: 1,
+        pageSize: 10,
+        total: data.storeMappings.length,
+        totalPages: 1,
+      },
+    );
+  const [summary, setSummary] = useState(data.notificationSummary);
+  const [storeOptions, setStoreOptions] = useState(data.notificationStoreOptions);
   const [search, setSearch] = useState("");
   const [platformFilter, setPlatformFilter] = useState(ALL_FILTER_VALUE);
   const [storeFilter, setStoreFilter] = useState(ALL_FILTER_VALUE);
-
-  const storeOptions = useMemo(
-    () =>
-      Array.from(new Set(data.storeMappings.flatMap((app) => (app.store_account_name ? [app.store_account_name] : []))))
-        .sort((first, second) => first.localeCompare(second)),
-    [data.storeMappings]
-  );
+  const [loadingApps, setLoadingApps] = useState(false);
 
   const appRows = useMemo(() => {
-    return data.storeMappings
+    return storeMappings
       .map((app) => {
-        const tokens = tokensForApp(app, data.deviceTokens);
+        const tokens = tokensForApp(app, deviceTokens);
         const activeTokens = tokens.filter((token) => statusValue(token.status) === "active");
-        const schedules = data.notificationSchedules.filter((schedule) => scheduleMatchesApp(schedule, app));
+        const schedules = notificationSchedules.filter((schedule) => scheduleMatchesApp(schedule, app));
         const activeSchedules = schedules.filter((schedule) => statusValue(schedule.status) === "active");
         const latestSeenAt = latestSeen(tokens);
 
@@ -70,18 +97,62 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
           schedules,
           tokens,
         };
-      })
-      .filter((row) => {
-        if (platformFilter !== ALL_FILTER_VALUE && row.app.platform !== platformFilter) return false;
-        if (storeFilter !== ALL_FILTER_VALUE && row.app.store_account_name !== storeFilter) return false;
-        return appMatchesSearch(row.app, search);
       });
-  }, [data.deviceTokens, data.notificationSchedules, data.storeMappings, platformFilter, search, storeFilter]);
+  }, [deviceTokens, notificationSchedules, storeMappings]);
 
-  const totalTokens = appRows.reduce((total, row) => total + row.tokens.length, 0);
-  const activeTokens = appRows.reduce((total, row) => total + row.activeTokens.length, 0);
-  const totalSchedules = appRows.reduce((total, row) => total + row.schedules.length, 0);
-  const activeSchedules = appRows.reduce((total, row) => total + row.activeSchedules.length, 0);
+  async function loadOverviewPage(
+    page: number,
+    overrides?: {
+      platformFilter?: string;
+      search?: string;
+      storeFilter?: string;
+    },
+  ) {
+    const nextSearch = overrides?.search ?? search;
+    const nextPlatform = overrides?.platformFilter ?? platformFilter;
+    const nextStore = overrides?.storeFilter ?? storeFilter;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: "10",
+    });
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextPlatform !== ALL_FILTER_VALUE) params.set("platform", nextPlatform);
+    if (nextStore !== ALL_FILTER_VALUE) params.set("store", nextStore);
+
+    setLoadingApps(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/overview-apps?${params.toString()}`,
+      );
+      const payload = (await response.json()) as OverviewAppsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Notification apps could not be loaded.");
+      }
+
+      setStoreMappings(payload.data);
+      setDeviceTokens(payload.deviceTokens ?? []);
+      setNotificationSchedules(payload.notificationSchedules ?? []);
+      setOverviewPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.storeOptions) setStoreOptions(payload.storeOptions);
+      if (payload.summary) setSummary(payload.summary);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Notification apps could not be loaded.",
+      );
+    } finally {
+      setLoadingApps(false);
+    }
+  }
 
   function selectApp(appId: string) {
     router.push(`/notifications/overview/${encodeURIComponent(appId)}`);
@@ -98,18 +169,18 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
       <section className="grid gap-3 md:grid-cols-3">
         <div className="rounded-xl border bg-background p-4 shadow-sm shadow-slate-200/50">
           <div className="text-xs font-medium text-muted-foreground">Mapped apps</div>
-          <div className="mt-2 font-mono text-2xl font-semibold">{numberLabel(appRows.length)}</div>
+          <div className="mt-2 font-mono text-2xl font-semibold">{numberLabel(summary.appCount)}</div>
           <div className="mt-1 text-xs text-muted-foreground">matching current filters</div>
         </div>
         <div className="rounded-xl border bg-background p-4 shadow-sm shadow-slate-200/50">
           <div className="text-xs font-medium text-muted-foreground">Registered tokens</div>
-          <div className="mt-2 font-mono text-2xl font-semibold">{numberLabel(totalTokens)}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{numberLabel(activeTokens)} active</div>
+          <div className="mt-2 font-mono text-2xl font-semibold">{numberLabel(summary.totalTokens)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{numberLabel(summary.activeTokens)} active</div>
         </div>
         <div className="rounded-xl border bg-background p-4 shadow-sm shadow-slate-200/50">
           <div className="text-xs font-medium text-muted-foreground">Schedules</div>
-          <div className="mt-2 font-mono text-2xl font-semibold">{numberLabel(totalSchedules)}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{numberLabel(activeSchedules)} active</div>
+          <div className="mt-2 font-mono text-2xl font-semibold">{numberLabel(summary.totalSchedules)}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{numberLabel(summary.activeSchedules)} active</div>
         </div>
       </section>
 
@@ -122,7 +193,7 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
                 App token overview
               </div>
               <div className="text-sm text-muted-foreground">
-                {appRows.length} app(s), {numberLabel(activeTokens)} active FCM token record(s). Open a row to view token detail.
+                {overviewPagination.total} app(s), {numberLabel(summary.activeTokens)} active FCM token record(s). Open a row to view token detail.
               </div>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
@@ -135,12 +206,22 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
               <Input
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setSearch(nextValue);
+                  void loadOverviewPage(1, { search: nextValue });
+                }}
                 className="h-9 pl-9"
                 placeholder="Search app, app id, package, bundle, store..."
               />
             </label>
-            <Select value={platformFilter} onValueChange={setPlatformFilter}>
+            <Select
+              value={platformFilter}
+              onValueChange={(value) => {
+                setPlatformFilter(value);
+                void loadOverviewPage(1, { platformFilter: value });
+              }}
+            >
               <SelectTrigger className="h-9">
                 <SelectValue placeholder="All platforms" />
               </SelectTrigger>
@@ -150,7 +231,13 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
                 <SelectItem value="ios">iOS</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={storeFilter} onValueChange={setStoreFilter}>
+            <Select
+              value={storeFilter}
+              onValueChange={(value) => {
+                setStoreFilter(value);
+                void loadOverviewPage(1, { storeFilter: value });
+              }}
+            >
               <SelectTrigger className="h-9">
                 <SelectValue placeholder="All stores" />
               </SelectTrigger>
@@ -201,10 +288,7 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
                       </TableCell>
                       <TableCell className="font-mono text-xs">{row.app.app_id ?? "No app id"}</TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                          <PlatformIcon platform={row.app.platform} />
-                          {platformLabel(row.app.platform)}
-                        </Badge>
+                        <PlatformBadge platform={row.app.platform} />
                       </TableCell>
                       <TableCell>
                         <div className="truncate rounded-md bg-muted px-2 py-1 font-mono text-xs">{appIdentifier(row.app)}</div>
@@ -230,11 +314,27 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
                   );
                 })
               ) : (
-                <TableEmptyState colSpan={9} icon={ListFilter} title="No apps" description="Adjust filters or create app mappings first." />
+                <TableEmptyState
+                  colSpan={9}
+                  icon={ListFilter}
+                  title={loadingApps ? "Loading apps" : "No apps"}
+                  description={
+                    loadingApps
+                      ? "The current page is being loaded."
+                      : "Adjust filters or create app mappings first."
+                  }
+                />
               )}
             </TableBody>
           </Table>
         </div>
+        <TablePaginationFooter
+          onPageChange={(page) => void loadOverviewPage(page)}
+          page={overviewPagination.page}
+          shown={appRows.length}
+          total={overviewPagination.total}
+          totalPages={overviewPagination.totalPages}
+        />
       </section>
 
     </div>

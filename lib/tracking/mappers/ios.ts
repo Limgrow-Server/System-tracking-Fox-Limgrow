@@ -7,7 +7,9 @@ import type {
 
 import type { IosCredential, IosIapTransaction, IosStoreMapping } from "@prisma/client";
 
-export type IosStoreMappingRecord = IosStoreMapping;
+export type IosStoreMappingRecord = IosStoreMapping & {
+  storeProfile?: { storeAccountName: string } | null;
+};
 export type IosCredentialRecord = IosCredential;
 
 export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): StoreMapping {
@@ -15,7 +17,7 @@ export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): Store
     id: mapping.id,
     store_profile_id: mapping.storeProfileId,
     store_platform: "apple_app_store",
-    store_account_name: mapping.storeAccountName,
+    store_account_name: mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
     app_id: mapping.appId,
     app_name: mapping.appName,
     app_icon_url: mapping.appIconUrl,

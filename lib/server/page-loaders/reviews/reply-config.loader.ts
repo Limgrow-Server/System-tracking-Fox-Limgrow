@@ -1,11 +1,21 @@
 import "server-only";
 
+import { canAccessReviewApp } from "@/lib/auth/app-scope";
+import type { ConsoleSession } from "@/lib/auth/rbac";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { getReplyConfigPageData } from "@/lib/server/services/reviews/android-review.service";
 import type {
   ReplyConfigPageData,
   ReplyStoreListPageData,
   ReplyStoreSummary,
+  ReviewReplyTemplateDto,
+  ReviewAppCard,
 } from "@/lib/tracking/page-data";
+
+type ReplyConfigRows = {
+  apps: ReviewAppCard[];
+  templatesByMappingId: Record<string, ReviewReplyTemplateDto[]>;
+};
 
 function latestDate(left: string | null, right: string | null) {
   if (!left) return right;
@@ -13,7 +23,7 @@ function latestDate(left: string | null, right: string | null) {
   return left > right ? left : right;
 }
 
-function buildStoreSummaries(data: Awaited<ReturnType<typeof getReplyConfigPageData>>) {
+function buildStoreSummaries(data: ReplyConfigRows) {
   const stores = new Map<string, ReplyStoreSummary>();
 
   for (const app of data.apps) {
@@ -54,30 +64,128 @@ function buildStoreSummaries(data: Awaited<ReturnType<typeof getReplyConfigPageD
   );
 }
 
-export async function getReplyStoreListPageDataLoader(): Promise<ReplyStoreListPageData> {
-  const data = await getReplyConfigPageData();
+function filterReplyStores(stores: ReplyStoreSummary[], search?: string) {
+  const query = search?.trim().toLowerCase();
+  if (!query) return stores;
+
+  return stores.filter((store) =>
+    [
+      store.storeAccountName,
+      store.contactEmail,
+      store.supportPhone,
+      store.websiteUrl,
+      ...store.apps.flatMap((app) => [app.appName, app.identifier]),
+    ].some((value) => value?.toLowerCase().includes(query)),
+  );
+}
+
+function filterReplyApps(apps: ReviewAppCard[], search?: string) {
+  const query = search?.trim().toLowerCase();
+  if (!query) return apps;
+
+  return apps.filter((app) =>
+    [app.appName, app.identifier, app.storeAccountName].some((value) =>
+      value.toLowerCase().includes(query),
+    ),
+  );
+}
+
+function scopedReplyConfigData(
+  data: Awaited<ReturnType<typeof getReplyConfigPageData>>,
+  session: ConsoleSession,
+): ReplyConfigRows {
+  const apps = data.apps.filter((app) => canAccessReviewApp(session, app));
+  const appIds = new Set(apps.map((app) => app.mappingId));
 
   return {
-    stores: buildStoreSummaries(data),
+    apps,
+    templatesByMappingId: Object.fromEntries(
+      Object.entries(data.templatesByMappingId).filter(([mappingId]) =>
+        appIds.has(mappingId),
+      ),
+    ),
+  };
+}
+
+export async function getReplyStoreListPageDataLoader(
+  session: ConsoleSession,
+  options?: Partial<PaginationQuery> & {
+    search?: string;
+  },
+): Promise<ReplyStoreListPageData> {
+  const pagination = {
+    page: options?.page ?? 1,
+    pageSize: options?.pageSize ?? 10,
+    skip: options?.skip ?? 0,
+    take: options?.take ?? 10,
+  };
+  const data = await getReplyConfigPageData();
+  const scopedData = scopedReplyConfigData(data, session);
+  const stores = filterReplyStores(buildStoreSummaries(scopedData), options?.search);
+  const storePage = paginatedResult(
+    stores.slice(pagination.skip, pagination.skip + pagination.take),
+    stores.length,
+    pagination,
+  );
+
+  return {
+    filters: {
+      search: options?.search ?? "",
+    },
+    storePagination: {
+      page: storePage.page,
+      pageSize: storePage.pageSize,
+      total: storePage.total,
+      totalPages: storePage.totalPages,
+    },
+    stores: storePage.data,
   };
 }
 
 export async function getReplyConfigPageDataLoader(
   storeProfileId: string,
+  session: ConsoleSession,
+  options?: Partial<PaginationQuery> & {
+    search?: string;
+  },
 ): Promise<ReplyConfigPageData | null> {
+  const pagination = {
+    page: options?.page ?? 1,
+    pageSize: options?.pageSize ?? 10,
+    skip: options?.skip ?? 0,
+    take: options?.take ?? 10,
+  };
   const data = await getReplyConfigPageData();
-  const stores = buildStoreSummaries(data);
+  const scopedData = scopedReplyConfigData(data, session);
+  const stores = buildStoreSummaries(scopedData);
   const store = stores.find((item) => item.storeProfileId === storeProfileId);
   if (!store) return null;
 
   const appIds = new Set(store.apps.map((app) => app.mappingId));
+  const storeApps = scopedData.apps.filter((app) => appIds.has(app.mappingId));
+  const filteredApps = filterReplyApps(storeApps, options?.search);
+  const appPage = paginatedResult(
+    filteredApps.slice(pagination.skip, pagination.skip + pagination.take),
+    filteredApps.length,
+    pagination,
+  );
+  const pageAppIds = new Set(appPage.data.map((app) => app.mappingId));
 
   return {
-    apps: data.apps.filter((app) => appIds.has(app.mappingId)),
+    appPagination: {
+      page: appPage.page,
+      pageSize: appPage.pageSize,
+      total: appPage.total,
+      totalPages: appPage.totalPages,
+    },
+    apps: appPage.data,
+    filters: {
+      search: options?.search ?? "",
+    },
     store,
     templatesByMappingId: Object.fromEntries(
-      Object.entries(data.templatesByMappingId).filter(([mappingId]) =>
-        appIds.has(mappingId),
+      Object.entries(scopedData.templatesByMappingId).filter(([mappingId]) =>
+        pageAppIds.has(mappingId),
       ),
     ),
   };

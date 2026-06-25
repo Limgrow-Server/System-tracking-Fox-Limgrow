@@ -105,6 +105,74 @@ export function getAndroidReviewsForMapping(mappingId: string, take = 300) {
   });
 }
 
+type AndroidReviewPageOptions = {
+  rating?: string;
+  reply?: string;
+  search?: string;
+  skip: number;
+  storeMappingId: string;
+  take: number;
+};
+
+function androidReviewWhere(
+  options: AndroidReviewPageOptions,
+): Prisma.AndroidStoreReviewWhereInput {
+  const where: Prisma.AndroidStoreReviewWhereInput = {
+    storeMappingId: options.storeMappingId,
+  };
+  const search = options.search?.trim();
+  const rating = Number.parseInt(options.rating ?? "", 10);
+
+  if (Number.isInteger(rating) && rating >= 1 && rating <= 5) {
+    where.rating = rating;
+  }
+
+  if (options.reply === "pending") {
+    where.developerReplyText = null;
+  } else if (options.reply === "replied") {
+    where.developerReplyText = { not: null };
+  }
+
+  if (search) {
+    const contains = { contains: search, mode: "insensitive" as const };
+    where.OR = [
+      { authorName: contains },
+      { originalText: contains },
+      { reviewId: contains },
+      { reviewText: contains },
+    ];
+  }
+
+  return where;
+}
+
+export function getAndroidReviewsForMappingPage(
+  options: AndroidReviewPageOptions,
+) {
+  const where = androidReviewWhere(options);
+
+  return prisma.$transaction([
+    prisma.androidStoreReview.findMany({
+      where,
+      orderBy: [{ userCommentUpdatedAt: "desc" }, { fetchedAt: "desc" }],
+      skip: options.skip,
+      take: options.take,
+    }),
+    prisma.androidStoreReview.count({ where }),
+  ]);
+}
+
+export function getLatestAndroidReviewForMapping(mappingId: string) {
+  return prisma.androidStoreReview.findFirst({
+    where: { storeMappingId: mappingId },
+    orderBy: [{ userCommentUpdatedAt: "desc" }, { fetchedAt: "desc" }],
+    select: {
+      fetchedAt: true,
+      userCommentUpdatedAt: true,
+    },
+  });
+}
+
 export function getAndroidReviewFetchRuns(mappingId: string, take = 10) {
   return prisma.androidStoreReviewFetchRun.findMany({
     where: { storeMappingId: mappingId },

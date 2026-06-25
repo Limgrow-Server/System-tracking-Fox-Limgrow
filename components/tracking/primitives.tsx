@@ -8,7 +8,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -201,31 +201,71 @@ export function TableEmptyState({
 }
 
 export function TablePaginationFooter({
+  from,
+  onPageChange,
+  page,
   shown,
+  to,
   total,
+  totalPages,
 }: {
+  from?: number;
+  onPageChange?: (page: number) => void;
+  page?: number;
   shown: number;
+  to?: number;
   total: number;
+  totalPages?: number;
 }) {
   if (!total) return null;
 
+  const currentPage = page ?? 1;
+  const lastPage = Math.max(totalPages ?? 1, 1);
+  const canGoPrevious = Boolean(onPageChange && currentPage > 1);
+  const canGoNext = Boolean(onPageChange && currentPage < lastPage);
+  const rangeLabel = from && to ? `Showing ${from}-${to} of ${total}` : `Showing ${shown} of ${total}`;
+
+  function goPrevious(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (canGoPrevious) onPageChange?.(currentPage - 1);
+  }
+
+  function goNext(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (canGoNext) onPageChange?.(currentPage + 1);
+  }
+
   return (
     <div className="flex flex-col gap-3 border-t px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-      <span>
-        Showing {shown} of {total}
-      </span>
+      <span>{rangeLabel}</span>
       <Pagination className="mx-0 w-auto justify-start sm:justify-end">
         <PaginationContent>
           <PaginationItem>
-            <PaginationPrevious href="#" text="Prev" className="pointer-events-none opacity-50" />
+            <PaginationPrevious
+              href="#"
+              text="Prev"
+              className={cn(!canGoPrevious && "pointer-events-none opacity-50")}
+              onClick={goPrevious}
+            />
           </PaginationItem>
           <PaginationItem>
-            <PaginationLink href="#" isActive>
-              1
+            <PaginationLink
+              href="#"
+              isActive
+              size="default"
+              className="min-w-24 px-3"
+              onClick={(event) => event.preventDefault()}
+            >
+              {currentPage} / {lastPage}
             </PaginationLink>
           </PaginationItem>
           <PaginationItem>
-            <PaginationNext href="#" text="Next" className="pointer-events-none opacity-50" />
+            <PaginationNext
+              href="#"
+              text="Next"
+              className={cn(!canGoNext && "pointer-events-none opacity-50")}
+              onClick={goNext}
+            />
           </PaginationItem>
         </PaginationContent>
       </Pagination>

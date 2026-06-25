@@ -1,18 +1,19 @@
 import "server-only";
 
-import { requireConsoleApiSession } from "@/lib/server/api/auth";
+import { requireAdminSession } from "@/lib/server/api/auth";
 import { badRequest } from "@/lib/server/api/errors";
+import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import {
   deleteAndroidCredentialConfig,
-  getAndroidCredentialConfigs,
+  getAndroidCredentialConfigsPage,
   getAndroidCredentialSecret,
   saveAndroidCredentialConfig,
   updateAndroidCredentialConfig,
 } from "@/lib/server/services/credentials/android-credential.service";
 import {
   deleteIosCredentialConfig,
-  getIosCredentialConfigs,
+  getIosCredentialConfigsPage,
   getIosCredentialSecret,
   saveIosCredentialConfig,
   updateIosCredentialConfig,
@@ -30,6 +31,10 @@ function platformFromSearch(value: string): CredentialPlatform | null {
   return value === "android" || value === "ios" ? value : null;
 }
 
+function searchText(value: string | null) {
+  return value?.trim() || undefined;
+}
+
 function platformFromCredentialPayload(payload: CredentialPayload): CredentialPlatform {
   if (payload.platform === "android" || payload.storePlatform === "google_play") return "android";
   if (payload.platform === "ios" || payload.storePlatform === "apple_app_store") return "ios";
@@ -42,7 +47,7 @@ function platformFromCredentialPayload(payload: CredentialPayload): CredentialPl
 
 export async function handleAdminCredentialsGet(request: Request) {
   try {
-    await requireConsoleApiSession(["Admin", "Dev"]);
+    await requireAdminSession();
 
     const url = new URL(request.url);
     const platform = platformFromSearch(cleanText(url.searchParams.get("platform")));
@@ -64,7 +69,17 @@ export async function handleAdminCredentialsGet(request: Request) {
       throw badRequest("Credential platform is required.");
     }
 
-    return okJson(platform === "android" ? await getAndroidCredentialConfigs() : await getIosCredentialConfigs());
+    const pagination = paginationFromSearchParams(url.searchParams);
+    const query = {
+      ...pagination,
+      search: searchText(url.searchParams.get("search")),
+    };
+
+    return paginatedJson(
+      platform === "android"
+        ? await getAndroidCredentialConfigsPage(query)
+        : await getIosCredentialConfigsPage(query)
+    );
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }
@@ -72,7 +87,7 @@ export async function handleAdminCredentialsGet(request: Request) {
 
 export async function handleAdminCredentialsPost(request: Request) {
   try {
-    const admin = await requireConsoleApiSession(["Admin", "Dev"]);
+    const admin = await requireAdminSession();
     const payload = await parseCredentialPayload(request);
     return okJson(
       platformFromCredentialPayload(payload) === "android"
@@ -86,7 +101,7 @@ export async function handleAdminCredentialsPost(request: Request) {
 
 export async function handleAdminCredentialsPatch(request: Request) {
   try {
-    const admin = await requireConsoleApiSession(["Admin", "Dev"]);
+    const admin = await requireAdminSession();
     const payload = await parseCredentialPayload(request);
     return okJson(
       platformFromCredentialPayload(payload) === "android"
@@ -100,7 +115,7 @@ export async function handleAdminCredentialsPatch(request: Request) {
 
 export async function handleAdminCredentialsDelete(request: Request) {
   try {
-    await requireConsoleApiSession(["Admin", "Dev"]);
+    await requireAdminSession();
     const payload = await parseCredentialPayload(request);
     return okJson(
       platformFromCredentialPayload(payload) === "android"

@@ -16,8 +16,10 @@ import {
   createTeamMember,
   deleteTeamMember,
   getTeamMembers,
+  getTeamMembersPage,
   updateTeamMember,
 } from "@/lib/server/repositories/auth/team-member.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { StaffRole, TeamMember } from "@/lib/tracking/types";
 
@@ -38,6 +40,22 @@ const statuses = new Set<TeamMember["status"]>(["active", "invited", "suspended"
 
 function arrayScope(value: unknown) {
   return Array.isArray(value) ? value.map(cleanText).filter(Boolean) : [];
+}
+
+function accessForRole(role: StaffRole, payload: UserPayload) {
+  if (role === "Admin") {
+    return {
+      appScope: [],
+      globalAccess: true,
+      storeScope: [],
+    };
+  }
+
+  return {
+    appScope: arrayScope(payload.appScope),
+    globalAccess: false,
+    storeScope: arrayScope(payload.storeScope),
+  };
 }
 
 function isPrismaUniqueError(error: unknown) {
@@ -105,6 +123,26 @@ export async function getConsoleUsers() {
   return { users: users.map(teamMemberToTracking) };
 }
 
+export async function getConsoleUsersPage(
+  options: PaginationQuery & {
+    appScopeKey?: string;
+    role?: StaffRole;
+    search?: string;
+    storeScopeKey?: string;
+  },
+) {
+  const [users, total] = await getTeamMembersPage({
+    appScopeKey: options.appScopeKey,
+    role: options.role ? staffRoleToPrismaRole[options.role] : undefined,
+    search: options.search,
+    skip: options.skip,
+    storeScopeKey: options.storeScopeKey,
+    take: options.take,
+  });
+
+  return paginatedResult(users.map(teamMemberToTracking), total, options);
+}
+
 export async function createConsoleUser(payload: UserPayload, admin: ConsoleSession) {
   const name = cleanText(payload.name);
   const email = normalizeEmail(payload.email);
@@ -120,6 +158,7 @@ export async function createConsoleUser(payload: UserPayload, admin: ConsoleSess
   }
 
   const authUser = await createVerifiedAuthUser(email, name, password);
+  const access = accessForRole(role, payload);
 
   try {
     const user = await createTeamMember({
@@ -128,9 +167,9 @@ export async function createConsoleUser(payload: UserPayload, admin: ConsoleSess
       email,
       role: staffRoleToPrismaRole[role],
       status: teamMemberStatusToPrismaStatus.active,
-      globalAccess: payload.globalAccess ?? role === "Admin",
-      appScope: arrayScope(payload.appScope),
-      storeScope: arrayScope(payload.storeScope),
+      globalAccess: access.globalAccess,
+      appScope: access.appScope,
+      storeScope: access.storeScope,
       createdBy: admin.email,
       invitedAt: null,
     });
@@ -164,13 +203,20 @@ export async function updateConsoleUser(payload: UserPayload) {
 
   const data: Prisma.TeamMemberUpdateInput = {};
   if (payload.name !== undefined) data.name = cleanText(payload.name);
-  if (payload.role !== undefined && roles.has(payload.role)) data.role = staffRoleToPrismaRole[payload.role];
+  if (payload.role !== undefined && roles.has(payload.role)) {
+    const access = accessForRole(payload.role, payload);
+    data.role = staffRoleToPrismaRole[payload.role];
+    data.globalAccess = access.globalAccess;
+    data.appScope = access.appScope;
+    data.storeScope = access.storeScope;
+  }
   if (payload.status !== undefined && statuses.has(payload.status)) {
     data.status = teamMemberStatusToPrismaStatus[payload.status];
   }
-  if (payload.globalAccess !== undefined) data.globalAccess = Boolean(payload.globalAccess);
-  if (Array.isArray(payload.appScope)) data.appScope = arrayScope(payload.appScope);
-  if (Array.isArray(payload.storeScope)) data.storeScope = arrayScope(payload.storeScope);
+  if (payload.role === undefined) {
+    if (Array.isArray(payload.appScope)) data.appScope = arrayScope(payload.appScope);
+    if (Array.isArray(payload.storeScope)) data.storeScope = arrayScope(payload.storeScope);
+  }
 
   const user = await updateTeamMember(id, data);
   const dto = teamMemberToTracking(user);

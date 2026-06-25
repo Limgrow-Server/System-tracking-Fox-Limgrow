@@ -14,15 +14,74 @@ type SaveAndroidStoreMappingInput = {
   packageName: string;
   status: MappingStatus;
   storeAccountName: string;
+  storeProfileId?: string | null;
 };
 
 export function getAndroidStoreMappings(options?: { take?: number }) {
   const take = options?.take ?? 200;
 
   return prisma.androidStoreMapping.findMany({
+    include: {
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+    },
     orderBy: { updatedAt: "desc" },
     take,
   });
+}
+
+type AndroidStoreMappingPageOptions = {
+  search?: string;
+  skip: number;
+  storeProfileId?: string;
+  take: number;
+};
+
+function androidStoreMappingWhere(options: AndroidStoreMappingPageOptions): Prisma.AndroidStoreMappingWhereInput {
+  const where: Prisma.AndroidStoreMappingWhereInput = {};
+  const search = options.search?.trim();
+
+  if (options.storeProfileId) {
+    where.storeProfileId = options.storeProfileId;
+  }
+
+  if (search) {
+    const contains = { contains: search, mode: "insensitive" as const };
+
+    where.OR = [
+      { appName: contains },
+      { appId: contains },
+      { packageName: contains },
+      { storeAccountName: contains },
+      { storeProfile: { storeAccountName: contains } },
+    ];
+  }
+
+  return where;
+}
+
+export function getAndroidStoreMappingsPage(options: AndroidStoreMappingPageOptions) {
+  const where = androidStoreMappingWhere(options);
+
+  return prisma.$transaction([
+    prisma.androidStoreMapping.findMany({
+      where,
+      include: {
+        storeProfile: {
+          select: {
+            storeAccountName: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      skip: options.skip,
+      take: options.take,
+    }),
+    prisma.androidStoreMapping.count({ where }),
+  ]);
 }
 
 export async function getAndroidStoreMappingId(id: string) {
@@ -38,9 +97,14 @@ export async function saveAndroidStoreMapping(
   tx: Prisma.TransactionClient,
   input: SaveAndroidStoreMappingInput
 ) {
-  const profile = await upsertAndroidStoreProfile(tx, {
-    storeAccountName: input.storeAccountName,
-  });
+  const profile = input.storeProfileId
+    ? {
+        id: input.storeProfileId,
+        storeAccountName: input.storeAccountName,
+      }
+    : await upsertAndroidStoreProfile(tx, {
+        storeAccountName: input.storeAccountName,
+      });
 
   const data = {
     appId: input.appId,

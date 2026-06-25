@@ -21,7 +21,7 @@ model DeviceToken {
   deviceModel        String?  @map("device_model")
   deviceManufacturer String?  @map("device_manufacturer")
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([platform, status, lastSeenAt], map: "device_tokens_platform_status_seen_idx")
   @@index([deviceId, platform], map: "device_tokens_device_platform_idx")
@@ -60,7 +60,7 @@ model NotificationJob {
   requestedBy      String?               @map("requested_by")
   sentAt           DateTime?             @map("sent_at") @db.Timestamptz(6)
   createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt        DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   schedule         NotificationSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
   events           NotificationEvent[]
 
@@ -107,7 +107,7 @@ model NotificationSchedule {
   runCount         Int               @default(0) @map("run_count")
   createdBy        String?           @map("created_by")
   createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   jobs             NotificationJob[]
 
   @@index([status, nextRunAt], map: "notification_schedules_status_next_run_idx")

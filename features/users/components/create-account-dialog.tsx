@@ -22,12 +22,17 @@ import {
 } from "@/components/ui/select";
 import type { StaffRole } from "@/lib/tracking/types";
 import { roleOptions } from "../constants";
+import type { ManagedAppOption } from "../types";
+import { AppScopePicker } from "./app-scope-picker";
 
 type CreateAccountDialogProps = {
+  appOptions: ManagedAppOption[];
+  appScope: string[];
   email: string;
   name: string;
   password: string;
   creating: boolean;
+  onAppScopeChange: (value: string[]) => void;
   onEmailChange: (value: string) => void;
   onNameChange: (value: string) => void;
   onOpenChange: (open: boolean) => void;
@@ -39,10 +44,13 @@ type CreateAccountDialogProps = {
 };
 
 export function CreateAccountDialog({
+  appOptions,
+  appScope,
   creating,
   email,
   name,
   password,
+  onAppScopeChange,
   onEmailChange,
   onNameChange,
   onOpenChange,
@@ -119,6 +127,13 @@ export function CreateAccountDialog({
               </SelectContent>
             </Select>
           </div>
+
+          <AppScopePicker
+            appOptions={appOptions}
+            onSelectionChange={onAppScopeChange}
+            role={role}
+            selectedAppIds={appScope}
+          />
 
           <Button className="w-full" disabled={creating}>
             <Plus size={15} />

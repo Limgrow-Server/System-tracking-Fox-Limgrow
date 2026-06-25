@@ -3,24 +3,36 @@
 import { useMemo, useState } from "react";
 import { ArrowLeft, Bell, Clock3, RefreshCw, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
-import { EmptyPanel, PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
-import { Badge } from "@/components/ui/badge";
+import {
+  EmptyPanel,
+  PageHeader,
+  StatusBadge,
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
-import type { NotificationsPageData } from "@/lib/tracking/page-data";
-import type { DeviceToken, StoreMapping } from "@/lib/tracking/types";
+import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
+import type {
+  DeviceToken,
+  NotificationEvent,
+  NotificationJob,
+  NotificationSchedule,
+  StoreMapping,
+} from "@/lib/tracking/types";
 
 import {
-  PlatformIcon,
+  DeliveryDashboard,
+  PlatformBadge,
   compactIdentifier,
+  jobMatchesApp,
   numberLabel,
-  platformLabel,
   scheduleMatchesApp,
   tokensForApp,
-  valuesMatchSearch,
 } from "./shared";
 
 function statusValue(value: string | null | undefined) {
@@ -35,6 +47,20 @@ function appMatchesRouteId(app: StoreMapping, appId: string) {
   return app.id === appId || app.app_id?.toLowerCase() === appId.toLowerCase();
 }
 
+type TokenListResponse = {
+  data?: DeviceToken[];
+  error?: string;
+  notificationEvents?: NotificationEvent[];
+  notificationJobs?: NotificationJob[];
+  notificationSchedules?: NotificationSchedule[];
+  page?: number;
+  pageSize?: number;
+  success?: boolean;
+  summary?: NotificationsPageData["notificationSummary"];
+  total?: number;
+  totalPages?: number;
+};
+
 export function NotificationTokenDetailPage({
   appId,
   data,
@@ -43,7 +69,25 @@ export function NotificationTokenDetailPage({
   data: NotificationsPageData;
 }) {
   const router = useRouter();
+  const [deviceTokens, setDeviceTokens] = useState(data.deviceTokens);
+  const [notificationJobs, setNotificationJobs] = useState(data.notificationJobs);
+  const [notificationEvents, setNotificationEvents] = useState(
+    data.notificationEvents,
+  );
+  const [notificationSchedules, setNotificationSchedules] = useState(
+    data.notificationSchedules,
+  );
+  const [tokenPagination, setTokenPagination] = useState<PaginationMeta>(
+    data.notificationPagination.tokens ?? {
+      page: 1,
+      pageSize: 10,
+      total: data.deviceTokens.length,
+      totalPages: 1,
+    },
+  );
+  const [tokenSummary, setTokenSummary] = useState(data.notificationSummary);
   const [tokenSearch, setTokenSearch] = useState("");
+  const [loadingTokens, setLoadingTokens] = useState(false);
   const selectedApp = useMemo(
     () => data.storeMappings.find((app) => appMatchesRouteId(app, appId)) ?? null,
     [appId, data.storeMappings]
@@ -51,29 +95,73 @@ export function NotificationTokenDetailPage({
 
   const selectedTokens = useMemo(() => {
     if (!selectedApp) return [];
-    return tokensForApp(selectedApp, data.deviceTokens)
-      .filter((token) =>
-        valuesMatchSearch([
-          token.fcm_token,
-          token.device_id,
-          token.app_id,
-          token.product_app_id,
-          token.package_name,
-          token.bundle_id,
-          token.locale,
-          token.app_version,
-          token.os_version,
-          token.status,
-        ], tokenSearch)
-      )
+    return tokensForApp(selectedApp, deviceTokens)
       .sort((first, second) => new Date(second.last_seen_at).getTime() - new Date(first.last_seen_at).getTime());
-  }, [data.deviceTokens, selectedApp, tokenSearch]);
+  }, [deviceTokens, selectedApp]);
 
-  const selectedActiveTokens = selectedTokens.filter((token) => statusValue(token.status) === "active");
   const selectedSchedules = selectedApp
-    ? data.notificationSchedules.filter((schedule) => scheduleMatchesApp(schedule, selectedApp))
+    ? notificationSchedules.filter((schedule) => scheduleMatchesApp(schedule, selectedApp))
     : [];
   const selectedActiveSchedules = selectedSchedules.filter((schedule) => statusValue(schedule.status) === "active");
+  const selectedJobs = useMemo(
+    () =>
+      selectedApp
+        ? notificationJobs.filter((job) => jobMatchesApp(job, selectedApp))
+        : [],
+    [notificationJobs, selectedApp],
+  );
+  const selectedJobIds = useMemo(
+    () => new Set(selectedJobs.map((job) => job.id)),
+    [selectedJobs],
+  );
+  const selectedEvents = useMemo(
+    () =>
+      notificationEvents.filter(
+        (event) => event.job_id && selectedJobIds.has(event.job_id),
+      ),
+    [notificationEvents, selectedJobIds],
+  );
+
+  async function loadTokenPage(page: number, nextSearch = tokenSearch) {
+    const params = new URLSearchParams({
+      appId,
+      page: String(page),
+      pageSize: "10",
+    });
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+
+    setLoadingTokens(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/tokens?${params.toString()}`,
+      );
+      const payload = (await response.json()) as TokenListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "FCM tokens could not be loaded.");
+      }
+
+      setDeviceTokens(payload.data);
+      setNotificationJobs(payload.notificationJobs ?? []);
+      setNotificationEvents(payload.notificationEvents ?? []);
+      setNotificationSchedules(payload.notificationSchedules ?? []);
+      setTokenPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.summary) setTokenSummary(payload.summary);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "FCM tokens could not be loaded.",
+      );
+    } finally {
+      setLoadingTokens(false);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -106,20 +194,19 @@ export function NotificationTokenDetailPage({
               <div className="text-xs font-medium text-muted-foreground">Identifier</div>
               <div className="mt-2 truncate font-mono text-sm font-semibold">{compactIdentifier(selectedApp)}</div>
               <div className="mt-2">
-                <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                  <PlatformIcon platform={selectedApp.platform} />
-                  {platformLabel(selectedApp.platform)}
-                </Badge>
+                <PlatformBadge platform={selectedApp.platform} />
               </div>
             </div>
             <div className="rounded-xl border bg-background p-4 shadow-sm shadow-slate-200/50">
               <div className="text-xs font-medium text-muted-foreground">Records</div>
-              <div className="mt-2 font-mono text-2xl font-semibold">{numberLabel(selectedTokens.length)}</div>
+              <div className="mt-2 font-mono text-2xl font-semibold">{numberLabel(tokenPagination.total)}</div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {numberLabel(selectedActiveTokens.length)} active token(s), {numberLabel(selectedActiveSchedules.length)} active schedule(s)
+                {numberLabel(tokenSummary.activeTokens)} active token(s), {numberLabel(selectedActiveSchedules.length)} active schedule(s)
               </div>
             </div>
           </section>
+
+          <DeliveryDashboard events={selectedEvents} jobs={selectedJobs} />
 
           <section className="overflow-hidden rounded-xl border bg-background shadow-sm shadow-slate-200/50">
             <div className="space-y-3 border-b bg-muted/20 p-4">
@@ -127,20 +214,21 @@ export function NotificationTokenDetailPage({
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2 font-heading text-base font-semibold">
                     FCM token detail
-                    <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                      <PlatformIcon platform={selectedApp.platform} />
-                      {platformLabel(selectedApp.platform)}
-                    </Badge>
+                    <PlatformBadge platform={selectedApp.platform} />
                   </div>
                   <div className="mt-1 text-sm text-muted-foreground">
-                    {numberLabel(selectedTokens.length)} token record(s), {numberLabel(selectedActiveTokens.length)} active.
+                    {numberLabel(tokenPagination.total)} token record(s), {numberLabel(tokenSummary.activeTokens)} active.
                   </div>
                 </div>
                 <label className="relative block w-full lg:w-96">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
                   <Input
                     value={tokenSearch}
-                    onChange={(event) => setTokenSearch(event.target.value)}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+                      setTokenSearch(nextValue);
+                      void loadTokenPage(1, nextValue);
+                    }}
                     className="h-9 pl-9"
                     placeholder="Search FCM token, device id, locale, version..."
                   />
@@ -193,13 +281,20 @@ export function NotificationTokenDetailPage({
                     <TableEmptyState
                       colSpan={6}
                       icon={Bell}
-                      title="No token records"
                       description="Mobile has not registered an FCM token for this app yet."
+                      title={loadingTokens ? "Loading token records" : "No token records"}
                     />
                   )}
                 </TableBody>
               </Table>
             </div>
+            <TablePaginationFooter
+              onPageChange={(page) => void loadTokenPage(page)}
+              page={tokenPagination.page}
+              shown={selectedTokens.length}
+              total={tokenPagination.total}
+              totalPages={tokenPagination.totalPages}
+            />
           </section>
         </>
       ) : (

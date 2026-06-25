@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Apple,
@@ -73,19 +73,19 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "App Mapping",
         href: "/store-mapping",
         icon: <Cable size={17} />,
-        roles: ["Admin", "Dev"],
+        roles: ["Admin"],
         children: [
           {
             title: "Android",
             href: "/store-mapping/android",
             icon: <Smartphone size={15} />,
-            roles: ["Admin", "Dev"],
+            roles: ["Admin"],
           },
           {
             title: "iOS",
             href: "/store-mapping/ios",
             icon: <Apple size={15} />,
-            roles: ["Admin", "Dev"],
+            roles: ["Admin"],
           },
         ],
       },
@@ -94,19 +94,19 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         href: "/configs",
         icon: <Settings2 size={17} />,
         badge: "core",
-        roles: ["Admin", "Dev"],
+        roles: ["Admin"],
         children: [
           {
             title: "Android",
             href: "/configs/android",
             icon: <Smartphone size={15} />,
-            roles: ["Admin", "Dev"],
+            roles: ["Admin"],
           },
           {
             title: "iOS",
             href: "/configs/ios",
             icon: <Apple size={15} />,
-            roles: ["Admin", "Dev"],
+            roles: ["Admin"],
           },
         ],
       },
@@ -114,31 +114,31 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "Notifications",
         href: "/notifications/overview",
         icon: <Bell size={17} />,
-        roles: ["Admin", "Marketing"],
+        roles: ["Admin", "Dev", "Marketing"],
         children: [
           {
             title: "Overview",
             href: "/notifications/overview",
             icon: <LayoutDashboard size={15} />,
-            roles: ["Admin", "Marketing"],
+            roles: ["Admin", "Dev", "Marketing"],
           },
           {
             title: "Send",
             href: "/notifications/send",
             icon: <Send size={15} />,
-            roles: ["Admin", "Marketing"],
+            roles: ["Admin"],
           },
           {
             title: "Schedules",
             href: "/notifications/schedules",
             icon: <CalendarClock size={15} />,
-            roles: ["Admin", "Marketing"],
+            roles: ["Admin", "Dev", "Marketing"],
           },
           {
             title: "History",
             href: "/notifications/history",
             icon: <History size={15} />,
-            roles: ["Admin", "Marketing"],
+            roles: ["Admin", "Dev", "Marketing"],
           },
         ],
       },
@@ -151,7 +151,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "IAP",
         href: "/iap",
         icon: <CreditCard size={17} />,
-        roles: ["Admin", "Marketing"],
+        roles: ["Admin", "Dev", "Marketing"],
       },
     ],
   },
@@ -162,19 +162,19 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "Comments",
         href: "/comments",
         icon: <MessageSquareText size={17} />,
-        roles: ["Admin", "Marketing"],
+        roles: ["Admin", "Dev", "Marketing"],
       },
       {
         title: "Schedule",
         href: "/comments-schedule",
         icon: <CalendarClock size={17} />,
-        roles: ["Admin", "Marketing"],
+        roles: ["Admin", "Dev", "Marketing"],
       },
       {
         title: "Reply",
         href: "/reply",
         icon: <MessageSquareReply size={17} />,
-        roles: ["Admin", "Marketing"],
+        roles: ["Admin", "Dev", "Marketing"],
       },
     ],
   },
@@ -199,6 +199,21 @@ function visibleNavGroups(role: StaffRole) {
       items: visibleNavItems(group.items, role),
     }))
     .filter((group) => group.items.length > 0);
+}
+
+function NavPendingDot({ className }: { className?: string }) {
+  const { pending } = useLinkStatus();
+
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "ml-auto size-1.5 shrink-0 rounded-full bg-current opacity-0 transition-opacity delay-100",
+        pending && "animate-pulse opacity-70",
+        className,
+      )}
+    />
+  );
 }
 
 function SidebarContent({
@@ -380,6 +395,7 @@ function SidebarContent({
                                     <span className="truncate">
                                       {child.title}
                                     </span>
+                                    <NavPendingDot />
                                   </Link>
                                 );
                               })}
@@ -417,13 +433,18 @@ function SidebarContent({
                         <span className="truncate">{item.title}</span>
                       ) : null}
                     </span>
-                    {!collapsed && item.badge ? (
-                      <Badge
-                        variant="secondary"
-                        className="h-5 rounded-md px-1.5 text-[11px]"
-                      >
-                        {item.badge}
-                      </Badge>
+                    {!collapsed ? (
+                      <span className="flex items-center gap-2">
+                        {item.badge ? (
+                          <Badge
+                            variant="secondary"
+                            className="h-5 rounded-md px-1.5 text-[11px]"
+                          >
+                            {item.badge}
+                          </Badge>
+                        ) : null}
+                        <NavPendingDot />
+                      </span>
                     ) : null}
                   </Link>
                 );

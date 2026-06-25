@@ -6,39 +6,45 @@ import type {
   NotificationJob,
   NotificationSchedule,
   StoreMapping,
+  TeamMember,
 } from "@/lib/tracking/types";
-import type {
-  AndroidStoreProfileSummary,
-  IapAndroidDto,
-} from "@/lib/server/services/iap/android-iap.service";
+import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
+
+export type PaginationMeta = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
 
 export type StoreMappingPageData = {
   storeMappings: StoreMapping[];
+  storeMappingPagination: PaginationMeta;
   credentialSecrets: CredentialSecretMetadata[];
+};
+
+export type UsersPageData = {
+  appOptions: StoreMapping[];
+  usersPagination: PaginationMeta;
+  users: TeamMember[];
 };
 
 export type ConfigsPageData = {
   credentialSecrets: CredentialSecretMetadata[];
-};
-
-export type IosIapVerifyPageData = {
-  credentialSecrets: CredentialSecretMetadata[];
-  recentTransactions: IosIapTransactionSummary[];
-  storeMappings: StoreMapping[];
+  credentialPagination: PaginationMeta;
 };
 
 export type NotificationsPageData = {
   credentialSecrets: CredentialSecretMetadata[];
   deviceTokens: DeviceToken[];
+  notificationDeliveryEvents: NotificationEvent[];
   notificationEvents: NotificationEvent[];
   notificationJobs: NotificationJob[];
+  notificationPagination: NotificationPaginationMap;
+  notificationStoreOptions: string[];
+  notificationSummary: NotificationOverviewSummary;
   notificationSchedules: NotificationSchedule[];
   storeMappings: StoreMapping[];
-};
-
-export type AndroidIapPageData = {
-  storeProfiles: AndroidStoreProfileSummary[];
-  transactions: IapAndroidDto[];
 };
 
 export type IapAppCard = {
@@ -54,6 +60,11 @@ export type IapAppCard = {
 
 export type IapAppGridPageData = {
   apps: IapAppCard[];
+  appPagination: PaginationMeta;
+  filters: {
+    search: string;
+    storeAccountName: string;
+  };
   storeNames: string[];
 };
 
@@ -61,6 +72,14 @@ export type IapAppTransaction = IapAndroidDto | IosIapTransactionSummary;
 
 export type IapAppDetailPageData = {
   app: IapAppCard;
+  filters: {
+    kind: string;
+    search: string;
+    state: string;
+  };
+  metricTransactions: IapAppTransaction[];
+  transactionPagination: PaginationMeta;
+  transactionStates: string[];
   transactions: IapAppTransaction[];
 };
 
@@ -88,8 +107,17 @@ export type ReviewAppCard = {
 };
 
 export type ReviewAppGridPageData = {
+  appPagination: PaginationMeta;
   apps: ReviewAppCard[];
+  filters: {
+    search: string;
+    storeProfileId: string;
+  };
   storeNames: string[];
+  storeOptions: Array<{
+    id: string;
+    name: string;
+  }>;
 };
 
 export type AndroidStoreReviewDto = {
@@ -183,8 +211,26 @@ export type ReviewFetchScheduleApp = ReviewAppCard & {
 };
 
 export type ReviewFetchSchedulePageData = {
+  appPagination: PaginationMeta;
   apps: ReviewFetchScheduleApp[];
+  filters: {
+    search: string;
+    storeProfileId: string;
+  };
+  summary: {
+    activeCount: number;
+    appCount: number;
+    nextRunAt: string | null;
+    pausedCount: number;
+    scheduleStatus: string;
+    scheduledCount: number;
+    unscheduledCount: number;
+  };
   storeNames: string[];
+  storeOptions: Array<{
+    id: string;
+    name: string;
+  }>;
 };
 
 export type ReviewAppStats = {
@@ -212,6 +258,12 @@ export type ReviewAppDetailPageData = {
   app: ReviewAppCard;
   stats: ReviewAppStats;
   reviews: AndroidStoreReviewDto[];
+  reviewFilters: {
+    rating: string;
+    reply: string;
+    search: string;
+  };
+  reviewPagination: PaginationMeta;
   replyTemplates: ReviewReplyTemplatePreviewDto[];
   syncState: ReviewSyncStateDto | null;
   fetchRuns: ReviewFetchRunDto[];
@@ -246,6 +298,10 @@ export type ReplyStoreSummary = {
 };
 
 export type ReplyStoreListPageData = {
+  filters: {
+    search: string;
+  };
+  storePagination: PaginationMeta;
   stores: ReplyStoreSummary[];
 };
 
@@ -255,5 +311,28 @@ export type ReplyConfigBasePageData = {
 };
 
 export type ReplyConfigPageData = ReplyConfigBasePageData & {
+  appPagination: PaginationMeta;
+  filters: {
+    search: string;
+  };
   store: ReplyStoreSummary;
+};
+
+export type NotificationPaginationKey =
+  | "deliveryEvents"
+  | "historyJobs"
+  | "overviewApps"
+  | "schedules"
+  | "tokens";
+
+export type NotificationPaginationMap = Partial<
+  Record<NotificationPaginationKey, PaginationMeta>
+>;
+
+export type NotificationOverviewSummary = {
+  activeSchedules: number;
+  activeTokens: number;
+  appCount: number;
+  totalSchedules: number;
+  totalTokens: number;
 };

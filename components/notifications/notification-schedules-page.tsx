@@ -5,7 +5,12 @@ import { CalendarClock, CheckCircle2, Pause, PencilLine, Play, RefreshCw, Sparkl
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
-import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
+import {
+  PageHeader,
+  StatusBadge,
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
-import type { NotificationsPageData } from "@/lib/tracking/page-data";
+import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
 import type { NotificationSchedule } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +29,7 @@ import {
   ALL_FILTER_VALUE,
   type LocaleRow,
   MESSAGE_MAX_LENGTH,
-  PlatformIcon,
+  PlatformBadge,
   RecordFilterControls,
   type ScheduleContentResponse,
   type ScheduleResponse,
@@ -32,18 +37,26 @@ import {
   createLocaleRows,
   localePayloadForRows,
   localeRowsFromPayload,
-  platformLabel,
   primaryLocaleRow,
   scheduleAutoGenerateEnabled,
   scheduleDataWithAutoGenerate,
   scheduleDisplayNotification,
   scheduleLabel,
-  scheduleMatchesApp,
   validateMessageRows,
-  valuesMatchSearch,
 } from "./shared";
 
 type EditableScheduleType = "once" | "daily" | "monthly";
+
+type SchedulesListResponse = {
+  data?: NotificationSchedule[];
+  error?: string;
+  page?: number;
+  pageSize?: number;
+  storeOptions?: string[];
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
+};
 
 function editableScheduleType(value: string | null | undefined): EditableScheduleType {
   return value === "daily" || value === "monthly" ? value : "once";
@@ -76,9 +89,11 @@ function hcmTimeInput(value: string | null | undefined) {
 }
 
 export function NotificationSchedulesPage({
+  canManage = false,
   data,
   initialAppId,
 }: {
+  canManage?: boolean;
   data: NotificationsPageData;
   initialAppId?: string;
 }) {
@@ -89,6 +104,18 @@ export function NotificationSchedulesPage({
   const [recordAppFilter, setRecordAppFilter] = useState(resolvedInitialAppId || ALL_FILTER_VALUE);
   const [recordStoreFilter, setRecordStoreFilter] = useState(ALL_FILTER_VALUE);
   const [schedules, setSchedules] = useState(data.notificationSchedules);
+  const [schedulePagination, setSchedulePagination] = useState<PaginationMeta>(
+    data.notificationPagination.schedules ?? {
+      page: 1,
+      pageSize: 10,
+      total: data.notificationSchedules.length,
+      totalPages: 1,
+    },
+  );
+  const [storeFilterOptions, setStoreFilterOptions] = useState(
+    data.notificationStoreOptions,
+  );
+  const [loadingSchedules, setLoadingSchedules] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<NotificationSchedule | null>(null);
   const [editingScheduleRows, setEditingScheduleRows] = useState<LocaleRow[]>(() => createLocaleRows());
   const [editingScheduleAutoGenerate, setEditingScheduleAutoGenerate] = useState(false);
@@ -98,45 +125,65 @@ export function NotificationSchedulesPage({
   const [editingDayOfMonth, setEditingDayOfMonth] = useState("1");
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
-  const storeFilterOptions = useMemo(
-    () =>
-      Array.from(new Set(platformApps.flatMap((app) => (app.store_account_name ? [app.store_account_name] : []))))
-        .sort((first, second) => first.localeCompare(second)),
-    [platformApps]
-  );
+  const visibleSchedules = schedules;
 
-  const visibleSchedules = useMemo(() => {
-    const filterApp = recordAppFilter === ALL_FILTER_VALUE
-      ? null
-      : platformApps.find((app) => app.id === recordAppFilter) ?? null;
-
-    return schedules.filter((schedule) => {
-      if (filterApp && !scheduleMatchesApp(schedule, filterApp)) return false;
-      if (recordStoreFilter !== ALL_FILTER_VALUE && schedule.store_account_name !== recordStoreFilter) return false;
-      const displayNotification = scheduleDisplayNotification(schedule);
-      return valuesMatchSearch([
-        schedule.app_name,
-        schedule.app_id,
-        schedule.store_account_name,
-        schedule.package_name,
-        schedule.bundle_id,
-        schedule.status,
-        schedule.schedule_type,
-        schedule.last_status,
-        scheduleLabel(schedule),
-        schedule.title,
-        schedule.message,
-        displayNotification.title,
-        displayNotification.message,
-      ], recordSearch);
+  async function loadSchedulesPage(
+    page: number,
+    overrides?: {
+      appFilter?: string;
+      search?: string;
+      storeFilter?: string;
+    },
+  ) {
+    const nextSearch = overrides?.search ?? recordSearch;
+    const nextAppFilter = overrides?.appFilter ?? recordAppFilter;
+    const nextStoreFilter = overrides?.storeFilter ?? recordStoreFilter;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: "10",
     });
-  }, [platformApps, recordAppFilter, recordSearch, recordStoreFilter, schedules]);
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextAppFilter !== ALL_FILTER_VALUE) params.set("appId", nextAppFilter);
+    if (nextStoreFilter !== ALL_FILTER_VALUE) params.set("store", nextStoreFilter);
+
+    setLoadingSchedules(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/schedules?${params.toString()}`,
+      );
+      const payload = (await response.json()) as SchedulesListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Notification schedules could not be loaded.");
+      }
+
+      setSchedules(payload.data);
+      setSchedulePagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.storeOptions) setStoreFilterOptions(payload.storeOptions);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Notification schedules could not be loaded.",
+      );
+    } finally {
+      setLoadingSchedules(false);
+    }
+  }
 
   function updateEditingScheduleRow(topicCode: string, patch: Partial<LocaleRow>) {
     setEditingScheduleRows((current) => current.map((row) => (row.topicCode === topicCode ? { ...row, ...patch } : row)));
   }
 
   function openScheduleEditor(schedule: NotificationSchedule) {
+    if (!canManage) return;
     setEditingSchedule(schedule);
     setEditingScheduleRows(localeRowsFromPayload(schedule.locale_payload, schedule.title ?? "", schedule.message ?? ""));
     setEditingScheduleAutoGenerate(scheduleAutoGenerateEnabled(schedule));
@@ -172,6 +219,7 @@ export function NotificationSchedulesPage({
   }
 
   async function saveScheduleContent() {
+    if (!canManage) return;
     if (!editingSchedule) return;
 
     const enabledEditingRows = editingScheduleRows.filter((row) => row.enabled);
@@ -205,6 +253,7 @@ export function NotificationSchedulesPage({
       if (!response.ok || !payload.ok || !payload.schedule) throw new Error(payload.error ?? "Update schedule content failed.");
 
       setSchedules((current) => current.map((schedule) => (schedule.id === payload.schedule!.id ? payload.schedule! : schedule)));
+      await loadSchedulesPage(schedulePagination.page);
       setEditingSchedule(null);
       toast.success("Schedule updated.");
     } catch (error) {
@@ -215,6 +264,7 @@ export function NotificationSchedulesPage({
   }
 
   async function dispatchSchedule(scheduleId: string) {
+    if (!canManage) return;
     setPendingAction(`dispatch-${scheduleId}`);
 
     try {
@@ -235,6 +285,7 @@ export function NotificationSchedulesPage({
   }
 
   async function updateScheduleStatus(schedule: NotificationSchedule, status: "active" | "paused") {
+    if (!canManage) return;
     setPendingAction(`schedule-${schedule.id}`);
 
     try {
@@ -246,6 +297,7 @@ export function NotificationSchedulesPage({
       const payload = (await response.json()) as ScheduleResponse;
       if (!response.ok || !payload.ok || !payload.schedule) throw new Error(payload.error ?? "Update schedule failed.");
       setSchedules((current) => current.map((item) => (item.id === payload.schedule!.id ? payload.schedule! : item)));
+      await loadSchedulesPage(schedulePagination.page);
       toast.success(payload.message ?? "Schedule updated.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Update schedule failed.");
@@ -255,6 +307,7 @@ export function NotificationSchedulesPage({
   }
 
   async function deleteSchedule(schedule: NotificationSchedule) {
+    if (!canManage) return;
     setPendingAction(`delete-${schedule.id}`);
     const previous = schedules;
     setSchedules((current) => current.filter((item) => item.id !== schedule.id));
@@ -267,6 +320,11 @@ export function NotificationSchedulesPage({
       });
       const payload = (await response.json()) as { ok?: boolean; error?: string };
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Delete schedule failed.");
+      await loadSchedulesPage(
+        previous.length <= 1 && schedulePagination.page > 1
+          ? schedulePagination.page - 1
+          : schedulePagination.page,
+      );
       toast.success("Schedule deleted.");
     } catch (error) {
       setSchedules(previous);
@@ -293,7 +351,7 @@ export function NotificationSchedulesPage({
                 Scheduled notifications
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
-                {visibleSchedules.length} schedule(s), {visibleSchedules.filter((schedule) => schedule.status === "active").length} active.
+                {schedulePagination.total} schedule(s), {visibleSchedules.filter((schedule) => schedule.status === "active").length} active on this page.
               </div>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
@@ -304,9 +362,18 @@ export function NotificationSchedulesPage({
           <RecordFilterControls
             apps={platformApps}
             appFilter={recordAppFilter}
-            onAppFilterChange={setRecordAppFilter}
-            onSearchChange={setRecordSearch}
-            onStoreFilterChange={setRecordStoreFilter}
+            onAppFilterChange={(value) => {
+              setRecordAppFilter(value);
+              void loadSchedulesPage(1, { appFilter: value });
+            }}
+            onSearchChange={(value) => {
+              setRecordSearch(value);
+              void loadSchedulesPage(1, { search: value });
+            }}
+            onStoreFilterChange={(value) => {
+              setRecordStoreFilter(value);
+              void loadSchedulesPage(1, { storeFilter: value });
+            }}
             placeholder="Search schedule, app, package, bundle, store..."
             search={recordSearch}
             storeFilter={recordStoreFilter}
@@ -324,7 +391,7 @@ export function NotificationSchedulesPage({
                 <TableHead className="w-32">Status</TableHead>
                 <TableHead className="w-44">Next run</TableHead>
                 <TableHead className="w-44">Last run</TableHead>
-                <TableHead className="w-36">Actions</TableHead>
+                {canManage ? <TableHead className="w-36">Actions</TableHead> : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -346,21 +413,25 @@ export function NotificationSchedulesPage({
                             </Badge>
                           ) : null}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => openScheduleEditor(schedule)}
-                          className="mt-1 block max-w-full text-left text-xs text-muted-foreground hover:text-foreground"
-                        >
+                        {canManage ? (
+                          <button
+                            type="button"
+                            onClick={() => openScheduleEditor(schedule)}
+                            className="mt-1 block max-w-full text-left text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            <span className="line-clamp-1 font-medium">{displayNotification.title}</span>
+                            {displayNotification.message ? <span className="line-clamp-1">{displayNotification.message}</span> : null}
+                          </button>
+                        ) : (
+                          <div className="mt-1 max-w-full text-left text-xs text-muted-foreground">
                           <span className="line-clamp-1 font-medium">{displayNotification.title}</span>
                           {displayNotification.message ? <span className="line-clamp-1">{displayNotification.message}</span> : null}
-                        </button>
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                            <PlatformIcon platform={schedule.platform} />
-                            {platformLabel(schedule.platform)}
-                          </Badge>
+                          <PlatformBadge platform={schedule.platform} />
                           <div className="min-w-0">
                             <div className="truncate font-medium">{schedule.app_name}</div>
                             <div className="truncate font-mono text-[11px] text-muted-foreground">
@@ -387,38 +458,57 @@ export function NotificationSchedulesPage({
                         <div className="text-sm text-muted-foreground">{dateTime(schedule.last_run_at)}</div>
                         {schedule.last_error ? <div className="mt-1 line-clamp-2 text-xs text-rose-600">{schedule.last_error}</div> : null}
                       </TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          <Button variant="outline" size="icon-sm" onClick={() => openScheduleEditor(schedule)} title="Edit content">
-                            <PencilLine size={14} />
-                          </Button>
-                          <Button variant="outline" size="icon-sm" onClick={() => dispatchSchedule(schedule.id)} title="Run now">
-                            {pendingAction === `dispatch-${schedule.id}` ? <Spinner className="size-3.5" /> : <Play size={14} />}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            onClick={() => updateScheduleStatus(schedule, schedule.status === "active" ? "paused" : "active")}
-                            title={schedule.status === "active" ? "Pause" : "Activate"}
-                          >
-                            {pendingAction === `schedule-${schedule.id}` ? <Spinner className="size-3.5" /> : schedule.status === "active" ? <Pause size={14} /> : <Play size={14} />}
-                          </Button>
-                          <Button variant="outline" size="icon-sm" onClick={() => deleteSchedule(schedule)} title="Delete">
-                            {pendingAction === `delete-${schedule.id}` ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
-                          </Button>
-                        </div>
-                      </TableCell>
+                      {canManage ? (
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button variant="outline" size="icon-sm" onClick={() => openScheduleEditor(schedule)} title="Edit content">
+                              <PencilLine size={14} />
+                            </Button>
+                            <Button variant="outline" size="icon-sm" onClick={() => dispatchSchedule(schedule.id)} title="Run now">
+                              {pendingAction === `dispatch-${schedule.id}` ? <Spinner className="size-3.5" /> : <Play size={14} />}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              onClick={() => updateScheduleStatus(schedule, schedule.status === "active" ? "paused" : "active")}
+                              title={schedule.status === "active" ? "Pause" : "Activate"}
+                            >
+                              {pendingAction === `schedule-${schedule.id}` ? <Spinner className="size-3.5" /> : schedule.status === "active" ? <Pause size={14} /> : <Play size={14} />}
+                            </Button>
+                            <Button variant="outline" size="icon-sm" onClick={() => deleteSchedule(schedule)} title="Delete">
+                              {pendingAction === `delete-${schedule.id}` ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      ) : null}
                     </TableRow>
                   );
                 })
               ) : (
-                <TableEmptyState colSpan={8} icon={CalendarClock} title="No schedules" description="Scheduled notification jobs will appear here." />
+                <TableEmptyState
+                  colSpan={canManage ? 8 : 7}
+                  icon={CalendarClock}
+                  title={loadingSchedules ? "Loading schedules" : "No schedules"}
+                  description={
+                    loadingSchedules
+                      ? "The current page is being loaded."
+                      : "Scheduled notification jobs will appear here."
+                  }
+                />
               )}
             </TableBody>
           </Table>
         </div>
+        <TablePaginationFooter
+          onPageChange={(page) => void loadSchedulesPage(page)}
+          page={schedulePagination.page}
+          shown={visibleSchedules.length}
+          total={schedulePagination.total}
+          totalPages={schedulePagination.totalPages}
+        />
       </section>
 
+      {canManage ? (
       <Dialog open={Boolean(editingSchedule)} onOpenChange={(open) => !open && setEditingSchedule(null)}>
         <DialogContent className="max-h-[86dvh] gap-0 overflow-hidden p-0 sm:max-w-[min(980px,calc(100vw-2rem))]">
           <DialogHeader className="border-b px-4 py-3 pr-12">
@@ -601,6 +691,7 @@ export function NotificationSchedulesPage({
           ) : null}
         </DialogContent>
       </Dialog>
+      ) : null}
     </div>
   );
 }

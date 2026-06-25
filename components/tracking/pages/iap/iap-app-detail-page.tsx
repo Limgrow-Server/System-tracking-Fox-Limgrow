@@ -18,7 +18,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { TableEmptyState } from "@/components/tracking/primitives";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import {
   Dialog,
   DialogContent,
@@ -26,14 +30,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
 import {
   Select,
   SelectContent,
@@ -47,8 +43,19 @@ import type {
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 import type { IosIapTransactionSummary } from "@/lib/tracking/types";
+import { toast } from "sonner";
 
-const pageSize = 10;
+type IapTransactionListResponse = {
+  success?: boolean;
+  data?: IapAppTransaction[];
+  error?: string;
+  metricTransactions?: IapAppTransaction[];
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  totalPages?: number;
+  transactionStates?: string[];
+};
 
 function formatRevenue(
   micros: number | string | null,
@@ -99,12 +106,6 @@ function transactionProductId(transaction: IapAppTransaction) {
   return isIosTransaction(transaction)
     ? transaction.product_id
     : transaction.productId;
-}
-
-function transactionPackageOrBundle(transaction: IapAppTransaction) {
-  return isIosTransaction(transaction)
-    ? transaction.bundle_id
-    : transaction.packageName;
 }
 
 function transactionKind(transaction: IapAppTransaction) {
@@ -158,21 +159,6 @@ function transactionTimestamp(transaction: IapAppTransaction) {
   if (!dateValue) return 0;
   const timestamp = new Date(dateValue).getTime();
   return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function transactionSearchText(transaction: IapAppTransaction) {
-  return [
-    transactionDisplayId(transaction),
-    transactionSecondaryId(transaction),
-    transactionProductId(transaction),
-    transactionPackageOrBundle(transaction),
-    isIosTransaction(transaction)
-      ? transaction.user_id
-      : transaction.purchaseToken,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -248,31 +234,85 @@ function OverviewCard({
 }
 
 export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
-  const { app, transactions } = data;
+  const { app } = data;
   const isIos = app.platform === "ios";
 
-  const [search, setSearch] = useState("");
-  const [filterState, setFilterState] = useState<string>("all");
-  const [filterKind, setFilterKind] = useState<string>("all");
-  const [page, setPage] = useState(1);
+  const [metricTransactions, setMetricTransactions] = useState(
+    data.metricTransactions,
+  );
+  const [transactions, setTransactions] = useState(data.transactions);
+  const [transactionPagination, setTransactionPagination] = useState(
+    data.transactionPagination,
+  );
+  const [transactionStates, setTransactionStates] = useState(
+    data.transactionStates,
+  );
+  const [search, setSearch] = useState(data.filters.search);
+  const [filterState, setFilterState] = useState<string>(data.filters.state);
+  const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
+  const [tableLoading, setTableLoading] = useState(false);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
 
-  const filteredTransactions = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  async function loadTransactionsPage(
+    page: number,
+    overrides?: {
+      filterKind?: string;
+      filterState?: string;
+      search?: string;
+    },
+  ) {
+    const nextSearch = overrides?.search ?? search;
+    const nextFilterState = overrides?.filterState ?? filterState;
+    const nextFilterKind = overrides?.filterKind ?? filterKind;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      page: String(page),
+      pageSize: "10",
+      platform: app.platform,
+    });
+    const searchValue = nextSearch.trim();
 
-    return transactions
-      .filter((tx) => {
-        const tState = tx.state.toLowerCase();
-        const tKind = transactionKind(tx);
-        const matchSearch = !query || transactionSearchText(tx).includes(query);
-        const matchState = filterState === "all" || tState === filterState;
-        const matchKind =
-          isIos || filterKind === "all" || tKind?.toLowerCase() === filterKind;
+    if (searchValue) params.set("search", searchValue);
+    if (nextFilterState !== "all") params.set("state", nextFilterState);
+    if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
 
-        return matchSearch && matchState && matchKind;
-      })
-      .sort((a, b) => transactionTimestamp(b) - transactionTimestamp(a));
-  }, [transactions, search, filterState, filterKind, isIos]);
+    setTableLoading(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/iap/app-transactions?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapTransactionListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Load IAP transactions failed.");
+      }
+
+      setTransactions(payload.data);
+      setTransactionPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.metricTransactions) {
+        setMetricTransactions(payload.metricTransactions);
+      }
+      if (payload.transactionStates) {
+        setTransactionStates(payload.transactionStates);
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Load IAP transactions failed.",
+      );
+    } finally {
+      setTableLoading(false);
+    }
+  }
+
+  const filteredTransactions = metricTransactions;
 
   const stats = useMemo(() => {
     let rev = 0;
@@ -384,21 +424,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   }, [filteredTransactions, stats.latestTimestamp]);
 
   const uniqueStates = useMemo(() => {
-    const states = new Set<string>();
-    transactions.forEach((tx) => states.add(tx.state.toLowerCase()));
-    return Array.from(states).sort();
-  }, [transactions]);
+    return Array.from(
+      new Set(transactionStates.map((state) => state.toLowerCase())),
+    ).sort();
+  }, [transactionStates]);
 
-  const totalPages = Math.ceil(filteredTransactions.length / pageSize);
-  const currentPage = Math.min(page, Math.max(1, totalPages));
-  const visible = useMemo(
-    () =>
-      filteredTransactions.slice(
-        (currentPage - 1) * pageSize,
-        currentPage * pageSize,
-      ),
-    [filteredTransactions, currentPage],
-  );
+  const currentPage = transactionPagination.page;
+  const tableStartIndex =
+    (transactionPagination.page - 1) * transactionPagination.pageSize;
+  const visible = transactions;
 
   const fmtVND = (n: number) =>
     new Intl.NumberFormat("vi-VN", {
@@ -571,23 +605,26 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       {/* Table Card */}
       <div className="flex-1 min-h-0 flex flex-col bg-card text-card-foreground border rounded-lg overflow-hidden">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 border-b bg-muted/20">
-          <Input
-            type="search"
-            placeholder="Search Order ID or Product ID..."
-            className="w-full sm:max-w-xs h-9 bg-background"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-          />
+          <div className="flex w-full items-center gap-2 sm:max-w-xs">
+            <Input
+              type="search"
+              placeholder="Search Order ID or Product ID..."
+              className="h-9 bg-background"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                void loadTransactionsPage(1, { search: e.target.value });
+              }}
+            />
+            {tableLoading ? <Spinner className="size-4" /> : null}
+          </div>
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {!isIos && (
               <Select
                 value={filterKind}
                 onValueChange={(v) => {
                   setFilterKind(v);
-                  setPage(1);
+                  void loadTransactionsPage(1, { filterKind: v });
                 }}
               >
                 <SelectTrigger className="w-full sm:w-[130px] h-9 bg-background">
@@ -604,7 +641,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
               value={filterState}
               onValueChange={(v) => {
                 setFilterState(v);
-                setPage(1);
+                void loadTransactionsPage(1, { filterState: v });
               }}
             >
               <SelectTrigger className="w-full sm:w-[140px] h-9 bg-background">
@@ -755,66 +792,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           </table>
         </div>
 
-        {filteredTransactions.length > 0 && (
-          <div className="flex flex-col gap-3 border-t px-4 py-3.5 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between bg-muted/10 shrink-0">
-            <span>
-              Showing {visible.length} of {filteredTransactions.length}{" "}
-              transactions
-            </span>
-            <Pagination className="mx-0 w-auto justify-start sm:justify-end">
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    href="#"
-                    text="Prev"
-                    className={
-                      currentPage <= 1 ? "pointer-events-none opacity-50" : ""
-                    }
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setPage((v) => Math.max(1, v - 1));
-                    }}
-                  />
-                </PaginationItem>
-                {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
-                  let pn = i + 1;
-                  if (totalPages > 5 && currentPage > 3)
-                    pn = currentPage - 2 + i;
-                  if (pn > totalPages) return null;
-                  return (
-                    <PaginationItem key={pn}>
-                      <PaginationLink
-                        href="#"
-                        isActive={currentPage === pn}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setPage(pn);
-                        }}
-                      >
-                        {pn}
-                      </PaginationLink>
-                    </PaginationItem>
-                  );
-                })}
-                <PaginationItem>
-                  <PaginationNext
-                    href="#"
-                    text="Next"
-                    className={
-                      currentPage >= totalPages
-                        ? "pointer-events-none opacity-50"
-                        : ""
-                    }
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setPage((v) => Math.min(totalPages, v + 1));
-                    }}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          </div>
-        )}
+        <TablePaginationFooter
+          from={tableStartIndex + 1}
+          onPageChange={(page) => void loadTransactionsPage(page)}
+          page={currentPage}
+          shown={visible.length}
+          to={tableStartIndex + visible.length}
+          total={transactionPagination.total}
+          totalPages={transactionPagination.totalPages}
+        />
       </div>
     </div>
   );
