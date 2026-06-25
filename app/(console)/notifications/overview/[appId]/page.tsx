@@ -7,7 +7,7 @@ export default async function NotificationTokenDetailRoutePage({
 }: {
   params: Promise<{ appId: string }>;
 }) {
-  await requireConsoleSession(["Admin"]);
+  await requireConsoleSession(["Admin", "Marketing"]);
   const { appId } = await params;
   const data = await getNotificationsPageData();
 

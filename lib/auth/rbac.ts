@@ -16,10 +16,12 @@ export type ConsoleSession = {
 
 export const routeRoles: Record<string, StaffRole[]> = {
   "/dashboard": ["Admin", "Dev", "Marketing"],
-  "/store-mapping": ["Admin"],
-  "/configs": ["Admin"],
-  "/iap": ["Admin", "Dev", "Marketing"],
+  "/store-mapping": ["Admin", "Dev"],
+  "/configs": ["Admin", "Dev"],
+  "/iap": ["Admin", "Marketing"],
+  "/notifications": ["Admin", "Marketing"],
   "/comments": ["Admin", "Marketing"],
+  "/comments-schedule": ["Admin", "Marketing"],
   "/review": ["Admin", "Marketing"],
   "/reply": ["Admin", "Marketing"],
   "/users": ["Admin"],

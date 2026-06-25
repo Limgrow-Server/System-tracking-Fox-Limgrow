@@ -19,65 +19,60 @@ type VerifyAndroidRequest = {
   purchaseKind?: "product" | "subscription";
 };
 
-type StoreAuthContext = {
-  userId: string;
+type StoreConfigContext = {
   storeProfileId: string;
   storeAccountName: string;
 };
 
 // ---------------------------------------------------------------------------
-// Auth helpers
+// Public app config resolver
 // ---------------------------------------------------------------------------
 
-function extractBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization") ?? "";
-  if (!header.startsWith("Bearer ")) return null;
-  return header.slice(7).trim() || null;
-}
-
-async function authenticateStoreUser(
-  request: Request,
+async function resolveStoreConfigByPackage(
   supabase: SupabaseAdminClient,
-): Promise<StoreAuthContext> {
-  // 1. Extract token
-  const token = extractBearerToken(request);
-  if (!token) {
-    throw Object.assign(new Error("missing_auth_token"), { httpStatus: 401 });
-  }
+  packageName: string,
+): Promise<StoreConfigContext> {
+  const { data: mapping, error: mappingError } = await supabase
+    .from("android_store_mappings")
+    .select("id,store_profile_id,store_account_name,package_name,status")
+    .eq("package_name", packageName)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
 
-  // 2. Verify JWT via Supabase Auth (getUser validates the token server-side)
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser(token);
-
-  if (authError || !user) {
-    throw Object.assign(new Error(authError?.message ?? "invalid_auth_token"), {
-      httpStatus: 401,
+  if (mappingError) throw mappingError;
+  if (!mapping) {
+    throw Object.assign(new Error("package_not_configured"), {
+      httpStatus: 404,
     });
   }
 
-  // 3. Lookup store profile by supabase_user_id
+  const storeProfileId = clean(mapping.store_profile_id);
+  if (!storeProfileId) {
+    throw Object.assign(new Error("store_profile_not_configured"), {
+      httpStatus: 500,
+    });
+  }
+
   const { data: profile, error: profileError } = await supabase
     .from("android_store_profiles")
-    .select("id,store_account_name,status")
-    .eq("supabase_user_id", user.id)
+    .select("id,status")
+    .eq("id", storeProfileId)
     .maybeSingle();
 
   if (profileError) throw profileError;
-
   if (!profile) {
-    throw Object.assign(new Error("store_not_linked"), { httpStatus: 403 });
+    throw Object.assign(new Error("store_profile_not_found"), {
+      httpStatus: 404,
+    });
   }
-
   if (profile.status !== "active") {
     throw Object.assign(new Error("store_inactive"), { httpStatus: 403 });
   }
 
   return {
-    userId: user.id,
-    storeProfileId: profile.id,
-    storeAccountName: profile.store_account_name,
+    storeProfileId,
+    storeAccountName: clean(mapping.store_account_name),
   };
 }
 
@@ -120,7 +115,7 @@ function resolveProductState(purchaseState: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Core verify logic (auth-aware)
+// Core verify logic
 // ---------------------------------------------------------------------------
 
 async function resolveCredential(
@@ -176,31 +171,8 @@ async function resolveCredential(
   return { credential: data, serviceAccount };
 }
 
-async function verifyPackageAuthorization(
-  supabase: SupabaseAdminClient,
-  storeProfileId: string,
-  packageName: string,
-) {
-  const { data, error } = await supabase
-    .from("android_store_mappings")
-    .select("id")
-    .eq("store_profile_id", storeProfileId)
-    .eq("package_name", packageName)
-    .eq("status", "active")
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!data) {
-    throw Object.assign(new Error("package_not_authorized"), {
-      httpStatus: 403,
-    });
-  }
-}
-
 async function verifyGoogle(
   supabase: SupabaseAdminClient,
-  authCtx: StoreAuthContext,
   payload: VerifyAndroidRequest,
 ) {
   const packageName = clean(payload.packageName);
@@ -213,17 +185,11 @@ async function verifyGoogle(
   if (!isSubscription && !productId)
     throw new Error("productId is required for product purchases");
 
-  // Security: verify packageName belongs to the authenticated store
-  await verifyPackageAuthorization(
-    supabase,
-    authCtx.storeProfileId,
-    packageName,
-  );
+  const appConfig = await resolveStoreConfigByPackage(supabase, packageName);
 
-  // Resolve credential from the authenticated store profile
   const { serviceAccount } = await resolveCredential(
     supabase,
-    authCtx.storeProfileId,
+    appConfig.storeProfileId,
   );
 
   const accessToken = await googleServiceAccountAccessToken(serviceAccount);
@@ -239,7 +205,13 @@ async function verifyGoogle(
   });
   const provider = (await response.json()) as Record<string, unknown>;
   if (!response.ok) {
-    throw new Error(`Google Play verify failed: ${JSON.stringify(provider)}`);
+    console.error("Google Play verify failed", {
+      status: response.status,
+      provider,
+    });
+    throw Object.assign(new Error("purchase_verification_failed"), {
+      httpStatus: response.status >= 400 && response.status < 500 ? 400 : 502,
+    });
   }
 
   const lineItems = Array.isArray(provider.lineItems)
@@ -267,8 +239,9 @@ async function verifyGoogle(
       "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED"
     : Number(provider.acknowledgementState) === 1;
 
+  const now = new Date().toISOString();
   const row = {
-    store_profile_id: authCtx.storeProfileId,
+    store_profile_id: appConfig.storeProfileId,
     package_name: packageName,
     product_id: resolvedProductId,
     purchase_kind: isSubscription ? "subscription" : "product",
@@ -296,27 +269,21 @@ async function verifyGoogle(
     offer_id: isSubscription ? stringValue(offerDetails?.offerId) : null,
     is_test_purchase: provider.testPurchase != null,
     raw_receipt: provider,
-    verified_at: new Date().toISOString(),
+    verified_at: now,
+    updated_at: now,
   };
 
   const { data, error } = await supabase
     .from("iap_android")
     .upsert(row, { onConflict: "package_name,purchase_token" })
-    .select(
-      "id,state,product_id,purchase_kind,acknowledged,expires_date,auto_renewing,is_test_purchase",
-    )
+    .select("state")
     .single();
 
   if (error) throw error;
 
   return {
+    tracked: true,
     state: data.state,
-    productId: data.product_id,
-    purchaseKind: data.purchase_kind,
-    acknowledged: data.acknowledged,
-    expiresDate: data.expires_date,
-    autoRenewing: data.auto_renewing,
-    isTestPurchase: data.is_test_purchase,
   };
 }
 
@@ -370,14 +337,9 @@ Deno.serve(async (request) => {
   try {
     const supabase = createAdminClient();
 
-    // Step 1: Authenticate — JWT → user → store profile
-    const authCtx = await authenticateStoreUser(request, supabase);
-
-    // Step 2: Parse body
     const payload = (await request.json()) as VerifyAndroidRequest;
 
-    // Step 3: Verify purchase with Google Play
-    const result = await verifyGoogle(supabase, authCtx, payload);
+    const result = await verifyGoogle(supabase, payload);
 
     return json({
       ok: true,

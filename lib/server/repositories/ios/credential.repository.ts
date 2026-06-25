@@ -11,7 +11,6 @@ type CredentialTargetInput = {
 
 export function getIosCredentials(take = 160) {
   return prisma.iosCredential.findMany({
-    include: { storeProfile: { select: { supabaseUserId: true } } },
     orderBy: { updatedAt: "desc" },
     take,
   });

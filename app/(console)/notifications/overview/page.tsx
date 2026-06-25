@@ -3,7 +3,7 @@ import { requireConsoleSession } from "@/lib/auth/session";
 import { getNotificationsPageData } from "@/lib/server/page-loaders/notifications/notifications.loader";
 
 export default async function NotificationOverviewRoutePage() {
-  await requireConsoleSession(["Admin"]);
+  await requireConsoleSession(["Admin", "Marketing"]);
   const data = await getNotificationsPageData();
 
   return <NotificationOverviewPage data={data} />;
