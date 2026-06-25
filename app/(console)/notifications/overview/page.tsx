@@ -1,10 +1,9 @@
 import { NotificationOverviewPage } from "@/components/notifications/notification-overview-page";
 import { requireConsoleSession } from "@/lib/auth/session";
-import { getNotificationOverviewPageData } from "@/lib/server/page-loaders/notifications/notifications.loader";
+import { emptyNotificationsPageData } from "@/lib/tracking/empty-notifications";
 
 export default async function NotificationOverviewRoutePage() {
-  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
-  const data = await getNotificationOverviewPageData(session);
+  await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
-  return <NotificationOverviewPage data={data} />;
+  return <NotificationOverviewPage data={emptyNotificationsPageData()} deferInitialLoad />;
 }

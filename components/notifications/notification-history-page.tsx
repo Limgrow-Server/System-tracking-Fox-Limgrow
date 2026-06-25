@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, BarChart3, ChevronRight, Eye, History, MessageSquareText, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -30,7 +30,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
-import type { DeviceToken, NotificationEvent, NotificationJob } from "@/lib/tracking/types";
+import type { DeviceToken, NotificationEvent, NotificationJob, StoreMapping } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
 import {
@@ -79,6 +79,7 @@ type HistoryJobsResponse = {
   notificationEvents?: NotificationEvent[];
   page?: number;
   pageSize?: number;
+  storeMappings?: StoreMapping[];
   storeOptions?: string[];
   success?: boolean;
   total?: number;
@@ -407,16 +408,20 @@ function HistoryJobDashboard({
 
 export function NotificationHistoryPage({
   data,
+  deferInitialLoad = false,
   historyJobId,
   initialAppId,
 }: {
   data: NotificationsPageData;
+  deferInitialLoad?: boolean;
   historyJobId?: string;
   initialAppId?: string;
 }) {
   const router = useRouter();
-  const platformApps = useMemo(() => data.storeMappings, [data.storeMappings]);
-  const resolvedInitialAppId = platformApps.find((app) => app.id === initialAppId)?.id ?? "";
+  const initialLoadStarted = useRef(false);
+  const [storeMappings, setStoreMappings] = useState(data.storeMappings);
+  const platformApps = useMemo(() => storeMappings, [storeMappings]);
+  const resolvedInitialAppId = initialAppId ?? "";
   const [notificationJobs, setNotificationJobs] = useState(data.notificationJobs);
   const [notificationEvents, setNotificationEvents] = useState(
     data.notificationEvents,
@@ -445,7 +450,9 @@ export function NotificationHistoryPage({
   const [storeFilterOptions, setStoreFilterOptions] = useState(
     data.notificationStoreOptions,
   );
-  const [loadingHistoryJobs, setLoadingHistoryJobs] = useState(false);
+  const [loadingHistoryJobs, setLoadingHistoryJobs] = useState(
+    deferInitialLoad && !historyJobId,
+  );
   const [loadingDeliveryEvents, setLoadingDeliveryEvents] = useState(false);
   const [recordSearch, setRecordSearch] = useState("");
   const [recordAppFilter, setRecordAppFilter] = useState(resolvedInitialAppId || ALL_FILTER_VALUE);
@@ -563,6 +570,7 @@ export function NotificationHistoryPage({
 
       setNotificationJobs(payload.data);
       setNotificationEvents(payload.notificationEvents ?? []);
+      if (payload.storeMappings) setStoreMappings(payload.storeMappings);
       setHistoryPagination({
         page: payload.page ?? page,
         pageSize: payload.pageSize ?? 10,
@@ -620,6 +628,13 @@ export function NotificationHistoryPage({
     }
   }
 
+  useEffect(() => {
+    if (!deferInitialLoad || historyJobId || initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    void loadHistoryJobsPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deferInitialLoad, historyJobId]);
+
   const pageTitle = historyJobId ? "Notification detail" : "Notification history";
   const pageDescription = historyJobId
     ? "Delivery dashboard for one send job."
@@ -646,7 +661,12 @@ export function NotificationHistoryPage({
                   {historyPagination.total} send job(s). Open a row to view the dashboard.
                 </div>
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void loadHistoryJobsPage(historyPagination.page)}
+              >
                 <RefreshCw size={15} />
                 Refresh
               </Button>

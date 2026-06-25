@@ -1,6 +1,6 @@
 import { NotificationSchedulesPage } from "@/components/notifications/notification-schedules-page";
 import { requireConsoleSession } from "@/lib/auth/session";
-import { getNotificationSchedulesPageData } from "@/lib/server/page-loaders/notifications/notifications.loader";
+import { emptyNotificationsPageData } from "@/lib/tracking/empty-notifications";
 
 export default async function NotificationSchedulesRoutePage({
   searchParams,
@@ -10,14 +10,12 @@ export default async function NotificationSchedulesRoutePage({
   const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
   const params = await searchParams;
   const initialAppId = Array.isArray(params.app) ? params.app[0] : params.app;
-  const data = await getNotificationSchedulesPageData(session, {
-    appId: initialAppId,
-  });
 
   return (
     <NotificationSchedulesPage
       canManage={session.role === "Admin"}
-      data={data}
+      data={emptyNotificationsPageData()}
+      deferInitialLoad
       initialAppId={initialAppId}
     />
   );

@@ -13,6 +13,7 @@ import {
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -96,6 +97,7 @@ type TokenListResponse = {
 };
 
 type DeleteTokenResponse = {
+  deletedCount?: number;
   error?: string;
   ok?: boolean;
 };
@@ -131,7 +133,10 @@ export function NotificationTokenDetailPage({
   const [loadingTokens, setLoadingTokens] = useState(false);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
+  const [deletingSelectedTokens, setDeletingSelectedTokens] = useState(false);
   const [selectedToken, setSelectedToken] = useState<DeviceToken | null>(null);
+  const [selectedTokenIds, setSelectedTokenIds] = useState<string[]>([]);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [tokenToDelete, setTokenToDelete] = useState<DeviceToken | null>(null);
   const selectedApp = useMemo(
     () => data.storeMappings.find((app) => appMatchesRouteId(app, appId)) ?? null,
@@ -143,6 +148,20 @@ export function NotificationTokenDetailPage({
     return tokensForApp(selectedApp, deviceTokens)
       .sort((first, second) => new Date(second.last_seen_at).getTime() - new Date(first.last_seen_at).getTime());
   }, [deviceTokens, selectedApp]);
+  const selectedTokenIdSet = useMemo(
+    () => new Set(selectedTokenIds),
+    [selectedTokenIds],
+  );
+  const selectedVisibleTokens = useMemo(
+    () => selectedTokens.filter((token) => selectedTokenIdSet.has(token.id)),
+    [selectedTokenIdSet, selectedTokens],
+  );
+  const allVisibleTokensSelected =
+    selectedTokens.length > 0 &&
+    selectedTokens.every((token) => selectedTokenIdSet.has(token.id));
+  const someVisibleTokensSelected =
+    !allVisibleTokensSelected &&
+    selectedTokens.some((token) => selectedTokenIdSet.has(token.id));
 
   const selectedSchedules = selectedApp
     ? notificationSchedules.filter((schedule) => scheduleMatchesApp(schedule, selectedApp))
@@ -193,6 +212,7 @@ export function NotificationTokenDetailPage({
       setNotificationJobs(payload.notificationJobs ?? []);
       setNotificationEvents(payload.notificationEvents ?? []);
       setNotificationSchedules(payload.notificationSchedules ?? []);
+      setSelectedTokenIds([]);
       setTokenPagination({
         page: payload.page ?? page,
         pageSize: payload.pageSize ?? 10,
@@ -215,6 +235,29 @@ export function NotificationTokenDetailPage({
     setTokenToDelete(token);
   }
 
+  function updateTokenSelection(tokenId: string, checked: boolean) {
+    setSelectedTokenIds((current) => {
+      if (checked) return current.includes(tokenId) ? current : [...current, tokenId];
+      return current.filter((id) => id !== tokenId);
+    });
+  }
+
+  function updateVisibleTokenSelection(checked: boolean) {
+    const visibleIds = selectedTokens.map((token) => token.id);
+    setSelectedTokenIds((current) => {
+      if (checked) {
+        return Array.from(new Set([...current, ...visibleIds]));
+      }
+
+      const visibleIdSet = new Set(visibleIds);
+      return current.filter((id) => !visibleIdSet.has(id));
+    });
+  }
+
+  function clearSelectedTokens() {
+    setSelectedTokenIds([]);
+  }
+
   async function deleteToken(token: DeviceToken) {
     setDeletingTokenId(token.id);
 
@@ -232,6 +275,7 @@ export function NotificationTokenDetailPage({
       toast.success("FCM token deleted.");
       setTokenToDelete(null);
       setSelectedToken((current) => current?.id === token.id ? null : current);
+      setSelectedTokenIds((current) => current.filter((id) => id !== token.id));
       const nextPage = selectedTokens.length <= 1 && tokenPagination.page > 1
         ? tokenPagination.page - 1
         : tokenPagination.page;
@@ -242,6 +286,42 @@ export function NotificationTokenDetailPage({
       );
     } finally {
       setDeletingTokenId(null);
+    }
+  }
+
+  async function deleteSelectedTokens() {
+    const ids = selectedVisibleTokens.map((token) => token.id);
+    if (!ids.length) return;
+
+    setDeletingSelectedTokens(true);
+
+    try {
+      const response = await fetch("/api/admin/notifications/tokens", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const payload = (await response.json()) as DeleteTokenResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "FCM tokens could not be deleted.");
+      }
+
+      const deletedCount = payload.deletedCount ?? ids.length;
+      toast.success(`${numberLabel(deletedCount)} FCM token(s) deleted.`);
+      setBulkDeleteOpen(false);
+      setSelectedToken((current) => current && ids.includes(current.id) ? null : current);
+      setSelectedTokenIds([]);
+      const nextPage = selectedTokens.length <= ids.length && tokenPagination.page > 1
+        ? tokenPagination.page - 1
+        : tokenPagination.page;
+      await loadTokenPage(nextPage);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "FCM tokens could not be deleted.",
+      );
+    } finally {
+      setDeletingSelectedTokens(false);
     }
   }
 
@@ -302,25 +382,62 @@ export function NotificationTokenDetailPage({
                     {numberLabel(tokenPagination.total)} token record(s), {numberLabel(tokenSummary.activeTokens)} active.
                   </div>
                 </div>
-                <label className="relative block w-full lg:w-96">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
-                  <Input
-                    value={tokenSearch}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      setTokenSearch(nextValue);
-                      void loadTokenPage(1, nextValue);
-                    }}
-                    className="h-9 pl-9"
-                    placeholder="Search FCM token, device id, locale, version..."
-                  />
-                </label>
+                <div className="flex w-full flex-col gap-2 lg:w-[30rem]">
+                  {canManage ? (
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {selectedVisibleTokens.length ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={clearSelectedTokens}
+                          disabled={deletingSelectedTokens}
+                        >
+                          Clear {numberLabel(selectedVisibleTokens.length)}
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={!selectedVisibleTokens.length || deletingSelectedTokens}
+                        onClick={() => setBulkDeleteOpen(true)}
+                      >
+                        {deletingSelectedTokens ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
+                        Delete selected
+                      </Button>
+                    </div>
+                  ) : null}
+                  <label className="relative block w-full">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
+                    <Input
+                      value={tokenSearch}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        setTokenSearch(nextValue);
+                        void loadTokenPage(1, nextValue);
+                      }}
+                      className="h-9 pl-9"
+                      placeholder="Search FCM token, device id, locale, version..."
+                    />
+                  </label>
+                </div>
               </div>
             </div>
             <div className="overflow-auto">
-              <Table className={canManage ? "min-w-[1160px] text-sm" : "min-w-[1080px] text-sm"}>
+              <Table className={canManage ? "min-w-[1220px] text-sm" : "min-w-[1080px] text-sm"}>
                 <TableHeader>
                   <TableRow>
+                    {canManage ? (
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={allVisibleTokensSelected ? true : someVisibleTokensSelected ? "indeterminate" : false}
+                          disabled={!selectedTokens.length || loadingTokens || deletingSelectedTokens}
+                          onCheckedChange={(checked) => updateVisibleTokenSelection(checked === true)}
+                          aria-label="Select all FCM tokens on this page"
+                        />
+                      </TableHead>
+                    ) : null}
                     <TableHead>FCM token</TableHead>
                     <TableHead className="w-28">Status</TableHead>
                     <TableHead className="w-32">Device type</TableHead>
@@ -335,6 +452,11 @@ export function NotificationTokenDetailPage({
                   {loadingTokens ? (
                     Array.from({ length: TOKEN_SKELETON_COUNT }).map((_, index) => (
                       <TableRow key={`token-skeleton-${index}`}>
+                        {canManage ? (
+                          <TableCell>
+                            <div className="size-4 animate-pulse rounded bg-muted" />
+                          </TableCell>
+                        ) : null}
                         <TableCell className="max-w-[32rem]">
                           <div className="h-4 w-72 animate-pulse rounded bg-muted" />
                           <div className="mt-2 h-3 w-52 animate-pulse rounded bg-muted" />
@@ -371,6 +493,16 @@ export function NotificationTokenDetailPage({
                         className="cursor-pointer transition-colors hover:bg-muted/35"
                         onClick={() => setSelectedToken(token)}
                       >
+                        {canManage ? (
+                          <TableCell onClick={(event) => event.stopPropagation()}>
+                            <Checkbox
+                              checked={selectedTokenIdSet.has(token.id)}
+                              disabled={deletingSelectedTokens}
+                              onCheckedChange={(checked) => updateTokenSelection(token.id, checked === true)}
+                              aria-label={`Select FCM token for ${token.device_id}`}
+                            />
+                          </TableCell>
+                        ) : null}
                         <TableCell className="max-w-[32rem]">
                           <div className="truncate font-mono text-sm font-medium" title={token.fcm_token}>
                             {token.fcm_token}
@@ -418,7 +550,7 @@ export function NotificationTokenDetailPage({
                     ))
                   ) : (
                     <TableEmptyState
-                      colSpan={canManage ? 8 : 7}
+                      colSpan={canManage ? 9 : 7}
                       icon={Bell}
                       description="Mobile has not registered an FCM token for this app yet."
                       title={loadingTokens ? "Loading token records" : "No token records"}
@@ -489,6 +621,56 @@ export function NotificationTokenDetailPage({
                   ) : null}
                 </div>
               ) : null}
+            </DialogContent>
+          </Dialog>
+
+          <Dialog
+            open={bulkDeleteOpen}
+            onOpenChange={(open) => {
+              if (!open && !deletingSelectedTokens) setBulkDeleteOpen(false);
+            }}
+          >
+            <DialogContent showCloseButton={!deletingSelectedTokens}>
+              <DialogHeader>
+                <DialogTitle>Delete selected FCM tokens</DialogTitle>
+                <DialogDescription>
+                  {numberLabel(selectedVisibleTokens.length)} selected token(s) will be removed from active targeting and token lists.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border bg-muted/20 p-3">
+                {selectedVisibleTokens.slice(0, 8).map((token) => (
+                  <div key={token.id} className="rounded-md border bg-background p-2">
+                    <div className="truncate font-mono text-xs">{token.device_id}</div>
+                    <div className="mt-1 truncate text-xs text-muted-foreground">{identifierForToken(token)}</div>
+                  </div>
+                ))}
+                {selectedVisibleTokens.length > 8 ? (
+                  <div className="px-1 text-xs text-muted-foreground">
+                    +{numberLabel(selectedVisibleTokens.length - 8)} more token(s)
+                  </div>
+                ) : null}
+              </div>
+
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={deletingSelectedTokens}
+                  onClick={() => setBulkDeleteOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={!selectedVisibleTokens.length || deletingSelectedTokens}
+                  onClick={() => void deleteSelectedTokens()}
+                >
+                  {deletingSelectedTokens ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
+                  Delete selected
+                </Button>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
 

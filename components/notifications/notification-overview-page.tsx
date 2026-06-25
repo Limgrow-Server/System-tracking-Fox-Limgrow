@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, ChevronRight, ListFilter, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -59,8 +59,15 @@ type OverviewAppsResponse = {
   totalPages?: number;
 };
 
-export function NotificationOverviewPage({ data }: { data: NotificationsPageData }) {
+export function NotificationOverviewPage({
+  data,
+  deferInitialLoad = false,
+}: {
+  data: NotificationsPageData;
+  deferInitialLoad?: boolean;
+}) {
   const router = useRouter();
+  const initialLoadStarted = useRef(false);
   const [storeMappings, setStoreMappings] = useState(data.storeMappings);
   const [deviceTokens, setDeviceTokens] = useState(data.deviceTokens);
   const [notificationSchedules, setNotificationSchedules] = useState(
@@ -80,7 +87,7 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
   const [search, setSearch] = useState("");
   const [platformFilter, setPlatformFilter] = useState(ALL_FILTER_VALUE);
   const [storeFilter, setStoreFilter] = useState(ALL_FILTER_VALUE);
-  const [loadingApps, setLoadingApps] = useState(false);
+  const [loadingApps, setLoadingApps] = useState(deferInitialLoad);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
 
   const appRows = useMemo(() => {
@@ -159,6 +166,13 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
     }
   }
 
+  useEffect(() => {
+    if (!deferInitialLoad || initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    void loadOverviewPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deferInitialLoad]);
+
   function selectApp(appId: string) {
     router.push(`/notifications/overview/${encodeURIComponent(appId)}`);
   }
@@ -201,7 +215,12 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
                 {overviewPagination.total} app(s), {numberLabel(summary.activeTokens)} active FCM token record(s). Open a row to view token detail.
               </div>
             </div>
-            <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void loadOverviewPage(overviewPagination.page)}
+            >
               <RefreshCw size={15} />
               Refresh
             </Button>
