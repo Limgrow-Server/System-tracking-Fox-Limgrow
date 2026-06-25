@@ -5,12 +5,10 @@ import type {
   StoreMapping,
 } from "@/lib/tracking/types";
 
-import type { IosCredential, IosIapTransaction, IosStoreMapping, IosStoreProfile } from "@prisma/client";
+import type { IosCredential, IosIapTransaction, IosStoreMapping } from "@prisma/client";
 
 export type IosStoreMappingRecord = IosStoreMapping;
-export type IosCredentialRecord = IosCredential & {
-  storeProfile?: Pick<IosStoreProfile, "supabaseUserId"> | null;
-};
+export type IosCredentialRecord = IosCredential;
 
 export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): StoreMapping {
   return {
@@ -54,8 +52,6 @@ export function iosCredentialToMetadata(credential: IosCredentialRecord): Creden
     status: enumValue(credential.status) as CredentialSecretMetadata["status"],
     description: credential.description,
     last_used_at: iso(credential.lastUsedAt),
-    supabase_user_id: credential.storeProfile?.supabaseUserId ?? null,
-    supabase_user_email: null,
     created_at: credential.createdAt.toISOString(),
     updated_at: credential.updatedAt.toISOString(),
   };

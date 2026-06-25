@@ -5,10 +5,10 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.verify-android]
-verify_jwt = true
+verify_jwt = false
 
 [functions.verify-ios]
-verify_jwt = true
+verify_jwt = false
 
 [functions.send-notification]
 verify_jwt = true

@@ -63,8 +63,6 @@ export type CredentialSecretMetadata = {
   status: "active" | "disabled";
   description: string | null;
   last_used_at: string | null;
-  supabase_user_id: string | null;
-  supabase_user_email: string | null;
   created_at: string;
   updated_at: string;
 };

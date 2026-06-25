@@ -24,7 +24,7 @@ export async function handleAdminUsersPost(request: Request) {
   try {
     const admin = await requireAdminSession();
     const payload = await parseJsonBody<UserPayload>(request);
-    return okJson(await createConsoleUser(payload, admin, request));
+    return okJson(await createConsoleUser(payload, admin));
   } catch (error) {
     return errorJson(error, "Create user failed.");
   }

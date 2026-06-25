@@ -7,7 +7,7 @@ export default async function NotificationHistoryRoutePage({
 }: {
   searchParams: Promise<{ app?: string | string[] }>;
 }) {
-  await requireConsoleSession(["Admin"]);
+  await requireConsoleSession(["Admin", "Marketing"]);
   const params = await searchParams;
   const initialAppId = Array.isArray(params.app) ? params.app[0] : params.app;
   const data = await getNotificationsPageData();

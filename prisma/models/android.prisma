@@ -7,7 +7,6 @@ model AndroidStoreProfile {
   supportPhone     String?               @map("support_phone")
   websiteUrl       String?               @map("website_url")
   status           MappingStatus         @default(ACTIVE)
-  supabaseUserId   String?               @unique @map("supabase_user_id") @db.Uuid
   createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
   mappings         AndroidStoreMapping[]

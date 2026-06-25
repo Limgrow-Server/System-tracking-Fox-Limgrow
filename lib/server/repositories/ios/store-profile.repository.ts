@@ -7,7 +7,6 @@ type IosStoreProfileInput = {
   issuerId?: string | null;
   linkStore?: string | null;
   storeAccountName: string;
-  supabaseUserId?: string | null;
 };
 
 type IosStoreProfilePatch = {
@@ -15,7 +14,6 @@ type IosStoreProfilePatch = {
   issuerId?: string | null;
   linkStore?: string | null;
   storeAccountName?: string;
-  supabaseUserId?: string | null;
 };
 
 export function upsertIosStoreProfile(
@@ -25,7 +23,6 @@ export function upsertIosStoreProfile(
   const metadata = {
     avatarUrl: input.avatarUrl,
     linkStore: input.linkStore,
-    supabaseUserId: input.supabaseUserId,
   };
   const updateData = input.issuerId ? { ...metadata, issuerId: input.issuerId } : metadata;
 

@@ -23,7 +23,6 @@ import {
   PowerOff,
   RotateCcw,
   Trash2,
-  UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -164,7 +163,6 @@ type IosCredentialGroup = {
   linkStore: string;
   avatarUrl: string;
   issuerId: string;
-  supabaseUserId: string | null;
   keyReview: CredentialSecretMetadata | null;
   keyIap: CredentialSecretMetadata | null;
   keyFirebase: CredentialSecretMetadata | null;
@@ -728,14 +726,6 @@ function latestDateIso(left: string, right: string) {
   return new Date(left).getTime() >= new Date(right).getTime() ? left : right;
 }
 
-function selectedSupabaseUserId(value: string) {
-  return value && value !== "__none__" ? value : null;
-}
-
-function supabaseUserIdFormValue(value: string) {
-  return value === "__none__" ? "" : value;
-}
-
 function groupIosCredentials(
   credentials: CredentialSecretMetadata[],
 ): IosCredentialGroup[] {
@@ -759,7 +749,6 @@ function groupIosCredentials(
         linkStore: "",
         avatarUrl: "",
         issuerId: "",
-        supabaseUserId: credential.supabase_user_id,
         keyReview: null,
         keyIap: null,
         keyFirebase: null,
@@ -777,8 +766,6 @@ function groupIosCredentials(
       current.avatarUrl = metadata.avatarUrl;
     if (!current.issuerId && credential.issuer_id)
       current.issuerId = credential.issuer_id;
-    if (!current.supabaseUserId && credential.supabase_user_id)
-      current.supabaseUserId = credential.supabase_user_id;
     current.updatedAt = latestDateIso(current.updatedAt, credential.updated_at);
     current.credentials.push(credential);
 
@@ -980,7 +967,6 @@ export function CredentialConfigs({
   const [storeName, setStoreName] = useState("");
   const [linkStore, setLinkStore] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
-  const [supabaseUserId, setSupabaseUserId] = useState("");
   const [secretFile, setSecretFile] = useState<File | null>(null);
   const [selectedFileName, setSelectedFileName] = useState("");
   const [iosReviewKeyId, setIosReviewKeyId] = useState("");
@@ -1046,24 +1032,6 @@ export function CredentialConfigs({
     [data.credentialSecrets, selectedCredentialId],
   );
 
-  function credentialBelongsToCurrentAuthSelection(
-    credential: CredentialSecretMetadata,
-  ) {
-    if (isAndroidCredentialOnlyFlow) {
-      return credential.id === selectedCredentialId;
-    }
-
-    if (!isIosConfigCredentialView || !iosEditingGroup) {
-      return false;
-    }
-
-    if (iosEditingGroup.storeProfileId) {
-      return credential.store_profile_id === iosEditingGroup.storeProfileId;
-    }
-
-    return credential.store_account_name === iosEditingGroup.storeName;
-  }
-
   function cacheVaultSecret(credentialId: string, secretText: string) {
     setVaultSecretCache((current) =>
       current[credentialId] === secretText
@@ -1082,7 +1050,6 @@ export function CredentialConfigs({
     setStoreName("");
     setLinkStore("");
     setAvatarUrl("");
-    setSupabaseUserId("");
     setSecretFile(null);
     setSelectedFileName("");
     setIosEditingGroup(null);
@@ -1098,7 +1065,6 @@ export function CredentialConfigs({
     setStoreName("");
     setLinkStore("");
     setAvatarUrl("");
-    setSupabaseUserId("");
     setSecretFile(null);
     setSelectedFileName("");
     setIosReviewKeyId("");
@@ -1128,7 +1094,6 @@ export function CredentialConfigs({
       setStoreName("");
       setLinkStore("");
       setAvatarUrl("");
-      setSupabaseUserId("");
       setSecretFile(null);
       setSelectedFileName("");
       setIosEditingGroup(null);
@@ -1162,7 +1127,6 @@ export function CredentialConfigs({
     setStoreName(credential.store_account_name ?? "");
     setLinkStore(metadata.linkStore);
     setAvatarUrl(metadata.avatarUrl);
-    setSupabaseUserId(credential.supabase_user_id ?? "");
     setSecretFile(null);
     setSelectedFileName("");
     setSheetOpen(true);
@@ -1178,7 +1142,6 @@ export function CredentialConfigs({
     setStoreName(group.storeName);
     setLinkStore(group.linkStore);
     setAvatarUrl(group.avatarUrl);
-    setSupabaseUserId(group.supabaseUserId ?? "");
     setIosReviewKeyId(group.keyReview?.key_id ?? "");
     setIosIapKeyId(group.keyIap?.key_id ?? "");
     setIosIssuerId(group.keyReview?.issuer_id ?? group.keyIap?.issuer_id ?? "");
@@ -1438,7 +1401,6 @@ export function CredentialConfigs({
         storeAccountName: storeName,
         linkStore,
         avatarUrl,
-        supabaseUserId: selectedSupabaseUserId(supabaseUserId),
         keyId: fields.keyId,
         issuerId: fields.issuerId,
         status: "active",
@@ -1480,7 +1442,6 @@ export function CredentialConfigs({
     body.set("storeAccountName", storeName);
     body.set("linkStore", linkStore);
     body.set("avatarUrl", avatarUrl);
-    body.set("supabaseUserId", supabaseUserIdFormValue(supabaseUserId));
     body.set("secretFile", file);
 
     if (keyId) body.set("keyId", keyId);
@@ -1613,7 +1574,6 @@ export function CredentialConfigs({
             storeAccountName: storeName,
             linkStore,
             avatarUrl,
-            supabaseUserId: selectedSupabaseUserId(supabaseUserId),
             status: "active",
           }),
         });
@@ -1661,10 +1621,9 @@ export function CredentialConfigs({
           (credential) => credential.id === selectedCredentialId,
         );
         if (currentCredential?.store_profile_id)
-          body.set("storeProfileId", currentCredential.store_profile_id);
+        body.set("storeProfileId", currentCredential.store_profile_id);
         body.set("linkStore", linkStore);
         body.set("avatarUrl", avatarUrl);
-        body.set("supabaseUserId", supabaseUserIdFormValue(supabaseUserId));
       }
       if (submittedSecretFile) body.set("secretFile", submittedSecretFile);
 
@@ -1905,53 +1864,6 @@ export function CredentialConfigs({
                         />
                       </div>
 
-                      {(isAndroidCredentialOnlyFlow ||
-                        isIosConfigCredentialView) &&
-                      data.supabaseAuthUsers.length > 0 ? (
-                        <div className="grid gap-2">
-                          <Label htmlFor="supabaseUserId">
-                            Auth account{" "}
-                            <span className="text-muted-foreground">
-                              (optional)
-                            </span>
-                          </Label>
-                          <Select
-                            value={supabaseUserId}
-                            onValueChange={setSupabaseUserId}
-                          >
-                            <SelectTrigger
-                              id="supabaseUserId"
-                              className="h-9 w-full"
-                            >
-                              <SelectValue placeholder="No account linked" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">
-                                No account linked
-                              </SelectItem>
-                              {data.supabaseAuthUsers
-                                .filter((user) => {
-                                  if (user.id === supabaseUserId) return true;
-                                  const alreadyLinked =
-                                    data.credentialSecrets.some(
-                                      (credential) =>
-                                        credential.supabase_user_id ===
-                                          user.id &&
-                                        !credentialBelongsToCurrentAuthSelection(
-                                          credential,
-                                        ),
-                                    );
-                                  return !alreadyLinked;
-                                })
-                                .map((user) => (
-                                  <SelectItem key={user.id} value={user.id}>
-                                    {user.email}
-                                  </SelectItem>
-                                ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      ) : null}
                     </>
                   ) : null}
 
@@ -2311,7 +2223,6 @@ export function CredentialConfigs({
                 <TableRow>
                   <TableHead className="pl-4">Avatar</TableHead>
                   <TableHead>Store name</TableHead>
-                  <TableHead>Account</TableHead>
                   <TableHead>Service account JSON</TableHead>
                   <TableHead>Vault</TableHead>
                   <TableHead>Status</TableHead>
@@ -2344,32 +2255,6 @@ export function CredentialConfigs({
                             storeName={secret.store_account_name}
                           />
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        {secret.supabase_user_id ? (
-                          <div className="flex items-center gap-1.5">
-                            <UserRound
-                              size={14}
-                              className="shrink-0 text-emerald-600"
-                            />
-                            <span
-                              className="max-w-[160px] truncate text-xs font-medium"
-                              title={
-                                secret.supabase_user_email ??
-                                secret.supabase_user_id
-                              }
-                            >
-                              {data.supabaseAuthUsers.find(
-                                (user) => user.id === secret.supabase_user_id,
-                              )?.email ??
-                                secret.supabase_user_id.slice(0, 8) + "…"}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">
-                            N/A
-                          </span>
-                        )}
                       </TableCell>
                       <TableCell>{keyPresence(secret)}</TableCell>
                       <TableCell>
@@ -2493,7 +2378,6 @@ export function CredentialConfigs({
                 <TableRow>
                   <TableHead className="pl-4">Avatar</TableHead>
                   <TableHead>Store name</TableHead>
-                  <TableHead>Account</TableHead>
                   <TableHead>Issuer ID</TableHead>
                   <TableHead>Key IAP</TableHead>
                   <TableHead>Key Review</TableHead>
@@ -2529,29 +2413,6 @@ export function CredentialConfigs({
                         />
                       </div>
                     </TableCell>
-                    <TableCell>
-                      {group.supabaseUserId ? (
-                        <div className="flex items-center gap-1.5">
-                          <UserRound
-                            size={14}
-                            className="shrink-0 text-emerald-600"
-                          />
-                          <span
-                            className="max-w-[160px] truncate text-xs font-medium"
-                            title={group.supabaseUserId}
-                          >
-                            {data.supabaseAuthUsers.find(
-                              (user) => user.id === group.supabaseUserId,
-                            )?.email ?? `${group.supabaseUserId.slice(0, 8)}…`}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">
-                          N/A
-                        </span>
-                      )}
-                    </TableCell>
-
                     <TableCell>
                       <span className="block max-w-[220px] truncate text-muted-foreground">
                         {notAvailable(group.issuerId)}

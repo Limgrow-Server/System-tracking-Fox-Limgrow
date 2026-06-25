@@ -12,7 +12,6 @@ type CredentialTargetInput = {
 export function getAndroidCredentials(take = 160) {
   return prisma.androidCredential.findMany({
     orderBy: { updatedAt: "desc" },
-    include: { storeProfile: { select: { supabaseUserId: true } } },
     take,
   });
 }

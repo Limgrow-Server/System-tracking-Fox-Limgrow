@@ -8,7 +8,6 @@ enum IosSecretType {
 
 model IosStoreProfile {
   id               String              @id @default(uuid()) @db.Uuid
-  supabaseUserId   String?             @unique @map("supabase_user_id") @db.Uuid
   storeAccountName String              @unique @map("store_account_name")
   linkStore        String?             @map("link_store")
   avatarUrl        String?             @map("avatar_url")
