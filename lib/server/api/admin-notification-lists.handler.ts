@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, notFound } from "@/lib/server/api/errors";
 import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
+import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import {
   getNotificationHistoryDetailPageData,
@@ -19,6 +20,17 @@ const notificationManageRoles = ["Admin"] as const;
 
 function clean(value: string | null) {
   return value?.trim() ?? "";
+}
+
+function stringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => typeof item === "string" ? item.trim() : "")
+        .filter(Boolean),
+    ),
+  );
 }
 
 function pagination(url: URL, defaultPageSize = 10) {
@@ -98,20 +110,24 @@ export async function handleAdminNotificationTokensDelete(request: Request) {
     await requireConsoleApiSession([...notificationManageRoles]);
     const url = new URL(request.url);
     const id = clean(url.searchParams.get("id"));
-    if (!id) throw badRequest("FCM token id is required.");
+    const body = await parseJsonBody<{ ids?: unknown }>(request);
+    const ids = id ? [id] : stringArray(body.ids);
+    if (!ids.length) throw badRequest("FCM token id is required.");
+    if (ids.length > 200) throw badRequest("You can delete up to 200 FCM tokens at once.");
 
-    const token = await prisma.deviceToken.findUnique({
-      where: { id },
-      select: { id: true },
+    const result = await prisma.deviceToken.deleteMany({
+      where: {
+        id: { in: ids },
+      },
     });
-    if (!token) throw notFound("FCM token not found.");
+    if (!result.count) throw notFound("FCM token not found.");
 
-    await prisma.deviceToken.delete({ where: { id } });
     revalidateCacheTags([CACHE_TAGS.deviceTokens]);
 
     return okJson({
-      deleted: id,
-      message: "FCM token deleted.",
+      deleted: id || ids,
+      deletedCount: result.count,
+      message: result.count === 1 ? "FCM token deleted." : "FCM tokens deleted.",
     });
   } catch (error) {
     return errorJson(error, "Delete notification token failed.");
@@ -140,6 +156,7 @@ export async function handleAdminNotificationHistoryJobsGet(request: Request) {
       },
       {
         notificationEvents: data.notificationEvents,
+        storeMappings: data.storeMappings,
         storeOptions: data.notificationStoreOptions,
       },
     );
@@ -199,6 +216,7 @@ export async function handleAdminNotificationSchedulesGet(request: Request) {
         totalPages: page?.totalPages ?? 1,
       },
       {
+        storeMappings: data.storeMappings,
         storeOptions: data.notificationStoreOptions,
       },
     );

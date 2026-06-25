@@ -190,6 +190,32 @@ function valuesMatchSearch(values: Array<string | null | undefined>, search?: st
   return values.some((value) => value?.toLowerCase().includes(query));
 }
 
+function uniqueClean(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))),
+  );
+}
+
+function recordAppKeys(record: DeviceToken | NotificationJob | NotificationSchedule) {
+  return uniqueClean([
+    "app_mapping_id" in record ? record.app_mapping_id : null,
+    record.id,
+    record.app_id,
+    "app_identifier" in record ? record.app_identifier : null,
+    "product_app_id" in record ? record.product_app_id : null,
+    "app_name" in record ? record.app_name : null,
+    record.package_name,
+    record.bundle_id,
+  ]);
+}
+
+function recordStoreKeys(record: DeviceToken | NotificationJob | NotificationSchedule) {
+  return uniqueClean([
+    "store_profile_id" in record ? record.store_profile_id : null,
+    record.store_account_name,
+  ]);
+}
+
 function mappingIdentifier(app: StoreMapping) {
   return app.package_name ?? app.bundle_id ?? app.app_id ?? app.app_name;
 }
@@ -239,26 +265,66 @@ function filterMappings(mappings: StoreMapping[], options?: NotificationListOpti
   });
 }
 
-function recordMatchesAnyApp(
-  record: DeviceToken | NotificationJob | NotificationSchedule,
+function appMatchIndex(apps: StoreMapping[]) {
+  return {
+    appKeys: new Set(
+      apps.flatMap((app) =>
+        uniqueClean([
+          app.id,
+          app.app_id,
+          app.app_name,
+          app.package_name,
+          app.bundle_id,
+        ]),
+      ),
+    ),
+    storeKeys: new Set(
+      apps.flatMap((app) =>
+        uniqueClean([
+          app.store_profile_id,
+          app.store_account_name,
+        ]),
+      ),
+    ),
+  };
+}
+
+function hasAnyOverlap(values: string[], set: Set<string>) {
+  return values.some((value) => set.has(value));
+}
+
+function filterRecordsForApps<T extends DeviceToken | NotificationJob | NotificationSchedule>(
+  records: T[],
   apps: StoreMapping[],
 ) {
-  return apps.some((app) => recordMatchesStoreMapping(record, app));
+  if (!records.length || !apps.length) return [];
+
+  const index = appMatchIndex(apps);
+  return records.filter((record) => {
+    const appKeys = recordAppKeys(record);
+    const appMatches = hasAnyOverlap(appKeys, index.appKeys);
+
+    if (appKeys.length && index.appKeys.size) {
+      return appMatches;
+    }
+
+    return appMatches || hasAnyOverlap(recordStoreKeys(record), index.storeKeys);
+  });
 }
 
 function filterTokensForApps(tokens: DeviceToken[], apps: StoreMapping[]) {
-  return tokens.filter((token) => recordMatchesAnyApp(token, apps));
+  return filterRecordsForApps(tokens, apps);
 }
 
 function filterSchedulesForApps(
   schedules: NotificationSchedule[],
   apps: StoreMapping[],
 ) {
-  return schedules.filter((schedule) => recordMatchesAnyApp(schedule, apps));
+  return filterRecordsForApps(schedules, apps);
 }
 
 function filterJobsForApps(jobs: NotificationJob[], apps: StoreMapping[]) {
-  return jobs.filter((job) => recordMatchesAnyApp(job, apps));
+  return filterRecordsForApps(jobs, apps);
 }
 
 function notificationSummary(

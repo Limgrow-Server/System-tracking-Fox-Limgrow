@@ -1,8 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, CheckCircle2, Pause, PencilLine, Play, RefreshCw, Sparkles, Trash2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import {
@@ -22,7 +21,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
-import type { NotificationSchedule } from "@/lib/tracking/types";
+import type { NotificationSchedule, StoreMapping } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
 import {
@@ -52,6 +51,7 @@ type SchedulesListResponse = {
   error?: string;
   page?: number;
   pageSize?: number;
+  storeMappings?: StoreMapping[];
   storeOptions?: string[];
   success?: boolean;
   total?: number;
@@ -91,15 +91,18 @@ function hcmTimeInput(value: string | null | undefined) {
 export function NotificationSchedulesPage({
   canManage = false,
   data,
+  deferInitialLoad = false,
   initialAppId,
 }: {
   canManage?: boolean;
   data: NotificationsPageData;
+  deferInitialLoad?: boolean;
   initialAppId?: string;
 }) {
-  const router = useRouter();
-  const platformApps = useMemo(() => data.storeMappings, [data.storeMappings]);
-  const resolvedInitialAppId = platformApps.find((app) => app.id === initialAppId)?.id ?? "";
+  const initialLoadStarted = useRef(false);
+  const [storeMappings, setStoreMappings] = useState(data.storeMappings);
+  const platformApps = useMemo(() => storeMappings, [storeMappings]);
+  const resolvedInitialAppId = initialAppId ?? "";
   const [recordSearch, setRecordSearch] = useState("");
   const [recordAppFilter, setRecordAppFilter] = useState(resolvedInitialAppId || ALL_FILTER_VALUE);
   const [recordStoreFilter, setRecordStoreFilter] = useState(ALL_FILTER_VALUE);
@@ -115,7 +118,7 @@ export function NotificationSchedulesPage({
   const [storeFilterOptions, setStoreFilterOptions] = useState(
     data.notificationStoreOptions,
   );
-  const [loadingSchedules, setLoadingSchedules] = useState(false);
+  const [loadingSchedules, setLoadingSchedules] = useState(deferInitialLoad);
   const [editingSchedule, setEditingSchedule] = useState<NotificationSchedule | null>(null);
   const [editingScheduleRows, setEditingScheduleRows] = useState<LocaleRow[]>(() => createLocaleRows());
   const [editingScheduleAutoGenerate, setEditingScheduleAutoGenerate] = useState(false);
@@ -160,6 +163,7 @@ export function NotificationSchedulesPage({
       }
 
       setSchedules(payload.data);
+      if (payload.storeMappings) setStoreMappings(payload.storeMappings);
       setSchedulePagination({
         page: payload.page ?? page,
         pageSize: payload.pageSize ?? 10,
@@ -177,6 +181,13 @@ export function NotificationSchedulesPage({
       setLoadingSchedules(false);
     }
   }
+
+  useEffect(() => {
+    if (!deferInitialLoad || initialLoadStarted.current) return;
+    initialLoadStarted.current = true;
+    void loadSchedulesPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deferInitialLoad]);
 
   function updateEditingScheduleRow(topicCode: string, patch: Partial<LocaleRow>) {
     setEditingScheduleRows((current) => current.map((row) => (row.topicCode === topicCode ? { ...row, ...patch } : row)));
@@ -276,7 +287,7 @@ export function NotificationSchedulesPage({
       const payload = (await response.json()) as { ok?: boolean; error?: string; result?: { total?: number } };
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Dispatch failed.");
       toast.success(`Dispatcher processed ${payload.result?.total ?? 0} schedule(s).`);
-      router.refresh();
+      await loadSchedulesPage(schedulePagination.page);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Dispatch failed.");
     } finally {
@@ -354,7 +365,12 @@ export function NotificationSchedulesPage({
                 {schedulePagination.total} schedule(s), {visibleSchedules.filter((schedule) => schedule.status === "active").length} active on this page.
               </div>
             </div>
-            <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void loadSchedulesPage(schedulePagination.page)}
+            >
               <RefreshCw size={15} />
               Refresh
             </Button>
