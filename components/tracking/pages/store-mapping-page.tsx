@@ -38,6 +38,15 @@ type StoreOption = {
   id: string;
   name: string;
 };
+type StoreMappingListResponse = {
+  success?: boolean;
+  data?: StoreMapping[];
+  error?: string;
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  totalPages?: number;
+};
 
 const APP_MAPPING_PAGE_SIZE = 10;
 
@@ -136,22 +145,28 @@ export function StoreMappingPage({
 }) {
   const router = useRouter();
   const [mappings, setMappings] = useState(data.storeMappings);
+  const [tablePagination, setTablePagination] = useState(
+    data.storeMappingPagination,
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<DrawerMode>("create");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<StoreMappingForm>(() => createEmptyForm(platformFilter ?? "android"));
+  const [form, setForm] = useState<StoreMappingForm>(() =>
+    createEmptyForm(platformFilter ?? "android"),
+  );
   const [pending, setPending] = useState(false);
   const [pendingRow, setPendingRow] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<StoreMapping | null>(null);
   const [deleteConfirmationName, setDeleteConfirmationName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [storeFilter, setStoreFilter] = useState("all");
-  const [tablePage, setTablePage] = useState(1);
+  const [tableLoading, setTableLoading] = useState(false);
   const storeOptions = useMemo(() => {
     const options = new Map<string, StoreOption>();
 
     for (const credential of data.credentialSecrets) {
-      if (credential.platform !== form.platform || !credential.store_profile_id) continue;
+      if (credential.platform !== form.platform || !credential.store_profile_id)
+        continue;
 
       const name = credential.store_account_name?.trim();
       if (!name || options.has(credential.store_profile_id)) continue;
@@ -162,7 +177,9 @@ export function StoreMappingPage({
       });
     }
 
-    return Array.from(options.values()).sort((left, right) => left.name.localeCompare(right.name));
+    return Array.from(options.values()).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
   }, [data.credentialSecrets, form.platform]);
 
   function openCreate() {
@@ -186,13 +203,20 @@ export function StoreMappingPage({
     setDrawerOpen(true);
   }
 
-  function updateField<K extends keyof StoreMappingForm>(key: K, nextValue: StoreMappingForm[K]) {
+  function updateField<K extends keyof StoreMappingForm>(
+    key: K,
+    nextValue: StoreMappingForm[K],
+  ) {
     setForm((current) => ({ ...current, [key]: nextValue }));
   }
 
   function selectStoreProfile(nextValue: string) {
     if (nextValue === "none") {
-      setForm((current) => ({ ...current, storeAccountName: "", storeProfileId: "" }));
+      setForm((current) => ({
+        ...current,
+        storeAccountName: "",
+        storeProfileId: "",
+      }));
       return;
     }
 
@@ -208,12 +232,57 @@ export function StoreMappingPage({
 
   function updateSearchQuery(nextValue: string) {
     setSearchQuery(nextValue);
-    setTablePage(1);
+    void loadMappingsPage(1, { searchQuery: nextValue });
   }
 
   function updateStoreFilter(nextValue: string) {
     setStoreFilter(nextValue);
-    setTablePage(1);
+    void loadMappingsPage(1, { storeFilter: nextValue });
+  }
+
+  async function loadMappingsPage(
+    page: number,
+    overrides?: { searchQuery?: string; storeFilter?: string },
+  ) {
+    const nextSearchQuery = overrides?.searchQuery ?? searchQuery;
+    const nextStoreFilter = overrides?.storeFilter ?? storeFilter;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(APP_MAPPING_PAGE_SIZE),
+      platform: platformFilter ?? "android",
+    });
+    const cleanedSearch = nextSearchQuery.trim();
+
+    if (cleanedSearch) params.set("search", cleanedSearch);
+    if (nextStoreFilter !== "all")
+      params.set("storeProfileId", nextStoreFilter);
+
+    setTableLoading(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/store-mappings?${params.toString()}`,
+      );
+      const payload = (await response.json()) as StoreMappingListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Load app mappings failed.");
+      }
+
+      setMappings(payload.data);
+      setTablePagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? APP_MAPPING_PAGE_SIZE,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Load app mappings failed.",
+      );
+    } finally {
+      setTableLoading(false);
+    }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -226,28 +295,37 @@ export function StoreMappingPage({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: editingId, ...form }),
       });
-      const payload = (await response.json()) as { ok?: boolean; mapping?: StoreMapping; message?: string; error?: string };
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        mapping?: StoreMapping;
+        message?: string;
+        error?: string;
+      };
 
       if (!response.ok || !payload.ok || !payload.mapping) {
         throw new Error(payload.error ?? "Store mapping operation failed.");
       }
 
-      setMappings((current) =>
-        editingId
-          ? current.map((item) => (item.id === payload.mapping!.id ? payload.mapping! : item))
-          : [payload.mapping!, ...current.filter((item) => item.id !== payload.mapping!.id)]
-      );
       toast.success(payload.message ?? "Store mapping saved.");
       setDrawerOpen(false);
+      await loadMappingsPage(editingId ? tablePagination.page : 1);
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Store mapping operation failed.");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Store mapping operation failed.",
+      );
     } finally {
       setPending(false);
     }
   }
 
-  async function saveMappingPatch(mapping: StoreMapping, patch: Partial<StoreMappingForm>, message: string) {
+  async function saveMappingPatch(
+    mapping: StoreMapping,
+    patch: Partial<StoreMappingForm>,
+    message: string,
+  ) {
     const nextForm = {
       ...formFromMapping(mapping),
       ...patch,
@@ -311,6 +389,7 @@ export function StoreMappingPage({
       toast.success(payload.message ?? "Store mapping deleted.");
       setDeleteTarget(null);
       setDeleteConfirmationName("");
+      await loadMappingsPage(mappings.length <= 1 && tablePagination.page > 1 ? tablePagination.page - 1 : tablePagination.page);
       router.refresh();
     } catch (error) {
       setMappings(previous);
@@ -323,47 +402,10 @@ export function StoreMappingPage({
   const isAndroidForm = form.platform === "android";
   const pageLabel = platformFilter === "android" ? "Android App Mapping" : platformFilter === "ios" ? "iOS App Mapping" : "App Mapping";
   const tableTitle = platformFilter === "android" ? "Android App Mapping" : platformFilter === "ios" ? "iOS App Mapping" : "App Mapping";
-  const tableStoreOptions = useMemo(() => {
-    const options = new Map<string, StoreOption>();
-
-    for (const mapping of mappings) {
-      if (!mapping.store_profile_id || options.has(mapping.store_profile_id)) continue;
-
-      options.set(mapping.store_profile_id, {
-        id: mapping.store_profile_id,
-        name: mapping.store_account_name,
-      });
-    }
-
-    return Array.from(options.values()).sort((left, right) => left.name.localeCompare(right.name));
-  }, [mappings]);
-  const filteredMappings = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-
-    return mappings.filter((mapping) => {
-      const matchesStore = storeFilter === "all" || mapping.store_profile_id === storeFilter;
-      if (!matchesStore) return false;
-
-      if (!query) return true;
-
-      const runtimeId = mapping.platform === "ios" ? mapping.bundle_id : mapping.package_name;
-      const searchText = [
-        mapping.app_name,
-        mapping.app_id,
-        runtimeId,
-        mapping.store_account_name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-
-      return searchText.includes(query);
-    });
-  }, [mappings, searchQuery, storeFilter]);
-  const totalTablePages = Math.max(1, Math.ceil(filteredMappings.length / APP_MAPPING_PAGE_SIZE));
-  const currentTablePage = Math.min(tablePage, totalTablePages);
-  const tableStartIndex = (currentTablePage - 1) * APP_MAPPING_PAGE_SIZE;
-  const visibleMappings = filteredMappings.slice(tableStartIndex, tableStartIndex + APP_MAPPING_PAGE_SIZE);
+  const tableStoreOptions = storeOptions;
+  const currentTablePage = tablePagination.page;
+  const tableStartIndex = (currentTablePage - 1) * tablePagination.pageSize;
+  const visibleMappings = mappings;
   const hasTableFilters = Boolean(searchQuery.trim()) || storeFilter !== "all";
   const selectedStoreProfileValue = form.storeProfileId || "none";
   const hasSelectedStoreProfile = form.storeProfileId
@@ -553,7 +595,10 @@ export function StoreMappingPage({
       <Card className="rounded-lg">
         <CardHeader className="gap-4 border-b">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <CardTitle>{tableTitle}</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              {tableTitle}
+              {tableLoading ? <Spinner className="size-4" /> : null}
+            </CardTitle>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <div className="relative sm:w-[320px]">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -655,7 +700,7 @@ export function StoreMappingPage({
                   </TableRow>
                 );
               })}
-              {!filteredMappings.length ? (
+              {!mappings.length ? (
                 <TableEmptyState
                   colSpan={7}
                   icon={Cable}
@@ -671,12 +716,12 @@ export function StoreMappingPage({
           </Table>
           <TablePaginationFooter
             from={tableStartIndex + 1}
-            onPageChange={setTablePage}
+            onPageChange={(page) => void loadMappingsPage(page)}
             page={currentTablePage}
             shown={visibleMappings.length}
             to={tableStartIndex + visibleMappings.length}
-            total={filteredMappings.length}
-            totalPages={totalTablePages}
+            total={tablePagination.total}
+            totalPages={tablePagination.totalPages}
           />
         </CardContent>
       </Card>

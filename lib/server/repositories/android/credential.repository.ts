@@ -16,6 +16,47 @@ export function getAndroidCredentials(take = 160) {
   });
 }
 
+type AndroidCredentialPageOptions = {
+  search?: string;
+  skip: number;
+  take: number;
+};
+
+function androidCredentialWhere(options: AndroidCredentialPageOptions): Prisma.AndroidCredentialWhereInput {
+  const where: Prisma.AndroidCredentialWhereInput = {};
+  const search = options.search?.trim();
+
+  if (search) {
+    const contains = { contains: search, mode: "insensitive" as const };
+
+    where.OR = [
+      { credentialRef: contains },
+      { storeAccountName: contains },
+      { clientEmail: contains },
+      { projectId: contains },
+      { privateKeyId: contains },
+      { vaultSecretName: contains },
+      { storeProfile: { storeAccountName: contains } },
+    ];
+  }
+
+  return where;
+}
+
+export function getAndroidCredentialsPage(options: AndroidCredentialPageOptions) {
+  const where = androidCredentialWhere(options);
+
+  return prisma.$transaction([
+    prisma.androidCredential.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      skip: options.skip,
+      take: options.take,
+    }),
+    prisma.androidCredential.count({ where }),
+  ]);
+}
+
 export function getAndroidCredentialsByIds(ids: string[]) {
   return prisma.androidCredential.findMany({
     where: { id: { in: ids } },

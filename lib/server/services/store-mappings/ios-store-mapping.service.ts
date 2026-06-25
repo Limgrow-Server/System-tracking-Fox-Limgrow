@@ -7,8 +7,10 @@ import {
   deleteIosStoreMapping,
   getIosStoreMappingId,
   getIosStoreMappings,
+  getIosStoreMappingsPage,
   saveIosStoreMapping,
 } from "@/lib/server/repositories/ios/store-mapping.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { getIosStoreProfileById } from "@/lib/server/repositories/ios/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
@@ -63,6 +65,20 @@ function mapIosStoreMappingError(error: unknown): never {
 export async function getIosStoreMappingDtos(options?: { take?: number }) {
   const mappings = await getIosStoreMappings(options);
   return mappings.map(iosStoreMappingToTracking);
+}
+
+export async function getIosStoreMappingPageResult(options: PaginationQuery & {
+  search?: string;
+  storeProfileId?: string;
+}) {
+  const [mappings, total] = await getIosStoreMappingsPage({
+    search: options.search,
+    skip: options.skip,
+    storeProfileId: options.storeProfileId,
+    take: options.take,
+  });
+
+  return paginatedResult(mappings.map(iosStoreMappingToTracking), total, options);
 }
 
 export async function getIosStoreMappingsResult() {

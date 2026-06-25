@@ -13,8 +13,16 @@ import type {
   IapAndroidDto,
 } from "@/lib/server/services/iap/android-iap.service";
 
+export type PaginationMeta = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
 export type StoreMappingPageData = {
   storeMappings: StoreMapping[];
+  storeMappingPagination: PaginationMeta;
   credentialSecrets: CredentialSecretMetadata[];
 };
 
@@ -25,6 +33,7 @@ export type UsersPageData = {
 
 export type ConfigsPageData = {
   credentialSecrets: CredentialSecretMetadata[];
+  credentialPagination: PaginationMeta;
 };
 
 export type IosIapVerifyPageData = {
@@ -60,6 +69,11 @@ export type IapAppCard = {
 
 export type IapAppGridPageData = {
   apps: IapAppCard[];
+  appPagination: PaginationMeta;
+  filters: {
+    search: string;
+    storeAccountName: string;
+  };
   storeNames: string[];
 };
 
@@ -67,6 +81,14 @@ export type IapAppTransaction = IapAndroidDto | IosIapTransactionSummary;
 
 export type IapAppDetailPageData = {
   app: IapAppCard;
+  filters: {
+    kind: string;
+    search: string;
+    state: string;
+  };
+  metricTransactions: IapAppTransaction[];
+  transactionPagination: PaginationMeta;
+  transactionStates: string[];
   transactions: IapAppTransaction[];
 };
 

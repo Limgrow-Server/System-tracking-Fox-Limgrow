@@ -8,6 +8,7 @@ import {
   deleteAndroidCredential,
   deleteAndroidCredentialsByIds,
   getAndroidCredentials,
+  getAndroidCredentialsPage,
   getAndroidCredentialsByIds,
   getAndroidCredentialTarget,
   getCurrentAndroidCredentialForStoreProfile,
@@ -19,6 +20,7 @@ import {
   upsertAndroidStoreProfile,
 } from "@/lib/server/repositories/android/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import {
   deleteCredentialVaultSecret,
   getCredentialVaultSecret,
@@ -50,6 +52,18 @@ export async function getAndroidCredentialConfigs(take = 200) {
   return {
     credentials: credentials.map(androidCredentialToMetadata),
   };
+}
+
+export async function getAndroidCredentialConfigsPage(options: PaginationQuery & {
+  search?: string;
+}) {
+  const [credentials, total] = await getAndroidCredentialsPage({
+    search: options.search,
+    skip: options.skip,
+    take: options.take,
+  });
+
+  return paginatedResult(credentials.map(androidCredentialToMetadata), total, options);
 }
 
 export async function getAndroidCredentialSecret(input: {

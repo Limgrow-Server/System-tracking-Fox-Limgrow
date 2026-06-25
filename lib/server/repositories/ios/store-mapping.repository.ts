@@ -33,6 +33,57 @@ export function getIosStoreMappings(options?: { take?: number }) {
   });
 }
 
+type IosStoreMappingPageOptions = {
+  search?: string;
+  skip: number;
+  storeProfileId?: string;
+  take: number;
+};
+
+function iosStoreMappingWhere(options: IosStoreMappingPageOptions): Prisma.IosStoreMappingWhereInput {
+  const where: Prisma.IosStoreMappingWhereInput = {};
+  const search = options.search?.trim();
+
+  if (options.storeProfileId) {
+    where.storeProfileId = options.storeProfileId;
+  }
+
+  if (search) {
+    const contains = { contains: search, mode: "insensitive" as const };
+
+    where.OR = [
+      { appName: contains },
+      { appId: contains },
+      { bundleId: contains },
+      { storeAccountName: contains },
+      { storeProfile: { storeAccountName: contains } },
+    ];
+  }
+
+  return where;
+}
+
+export function getIosStoreMappingsPage(options: IosStoreMappingPageOptions) {
+  const where = iosStoreMappingWhere(options);
+
+  return prisma.$transaction([
+    prisma.iosStoreMapping.findMany({
+      where,
+      include: {
+        storeProfile: {
+          select: {
+            storeAccountName: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      skip: options.skip,
+      take: options.take,
+    }),
+    prisma.iosStoreMapping.count({ where }),
+  ]);
+}
+
 export async function getIosStoreMappingId(id: string) {
   const mapping = await prisma.iosStoreMapping.findUnique({
     where: { id },
