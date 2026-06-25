@@ -418,6 +418,30 @@ export function PlatformIcon({ platform }: { platform: PlatformFilter | string }
   return platform === "ios" ? <Apple size={14} /> : <Smartphone size={14} />;
 }
 
+export function platformBadgeClass(platform: PlatformFilter | string | null | undefined) {
+  if (platform === "ios") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (platform === "android") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return "border-zinc-200 bg-zinc-50 text-zinc-700";
+}
+
+export function PlatformBadge({
+  className,
+  platform,
+}: {
+  className?: string;
+  platform: PlatformFilter | string;
+}) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn("h-6 gap-1.5 rounded-md px-2 text-xs", platformBadgeClass(platform), className)}
+    >
+      <PlatformIcon platform={platform} />
+      {platformLabel(platform)}
+    </Badge>
+  );
+}
+
 export function scheduleLabel(schedule: NotificationSchedule) {
   if (schedule.schedule_type === "daily") return `Daily ${schedule.time_of_day ?? ""}`;
   if (schedule.schedule_type === "monthly") return `Monthly day ${schedule.day_of_month ?? 1} ${schedule.time_of_day ?? ""}`;
@@ -961,10 +985,7 @@ export function AppSelectionTable({
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                          <PlatformIcon platform={app.platform} />
-                          {platformLabel(app.platform)}
-                        </Badge>
+                        <PlatformBadge platform={app.platform} />
                       </TableCell>
                       <TableCell>
                         <div className="max-w-full truncate rounded-md bg-muted px-2 py-1 font-mono text-xs">{compactIdentifier(app)}</div>

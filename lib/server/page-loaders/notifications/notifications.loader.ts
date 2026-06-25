@@ -139,11 +139,17 @@ function scopedNotificationsData(
   const notificationJobs = filterScopedRecordsForSession(
     session,
     data.notificationJobs,
+    data.storeMappings,
   );
-  const deviceTokens = filterScopedRecordsForSession(session, data.deviceTokens);
+  const deviceTokens = filterScopedRecordsForSession(
+    session,
+    data.deviceTokens,
+    data.storeMappings,
+  );
   const notificationSchedules = scopedNotificationSchedules(
     session,
     data.notificationSchedules,
+    data.storeMappings,
   );
 
   return {

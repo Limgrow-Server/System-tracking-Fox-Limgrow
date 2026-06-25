@@ -126,9 +126,14 @@ export function recordMatchesStoreMapping(
   const mappingFields = storeMappingScopeFields(mapping);
   const mappingAppKeys = new Set(mappingFields.appKeys);
   const mappingStoreKeys = new Set(mappingFields.storeKeys);
+  const appMatches = hasOverlap(recordFields.appKeys, mappingAppKeys);
+
+  if (recordFields.appKeys.length && mappingFields.appKeys.length) {
+    return appMatches;
+  }
 
   return (
-    hasOverlap(recordFields.appKeys, mappingAppKeys) ||
+    appMatches ||
     hasOverlap(recordFields.storeKeys, mappingStoreKeys)
   );
 }
@@ -157,10 +162,15 @@ export function filterStoreMappingsForSession(
 export function filterScopedRecordsForSession<T extends ScopeRecord>(
   session: ConsoleSession,
   rows: T[],
+  storeMappings: StoreMapping[] = [],
 ) {
-  return hasAllAppAccess(session)
-    ? rows
-    : rows.filter((row) => canAccessScopedRecord(session, row));
+  if (hasAllAppAccess(session)) return rows;
+
+  return rows.filter(
+    (row) =>
+      canAccessScopedRecord(session, row) ||
+      canAccessRecordViaStoreMappings(session, row, storeMappings),
+  );
 }
 
 export function scopedCredentialSecrets(
@@ -220,6 +230,7 @@ export function notificationRecordFromPayload(payload: Record<string, unknown>):
 export function scopedNotificationSchedules(
   session: ConsoleSession,
   schedules: NotificationSchedule[],
+  storeMappings: StoreMapping[] = [],
 ) {
-  return filterScopedRecordsForSession(session, schedules);
+  return filterScopedRecordsForSession(session, schedules, storeMappings);
 }

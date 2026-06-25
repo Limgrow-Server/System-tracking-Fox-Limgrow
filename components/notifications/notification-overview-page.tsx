@@ -11,7 +11,6 @@ import {
   TableEmptyState,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -23,9 +22,8 @@ import type { DeviceToken, NotificationSchedule, StoreMapping } from "@/lib/trac
 import {
   ALL_FILTER_VALUE,
   AppIcon,
-  PlatformIcon,
+  PlatformBadge,
   numberLabel,
-  platformLabel,
   scheduleMatchesApp,
   tokensForApp,
 } from "./shared";
@@ -290,10 +288,7 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
                       </TableCell>
                       <TableCell className="font-mono text-xs">{row.app.app_id ?? "No app id"}</TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                          <PlatformIcon platform={row.app.platform} />
-                          {platformLabel(row.app.platform)}
-                        </Badge>
+                        <PlatformBadge platform={row.app.platform} />
                       </TableCell>
                       <TableCell>
                         <div className="truncate rounded-md bg-muted px-2 py-1 font-mono text-xs">{appIdentifier(row.app)}</div>

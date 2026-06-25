@@ -14,5 +14,11 @@ export default async function NotificationSchedulesRoutePage({
     appId: initialAppId,
   });
 
-  return <NotificationSchedulesPage data={data} initialAppId={initialAppId} />;
+  return (
+    <NotificationSchedulesPage
+      canManage={session.role === "Admin"}
+      data={data}
+      initialAppId={initialAppId}
+    />
+  );
 }

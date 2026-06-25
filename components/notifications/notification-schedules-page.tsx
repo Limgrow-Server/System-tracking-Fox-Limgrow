@@ -29,7 +29,7 @@ import {
   ALL_FILTER_VALUE,
   type LocaleRow,
   MESSAGE_MAX_LENGTH,
-  PlatformIcon,
+  PlatformBadge,
   RecordFilterControls,
   type ScheduleContentResponse,
   type ScheduleResponse,
@@ -37,7 +37,6 @@ import {
   createLocaleRows,
   localePayloadForRows,
   localeRowsFromPayload,
-  platformLabel,
   primaryLocaleRow,
   scheduleAutoGenerateEnabled,
   scheduleDataWithAutoGenerate,
@@ -90,9 +89,11 @@ function hcmTimeInput(value: string | null | undefined) {
 }
 
 export function NotificationSchedulesPage({
+  canManage = false,
   data,
   initialAppId,
 }: {
+  canManage?: boolean;
   data: NotificationsPageData;
   initialAppId?: string;
 }) {
@@ -182,6 +183,7 @@ export function NotificationSchedulesPage({
   }
 
   function openScheduleEditor(schedule: NotificationSchedule) {
+    if (!canManage) return;
     setEditingSchedule(schedule);
     setEditingScheduleRows(localeRowsFromPayload(schedule.locale_payload, schedule.title ?? "", schedule.message ?? ""));
     setEditingScheduleAutoGenerate(scheduleAutoGenerateEnabled(schedule));
@@ -217,6 +219,7 @@ export function NotificationSchedulesPage({
   }
 
   async function saveScheduleContent() {
+    if (!canManage) return;
     if (!editingSchedule) return;
 
     const enabledEditingRows = editingScheduleRows.filter((row) => row.enabled);
@@ -261,6 +264,7 @@ export function NotificationSchedulesPage({
   }
 
   async function dispatchSchedule(scheduleId: string) {
+    if (!canManage) return;
     setPendingAction(`dispatch-${scheduleId}`);
 
     try {
@@ -281,6 +285,7 @@ export function NotificationSchedulesPage({
   }
 
   async function updateScheduleStatus(schedule: NotificationSchedule, status: "active" | "paused") {
+    if (!canManage) return;
     setPendingAction(`schedule-${schedule.id}`);
 
     try {
@@ -302,6 +307,7 @@ export function NotificationSchedulesPage({
   }
 
   async function deleteSchedule(schedule: NotificationSchedule) {
+    if (!canManage) return;
     setPendingAction(`delete-${schedule.id}`);
     const previous = schedules;
     setSchedules((current) => current.filter((item) => item.id !== schedule.id));
@@ -385,7 +391,7 @@ export function NotificationSchedulesPage({
                 <TableHead className="w-32">Status</TableHead>
                 <TableHead className="w-44">Next run</TableHead>
                 <TableHead className="w-44">Last run</TableHead>
-                <TableHead className="w-36">Actions</TableHead>
+                {canManage ? <TableHead className="w-36">Actions</TableHead> : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -407,21 +413,25 @@ export function NotificationSchedulesPage({
                             </Badge>
                           ) : null}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => openScheduleEditor(schedule)}
-                          className="mt-1 block max-w-full text-left text-xs text-muted-foreground hover:text-foreground"
-                        >
+                        {canManage ? (
+                          <button
+                            type="button"
+                            onClick={() => openScheduleEditor(schedule)}
+                            className="mt-1 block max-w-full text-left text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            <span className="line-clamp-1 font-medium">{displayNotification.title}</span>
+                            {displayNotification.message ? <span className="line-clamp-1">{displayNotification.message}</span> : null}
+                          </button>
+                        ) : (
+                          <div className="mt-1 max-w-full text-left text-xs text-muted-foreground">
                           <span className="line-clamp-1 font-medium">{displayNotification.title}</span>
                           {displayNotification.message ? <span className="line-clamp-1">{displayNotification.message}</span> : null}
-                        </button>
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                            <PlatformIcon platform={schedule.platform} />
-                            {platformLabel(schedule.platform)}
-                          </Badge>
+                          <PlatformBadge platform={schedule.platform} />
                           <div className="min-w-0">
                             <div className="truncate font-medium">{schedule.app_name}</div>
                             <div className="truncate font-mono text-[11px] text-muted-foreground">
@@ -448,33 +458,35 @@ export function NotificationSchedulesPage({
                         <div className="text-sm text-muted-foreground">{dateTime(schedule.last_run_at)}</div>
                         {schedule.last_error ? <div className="mt-1 line-clamp-2 text-xs text-rose-600">{schedule.last_error}</div> : null}
                       </TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          <Button variant="outline" size="icon-sm" onClick={() => openScheduleEditor(schedule)} title="Edit content">
-                            <PencilLine size={14} />
-                          </Button>
-                          <Button variant="outline" size="icon-sm" onClick={() => dispatchSchedule(schedule.id)} title="Run now">
-                            {pendingAction === `dispatch-${schedule.id}` ? <Spinner className="size-3.5" /> : <Play size={14} />}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="icon-sm"
-                            onClick={() => updateScheduleStatus(schedule, schedule.status === "active" ? "paused" : "active")}
-                            title={schedule.status === "active" ? "Pause" : "Activate"}
-                          >
-                            {pendingAction === `schedule-${schedule.id}` ? <Spinner className="size-3.5" /> : schedule.status === "active" ? <Pause size={14} /> : <Play size={14} />}
-                          </Button>
-                          <Button variant="outline" size="icon-sm" onClick={() => deleteSchedule(schedule)} title="Delete">
-                            {pendingAction === `delete-${schedule.id}` ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
-                          </Button>
-                        </div>
-                      </TableCell>
+                      {canManage ? (
+                        <TableCell>
+                          <div className="flex gap-1">
+                            <Button variant="outline" size="icon-sm" onClick={() => openScheduleEditor(schedule)} title="Edit content">
+                              <PencilLine size={14} />
+                            </Button>
+                            <Button variant="outline" size="icon-sm" onClick={() => dispatchSchedule(schedule.id)} title="Run now">
+                              {pendingAction === `dispatch-${schedule.id}` ? <Spinner className="size-3.5" /> : <Play size={14} />}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              onClick={() => updateScheduleStatus(schedule, schedule.status === "active" ? "paused" : "active")}
+                              title={schedule.status === "active" ? "Pause" : "Activate"}
+                            >
+                              {pendingAction === `schedule-${schedule.id}` ? <Spinner className="size-3.5" /> : schedule.status === "active" ? <Pause size={14} /> : <Play size={14} />}
+                            </Button>
+                            <Button variant="outline" size="icon-sm" onClick={() => deleteSchedule(schedule)} title="Delete">
+                              {pendingAction === `delete-${schedule.id}` ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      ) : null}
                     </TableRow>
                   );
                 })
               ) : (
                 <TableEmptyState
-                  colSpan={8}
+                  colSpan={canManage ? 8 : 7}
                   icon={CalendarClock}
                   title={loadingSchedules ? "Loading schedules" : "No schedules"}
                   description={
@@ -496,6 +508,7 @@ export function NotificationSchedulesPage({
         />
       </section>
 
+      {canManage ? (
       <Dialog open={Boolean(editingSchedule)} onOpenChange={(open) => !open && setEditingSchedule(null)}>
         <DialogContent className="max-h-[86dvh] gap-0 overflow-hidden p-0 sm:max-w-[min(980px,calc(100vw-2rem))]">
           <DialogHeader className="border-b px-4 py-3 pr-12">
@@ -678,6 +691,7 @@ export function NotificationSchedulesPage({
           ) : null}
         </DialogContent>
       </Dialog>
+      ) : null}
     </div>
   );
 }

@@ -44,7 +44,7 @@ const LANGUAGES = [
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
 const HCM_OFFSET_MINUTES = 7 * 60;
-const notificationRoles = ["Admin", "Dev", "Marketing"] as const;
+const notificationManageRoles = ["Admin"] as const;
 
 function supabaseFunctionUrl(functionName: string) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, "");
@@ -339,7 +339,7 @@ async function callEdgeFunction(functionName: string, body: Record<string, unkno
 export async function handleAdminNotificationSendPost(request: Request) {
   let requestPayload: Record<string, unknown> | null = null;
   try {
-    const session = await requireConsoleApiSession([...notificationRoles]);
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     await assertNotificationAccess(session, payload);
@@ -590,7 +590,7 @@ async function openRouterGeneratedCopy(input: {
 
 export async function handleAdminNotificationGeneratePost(request: Request) {
   try {
-    await requireConsoleApiSession([...notificationRoles]);
+    await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     const appName = clean(payload.appName) || "App";
     const intent = clean(payload.intent) === "translate" ? "translate" : "generate";
@@ -611,7 +611,7 @@ export async function handleAdminNotificationGeneratePost(request: Request) {
 
 export async function handleAdminNotificationSchedulesPost(request: Request) {
   try {
-    const admin = await requireConsoleApiSession([...notificationRoles]);
+    const admin = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     await assertNotificationAccess(admin, payload);
     const notifications = normalizedNotifications(payload.notifications);
@@ -670,7 +670,7 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
 
 export async function handleAdminNotificationSchedulesPatch(request: Request) {
   try {
-    const session = await requireConsoleApiSession([...notificationRoles]);
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     await assertNotificationAccess(session, payload);
     const id = clean(payload.id);
@@ -731,7 +731,7 @@ export async function handleAdminNotificationSchedulesPatch(request: Request) {
 
 export async function handleAdminNotificationSchedulesDelete(request: Request) {
   try {
-    const session = await requireConsoleApiSession([...notificationRoles]);
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     await assertNotificationAccess(session, payload);
     const id = clean(payload.id);
@@ -751,7 +751,7 @@ export async function handleAdminNotificationSchedulesDelete(request: Request) {
 export async function handleAdminNotificationDispatchPost(request: Request) {
   let requestPayload: Record<string, unknown> | null = null;
   try {
-    const session = await requireConsoleApiSession([...notificationRoles]);
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     await assertNotificationAccess(session, payload);
@@ -770,7 +770,7 @@ export async function handleAdminNotificationDispatchPost(request: Request) {
 
 export async function handleAdminNotificationTestDevicePost(request: Request) {
   try {
-    const session = await requireConsoleApiSession([...notificationRoles]);
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     await assertNotificationAccess(session, payload);
     const platform = clean(payload.platform) || "android";

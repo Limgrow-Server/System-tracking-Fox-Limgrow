@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 
 import {
   ALL_FILTER_VALUE,
-  PlatformIcon,
+  PlatformBadge,
   RecordFilterControls,
   jobFailedCount,
   jobRequestedCount,
@@ -50,7 +50,6 @@ import {
   notificationUniqueOpenCount,
   notificationUniqueReceivedCount,
   numberLabel,
-  platformLabel,
   primaryLocaleRow,
   rateLabel,
 } from "./shared";
@@ -711,10 +710,7 @@ export function NotificationHistoryPage({
                         <TableCell className="max-w-96">
                           <div className="flex min-w-0 items-center gap-2">
                             <div className="truncate font-medium">{job.app_name}</div>
-                            <Badge variant="secondary" className="h-6 shrink-0 gap-1.5 rounded-md px-2 text-xs">
-                              <PlatformIcon platform={job.platform} />
-                              {platformLabel(job.platform)}
-                            </Badge>
+                            <PlatformBadge platform={job.platform} className="shrink-0" />
                           </div>
                           <div className="mt-1 truncate text-xs text-muted-foreground">
                             {job.app_id ?? job.package_name ?? job.bundle_id ?? job.topic_base}
@@ -793,10 +789,7 @@ export function NotificationHistoryPage({
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="font-heading text-lg font-semibold">{historyDetailJob.app_name}</h2>
                       <StatusBadge status={notificationJobBadgeStatus(historyDetailJob)} />
-                      <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                        <PlatformIcon platform={historyDetailJob.platform} />
-                        {platformLabel(historyDetailJob.platform)}
-                      </Badge>
+                      <PlatformBadge platform={historyDetailJob.platform} />
                     </div>
                     <div className="mt-1 truncate text-sm text-muted-foreground">
                       {historyDetailJob.package_name ?? historyDetailJob.bundle_id ?? historyDetailJob.topic_base}

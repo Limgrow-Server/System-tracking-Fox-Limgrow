@@ -126,7 +126,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
             title: "Send",
             href: "/notifications/send",
             icon: <Send size={15} />,
-            roles: ["Admin", "Dev", "Marketing"],
+            roles: ["Admin"],
           },
           {
             title: "Schedules",

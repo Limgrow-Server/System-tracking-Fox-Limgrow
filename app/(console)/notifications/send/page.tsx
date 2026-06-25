@@ -7,7 +7,7 @@ export default async function NotificationSendRoutePage({
 }: {
   searchParams: Promise<{ app?: string | string[] }>;
 }) {
-  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
+  const session = await requireConsoleSession(["Admin"]);
   const params = await searchParams;
   const initialAppId = Array.isArray(params.app) ? params.app[0] : params.app;
   const data = await getNotificationSendPageData(session);

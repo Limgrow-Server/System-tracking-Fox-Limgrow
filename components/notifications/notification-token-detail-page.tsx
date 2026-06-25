@@ -12,7 +12,6 @@ import {
   TableEmptyState,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -28,11 +27,10 @@ import type {
 
 import {
   DeliveryDashboard,
-  PlatformIcon,
+  PlatformBadge,
   compactIdentifier,
   jobMatchesApp,
   numberLabel,
-  platformLabel,
   scheduleMatchesApp,
   tokensForApp,
 } from "./shared";
@@ -196,10 +194,7 @@ export function NotificationTokenDetailPage({
               <div className="text-xs font-medium text-muted-foreground">Identifier</div>
               <div className="mt-2 truncate font-mono text-sm font-semibold">{compactIdentifier(selectedApp)}</div>
               <div className="mt-2">
-                <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                  <PlatformIcon platform={selectedApp.platform} />
-                  {platformLabel(selectedApp.platform)}
-                </Badge>
+                <PlatformBadge platform={selectedApp.platform} />
               </div>
             </div>
             <div className="rounded-xl border bg-background p-4 shadow-sm shadow-slate-200/50">
@@ -219,10 +214,7 @@ export function NotificationTokenDetailPage({
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2 font-heading text-base font-semibold">
                     FCM token detail
-                    <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                      <PlatformIcon platform={selectedApp.platform} />
-                      {platformLabel(selectedApp.platform)}
-                    </Badge>
+                    <PlatformBadge platform={selectedApp.platform} />
                   </div>
                   <div className="mt-1 text-sm text-muted-foreground">
                     {numberLabel(tokenPagination.total)} token record(s), {numberLabel(tokenSummary.activeTokens)} active.
