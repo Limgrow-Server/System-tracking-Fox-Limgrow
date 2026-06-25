@@ -22,30 +22,37 @@ import {
 } from "@/components/ui/sheet";
 import type { StaffRole } from "@/lib/tracking/types";
 import { roleOptions } from "../constants";
-import type { ManagedAccount } from "../types";
+import type { ManagedAccount, ManagedAppOption } from "../types";
+import { AppScopePicker } from "./app-scope-picker";
 
 type EditAccountDrawerProps = {
   account: ManagedAccount | null;
+  appOptions: ManagedAppOption[];
+  appScope: string[];
   email: string;
   name: string;
-  onEmailChange: (value: string) => void;
+  onAppScopeChange: (value: string[]) => void;
   onNameChange: (value: string) => void;
   onOpenChange: (open: boolean) => void;
   onRoleChange: (value: StaffRole) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   role: StaffRole;
+  saving?: boolean;
 };
 
 export function EditAccountDrawer({
   account,
+  appOptions,
+  appScope,
   email,
   name,
-  onEmailChange,
+  onAppScopeChange,
   onNameChange,
   onOpenChange,
   onRoleChange,
   onSubmit,
   role,
+  saving = false,
 }: EditAccountDrawerProps) {
   return (
     <Sheet open={Boolean(account)} onOpenChange={onOpenChange}>
@@ -53,7 +60,7 @@ export function EditAccountDrawer({
         <SheetHeader className="border-b">
           <SheetTitle>Edit account</SheetTitle>
           <SheetDescription>
-            Update email, account name, and role.
+            Update account name, role, and managed apps.
           </SheetDescription>
         </SheetHeader>
         <form className="flex flex-1 flex-col overflow-hidden" onSubmit={onSubmit}>
@@ -64,7 +71,7 @@ export function EditAccountDrawer({
                 id="editEmail"
                 type="email"
                 value={email}
-                onChange={(event) => onEmailChange(event.target.value)}
+                disabled
                 required
               />
             </div>
@@ -93,12 +100,21 @@ export function EditAccountDrawer({
                 </SelectContent>
               </Select>
             </div>
+
+            <AppScopePicker
+              appOptions={appOptions}
+              onSelectionChange={onAppScopeChange}
+              role={role}
+              selectedAppIds={appScope}
+            />
           </div>
           <SheetFooter className="border-t">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit">Save changes</Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving..." : "Save changes"}
+            </Button>
           </SheetFooter>
         </form>
       </SheetContent>

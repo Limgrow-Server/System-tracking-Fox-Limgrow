@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { cache } from "react";
 
 import { canAccessPath, type ConsoleSession, isStaffRole } from "@/lib/auth/rbac";
 import { normalizeEmail, prismaRoleToStaffRole, prismaStatusToTeamMemberStatus } from "@/lib/auth/team-members";
@@ -9,7 +10,7 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import type { StaffRole } from "@/lib/tracking/types";
 
-export async function getConsoleSession(): Promise<ConsoleSession | null> {
+async function resolveConsoleSession(): Promise<ConsoleSession | null> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -54,6 +55,8 @@ export async function getConsoleSession(): Promise<ConsoleSession | null> {
     storeScope: linkedMember.storeScope,
   };
 }
+
+export const getConsoleSession = cache(resolveConsoleSession);
 
 export async function requireConsoleSession(allowedRoles?: StaffRole[]) {
   const session = await getConsoleSession();

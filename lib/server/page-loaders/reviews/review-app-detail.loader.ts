@@ -1,11 +1,15 @@
 import "server-only";
 
+import { canAccessReviewApp } from "@/lib/auth/app-scope";
+import type { ConsoleSession } from "@/lib/auth/rbac";
 import { getReviewAppDetail } from "@/lib/server/services/reviews/android-review.service";
 import type { ReviewAppDetailPageData } from "@/lib/tracking/page-data";
 
-export function getReviewAppDetailPageData(
+export async function getReviewAppDetailPageData(
   mappingId: string,
+  session: ConsoleSession,
   options?: { includeMockData?: boolean },
-): Promise<ReviewAppDetailPageData> {
-  return getReviewAppDetail(mappingId, options);
+): Promise<ReviewAppDetailPageData | null> {
+  const data = await getReviewAppDetail(mappingId, options);
+  return canAccessReviewApp(session, data.app) ? data : null;
 }

@@ -4,6 +4,6 @@ import { getUsersPageData } from "@/lib/server/page-loaders/users/users.loader";
 
 export default async function UsersRoutePage() {
   await requireConsoleSession(["Admin"]);
-  const users = await getUsersPageData();
-  return <AccountManagementPage users={users} />;
+  const data = await getUsersPageData();
+  return <AccountManagementPage data={data} />;
 }

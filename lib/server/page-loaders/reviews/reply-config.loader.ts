@@ -1,11 +1,20 @@
 import "server-only";
 
+import { canAccessReviewApp } from "@/lib/auth/app-scope";
+import type { ConsoleSession } from "@/lib/auth/rbac";
 import { getReplyConfigPageData } from "@/lib/server/services/reviews/android-review.service";
 import type {
   ReplyConfigPageData,
   ReplyStoreListPageData,
   ReplyStoreSummary,
+  ReviewReplyTemplateDto,
+  ReviewAppCard,
 } from "@/lib/tracking/page-data";
+
+type ReplyConfigRows = {
+  apps: ReviewAppCard[];
+  templatesByMappingId: Record<string, ReviewReplyTemplateDto[]>;
+};
 
 function latestDate(left: string | null, right: string | null) {
   if (!left) return right;
@@ -13,7 +22,7 @@ function latestDate(left: string | null, right: string | null) {
   return left > right ? left : right;
 }
 
-function buildStoreSummaries(data: Awaited<ReturnType<typeof getReplyConfigPageData>>) {
+function buildStoreSummaries(data: ReplyConfigRows) {
   const stores = new Map<string, ReplyStoreSummary>();
 
   for (const app of data.apps) {
@@ -54,29 +63,51 @@ function buildStoreSummaries(data: Awaited<ReturnType<typeof getReplyConfigPageD
   );
 }
 
-export async function getReplyStoreListPageDataLoader(): Promise<ReplyStoreListPageData> {
-  const data = await getReplyConfigPageData();
+function scopedReplyConfigData(
+  data: Awaited<ReturnType<typeof getReplyConfigPageData>>,
+  session: ConsoleSession,
+): ReplyConfigRows {
+  const apps = data.apps.filter((app) => canAccessReviewApp(session, app));
+  const appIds = new Set(apps.map((app) => app.mappingId));
 
   return {
-    stores: buildStoreSummaries(data),
+    apps,
+    templatesByMappingId: Object.fromEntries(
+      Object.entries(data.templatesByMappingId).filter(([mappingId]) =>
+        appIds.has(mappingId),
+      ),
+    ),
+  };
+}
+
+export async function getReplyStoreListPageDataLoader(
+  session: ConsoleSession,
+): Promise<ReplyStoreListPageData> {
+  const data = await getReplyConfigPageData();
+  const scopedData = scopedReplyConfigData(data, session);
+
+  return {
+    stores: buildStoreSummaries(scopedData),
   };
 }
 
 export async function getReplyConfigPageDataLoader(
   storeProfileId: string,
+  session: ConsoleSession,
 ): Promise<ReplyConfigPageData | null> {
   const data = await getReplyConfigPageData();
-  const stores = buildStoreSummaries(data);
+  const scopedData = scopedReplyConfigData(data, session);
+  const stores = buildStoreSummaries(scopedData);
   const store = stores.find((item) => item.storeProfileId === storeProfileId);
   if (!store) return null;
 
   const appIds = new Set(store.apps.map((app) => app.mappingId));
 
   return {
-    apps: data.apps.filter((app) => appIds.has(app.mappingId)),
+    apps: scopedData.apps.filter((app) => appIds.has(app.mappingId)),
     store,
     templatesByMappingId: Object.fromEntries(
-      Object.entries(data.templatesByMappingId).filter(([mappingId]) =>
+      Object.entries(scopedData.templatesByMappingId).filter(([mappingId]) =>
         appIds.has(mappingId),
       ),
     ),

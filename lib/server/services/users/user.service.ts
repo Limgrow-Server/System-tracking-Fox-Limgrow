@@ -40,6 +40,22 @@ function arrayScope(value: unknown) {
   return Array.isArray(value) ? value.map(cleanText).filter(Boolean) : [];
 }
 
+function accessForRole(role: StaffRole, payload: UserPayload) {
+  if (role === "Admin") {
+    return {
+      appScope: [],
+      globalAccess: true,
+      storeScope: [],
+    };
+  }
+
+  return {
+    appScope: arrayScope(payload.appScope),
+    globalAccess: false,
+    storeScope: arrayScope(payload.storeScope),
+  };
+}
+
 function isPrismaUniqueError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
@@ -120,6 +136,7 @@ export async function createConsoleUser(payload: UserPayload, admin: ConsoleSess
   }
 
   const authUser = await createVerifiedAuthUser(email, name, password);
+  const access = accessForRole(role, payload);
 
   try {
     const user = await createTeamMember({
@@ -128,9 +145,9 @@ export async function createConsoleUser(payload: UserPayload, admin: ConsoleSess
       email,
       role: staffRoleToPrismaRole[role],
       status: teamMemberStatusToPrismaStatus.active,
-      globalAccess: payload.globalAccess ?? role === "Admin",
-      appScope: arrayScope(payload.appScope),
-      storeScope: arrayScope(payload.storeScope),
+      globalAccess: access.globalAccess,
+      appScope: access.appScope,
+      storeScope: access.storeScope,
       createdBy: admin.email,
       invitedAt: null,
     });
@@ -164,13 +181,20 @@ export async function updateConsoleUser(payload: UserPayload) {
 
   const data: Prisma.TeamMemberUpdateInput = {};
   if (payload.name !== undefined) data.name = cleanText(payload.name);
-  if (payload.role !== undefined && roles.has(payload.role)) data.role = staffRoleToPrismaRole[payload.role];
+  if (payload.role !== undefined && roles.has(payload.role)) {
+    const access = accessForRole(payload.role, payload);
+    data.role = staffRoleToPrismaRole[payload.role];
+    data.globalAccess = access.globalAccess;
+    data.appScope = access.appScope;
+    data.storeScope = access.storeScope;
+  }
   if (payload.status !== undefined && statuses.has(payload.status)) {
     data.status = teamMemberStatusToPrismaStatus[payload.status];
   }
-  if (payload.globalAccess !== undefined) data.globalAccess = Boolean(payload.globalAccess);
-  if (Array.isArray(payload.appScope)) data.appScope = arrayScope(payload.appScope);
-  if (Array.isArray(payload.storeScope)) data.storeScope = arrayScope(payload.storeScope);
+  if (payload.role === undefined) {
+    if (Array.isArray(payload.appScope)) data.appScope = arrayScope(payload.appScope);
+    if (Array.isArray(payload.storeScope)) data.storeScope = arrayScope(payload.storeScope);
+  }
 
   const user = await updateTeamMember(id, data);
   const dto = teamMemberToTracking(user);

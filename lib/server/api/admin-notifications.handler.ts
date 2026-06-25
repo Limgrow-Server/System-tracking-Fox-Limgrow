@@ -4,11 +4,18 @@ import { createHash, randomUUID } from "crypto";
 
 import { Prisma } from "@prisma/client";
 
+import {
+  canAccessRecordViaStoreMappings,
+  canAccessScopedRecord,
+  notificationRecordFromPayload,
+} from "@/lib/auth/app-scope";
 import { prisma } from "@/lib/prisma";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
-import { badRequest, ApiError } from "@/lib/server/api/errors";
+import { badRequest, ApiError, forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
+import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
+import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import { createClient } from "@/lib/supabase/server";
 import {
   deviceTokenToTracking,
@@ -37,6 +44,7 @@ const LANGUAGES = [
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
 const HCM_OFFSET_MINUTES = 7 * 60;
+const notificationRoles = ["Admin", "Dev", "Marketing"] as const;
 
 function supabaseFunctionUrl(functionName: string) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, "");
@@ -76,6 +84,51 @@ function notificationRequestContext(body: Record<string, unknown>) {
     scheduleId: clean(body.scheduleId) || null,
     targetType: clean(body.targetType) || null,
   };
+}
+
+async function assertNotificationAccess(
+  session: Awaited<ReturnType<typeof requireConsoleApiSession>>,
+  payload: Record<string, unknown>,
+) {
+  if (session.role === "Admin") return;
+
+  const directRecord = notificationRecordFromPayload(payload);
+  if (canAccessScopedRecord(session, directRecord)) return;
+
+  const [androidMappings, iosMappings] = await Promise.all([
+    getAndroidStoreMappingDtos({ take: 500 }),
+    getIosStoreMappingDtos({ take: 500 }),
+  ]);
+  if (
+    canAccessRecordViaStoreMappings(session, directRecord, [
+      ...androidMappings,
+      ...iosMappings,
+    ])
+  ) {
+    return;
+  }
+
+  const scheduleId = clean(payload.id) || clean(payload.scheduleId);
+  if (scheduleId) {
+    const schedule = await prisma.notificationSchedule.findUnique({
+      where: { id: scheduleId },
+    });
+    if (schedule && canAccessScopedRecord(session, notificationScheduleToTracking(schedule))) {
+      return;
+    }
+    if (
+      schedule &&
+      canAccessRecordViaStoreMappings(
+        session,
+        notificationScheduleToTracking(schedule),
+        [...androidMappings, ...iosMappings],
+      )
+    ) {
+      return;
+    }
+  }
+
+  throw forbidden("This notification app is outside your assigned app scope.");
 }
 
 function logNotificationFailure(message: string, details: Record<string, unknown>) {
@@ -286,9 +339,10 @@ async function callEdgeFunction(functionName: string, body: Record<string, unkno
 export async function handleAdminNotificationSendPost(request: Request) {
   let requestPayload: Record<string, unknown> | null = null;
   try {
-    await requireConsoleApiSession(["Admin", "Marketing"]);
+    const session = await requireConsoleApiSession([...notificationRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
+    await assertNotificationAccess(session, payload);
     return okJson({
       message: "Notification sent.",
       result: await callEdgeFunction("send-notification", payload),
@@ -536,7 +590,7 @@ async function openRouterGeneratedCopy(input: {
 
 export async function handleAdminNotificationGeneratePost(request: Request) {
   try {
-    await requireConsoleApiSession(["Admin", "Marketing"]);
+    await requireConsoleApiSession([...notificationRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     const appName = clean(payload.appName) || "App";
     const intent = clean(payload.intent) === "translate" ? "translate" : "generate";
@@ -557,8 +611,9 @@ export async function handleAdminNotificationGeneratePost(request: Request) {
 
 export async function handleAdminNotificationSchedulesPost(request: Request) {
   try {
-    const admin = await requireConsoleApiSession(["Admin", "Marketing"]);
+    const admin = await requireConsoleApiSession([...notificationRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    await assertNotificationAccess(admin, payload);
     const notifications = normalizedNotifications(payload.notifications);
     const scheduleType = clean(payload.scheduleType);
     if (!["once", "daily", "monthly"].includes(scheduleType)) {
@@ -615,8 +670,9 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
 
 export async function handleAdminNotificationSchedulesPatch(request: Request) {
   try {
-    await requireConsoleApiSession(["Admin", "Marketing"]);
+    const session = await requireConsoleApiSession([...notificationRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    await assertNotificationAccess(session, payload);
     const id = clean(payload.id);
     const status = clean(payload.status);
     if (!id) throw badRequest("Schedule id is required.");
@@ -675,8 +731,9 @@ export async function handleAdminNotificationSchedulesPatch(request: Request) {
 
 export async function handleAdminNotificationSchedulesDelete(request: Request) {
   try {
-    await requireConsoleApiSession(["Admin", "Marketing"]);
+    const session = await requireConsoleApiSession([...notificationRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    await assertNotificationAccess(session, payload);
     const id = clean(payload.id);
     if (!id) throw badRequest("Schedule id is required.");
 
@@ -694,9 +751,10 @@ export async function handleAdminNotificationSchedulesDelete(request: Request) {
 export async function handleAdminNotificationDispatchPost(request: Request) {
   let requestPayload: Record<string, unknown> | null = null;
   try {
-    await requireConsoleApiSession(["Admin", "Marketing"]);
+    const session = await requireConsoleApiSession([...notificationRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
+    await assertNotificationAccess(session, payload);
     return okJson({
       message: "Dispatcher finished.",
       result: await callEdgeFunction("dispatch-notifications", payload),
@@ -712,8 +770,9 @@ export async function handleAdminNotificationDispatchPost(request: Request) {
 
 export async function handleAdminNotificationTestDevicePost(request: Request) {
   try {
-    await requireConsoleApiSession(["Admin", "Marketing"]);
+    const session = await requireConsoleApiSession([...notificationRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    await assertNotificationAccess(session, payload);
     const platform = clean(payload.platform) || "android";
     const deviceId = clean(payload.deviceId) || `test-device-${Date.now().toString(36)}`;
     const appId = clean(payload.appId) || clean(payload.appName) || clean(payload.productAppId) || "test-app";

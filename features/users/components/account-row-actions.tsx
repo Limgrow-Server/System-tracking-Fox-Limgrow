@@ -10,6 +10,7 @@ type AccountRowActionsProps = {
   onEdit: (account: ManagedAccount) => void;
   onToggleActive?: (account: ManagedAccount) => void;
   showToggle?: boolean;
+  toggling?: boolean;
 };
 
 export function AccountRowActions({
@@ -18,6 +19,7 @@ export function AccountRowActions({
   onEdit,
   onToggleActive,
   showToggle = false,
+  toggling = false,
 }: AccountRowActionsProps) {
   const inactive = isInactiveUser(account);
 
@@ -33,11 +35,12 @@ export function AccountRowActions({
       </Button>
       {showToggle && onToggleActive ? (
         <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => onToggleActive(account)}
-          aria-label={`${inactive ? "Activate" : "Deactivate"} ${account.email}`}
-        >
+        variant="ghost"
+        size="icon-sm"
+        onClick={() => onToggleActive(account)}
+        disabled={toggling}
+        aria-label={`${inactive ? "Activate" : "Deactivate"} ${account.email}`}
+      >
           {inactive ? <UserCheck size={14} /> : <UserX size={14} />}
         </Button>
       ) : null}

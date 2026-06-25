@@ -1,6 +1,6 @@
 import "server-only";
 
-import { requireConsoleApiSession } from "@/lib/server/api/auth";
+import { requireAdminSession } from "@/lib/server/api/auth";
 import { badRequest } from "@/lib/server/api/errors";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import {
@@ -42,7 +42,7 @@ function platformFromCredentialPayload(payload: CredentialPayload): CredentialPl
 
 export async function handleAdminCredentialsGet(request: Request) {
   try {
-    await requireConsoleApiSession(["Admin", "Dev"]);
+    await requireAdminSession();
 
     const url = new URL(request.url);
     const platform = platformFromSearch(cleanText(url.searchParams.get("platform")));
@@ -72,7 +72,7 @@ export async function handleAdminCredentialsGet(request: Request) {
 
 export async function handleAdminCredentialsPost(request: Request) {
   try {
-    const admin = await requireConsoleApiSession(["Admin", "Dev"]);
+    const admin = await requireAdminSession();
     const payload = await parseCredentialPayload(request);
     return okJson(
       platformFromCredentialPayload(payload) === "android"
@@ -86,7 +86,7 @@ export async function handleAdminCredentialsPost(request: Request) {
 
 export async function handleAdminCredentialsPatch(request: Request) {
   try {
-    const admin = await requireConsoleApiSession(["Admin", "Dev"]);
+    const admin = await requireAdminSession();
     const payload = await parseCredentialPayload(request);
     return okJson(
       platformFromCredentialPayload(payload) === "android"
@@ -100,7 +100,7 @@ export async function handleAdminCredentialsPatch(request: Request) {
 
 export async function handleAdminCredentialsDelete(request: Request) {
   try {
-    await requireConsoleApiSession(["Admin", "Dev"]);
+    await requireAdminSession();
     const payload = await parseCredentialPayload(request);
     return okJson(
       platformFromCredentialPayload(payload) === "android"

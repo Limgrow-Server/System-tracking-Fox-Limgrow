@@ -14,8 +14,10 @@ import type { NotificationsPageData } from "@/lib/tracking/page-data";
 import type { DeviceToken, StoreMapping } from "@/lib/tracking/types";
 
 import {
+  DeliveryDashboard,
   PlatformIcon,
   compactIdentifier,
+  jobMatchesApp,
   numberLabel,
   platformLabel,
   scheduleMatchesApp,
@@ -74,6 +76,24 @@ export function NotificationTokenDetailPage({
     ? data.notificationSchedules.filter((schedule) => scheduleMatchesApp(schedule, selectedApp))
     : [];
   const selectedActiveSchedules = selectedSchedules.filter((schedule) => statusValue(schedule.status) === "active");
+  const selectedJobs = useMemo(
+    () =>
+      selectedApp
+        ? data.notificationJobs.filter((job) => jobMatchesApp(job, selectedApp))
+        : [],
+    [data.notificationJobs, selectedApp],
+  );
+  const selectedJobIds = useMemo(
+    () => new Set(selectedJobs.map((job) => job.id)),
+    [selectedJobs],
+  );
+  const selectedEvents = useMemo(
+    () =>
+      data.notificationEvents.filter(
+        (event) => event.job_id && selectedJobIds.has(event.job_id),
+      ),
+    [data.notificationEvents, selectedJobIds],
+  );
 
   return (
     <div className="space-y-5">
@@ -120,6 +140,8 @@ export function NotificationTokenDetailPage({
               </div>
             </div>
           </section>
+
+          <DeliveryDashboard events={selectedEvents} jobs={selectedJobs} />
 
           <section className="overflow-hidden rounded-xl border bg-background shadow-sm shadow-slate-200/50">
             <div className="space-y-3 border-b bg-muted/20 p-4">
