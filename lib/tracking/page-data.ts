@@ -8,10 +8,7 @@ import type {
   StoreMapping,
   TeamMember,
 } from "@/lib/tracking/types";
-import type {
-  AndroidStoreProfileSummary,
-  IapAndroidDto,
-} from "@/lib/server/services/iap/android-iap.service";
+import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 
 export type PaginationMeta = {
   page: number;
@@ -36,12 +33,6 @@ export type ConfigsPageData = {
   credentialPagination: PaginationMeta;
 };
 
-export type IosIapVerifyPageData = {
-  credentialSecrets: CredentialSecretMetadata[];
-  recentTransactions: IosIapTransactionSummary[];
-  storeMappings: StoreMapping[];
-};
-
 export type NotificationsPageData = {
   credentialSecrets: CredentialSecretMetadata[];
   deviceTokens: DeviceToken[];
@@ -49,11 +40,6 @@ export type NotificationsPageData = {
   notificationJobs: NotificationJob[];
   notificationSchedules: NotificationSchedule[];
   storeMappings: StoreMapping[];
-};
-
-export type AndroidIapPageData = {
-  storeProfiles: AndroidStoreProfileSummary[];
-  transactions: IapAndroidDto[];
 };
 
 export type IapAppCard = {
