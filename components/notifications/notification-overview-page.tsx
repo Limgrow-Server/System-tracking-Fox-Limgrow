@@ -28,6 +28,8 @@ import {
   tokensForApp,
 } from "./shared";
 
+const OVERVIEW_APP_SKELETON_COUNT = 8;
+
 function statusValue(value: string | null | undefined) {
   return (value ?? "unknown").toLowerCase();
 }
@@ -79,6 +81,7 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
   const [platformFilter, setPlatformFilter] = useState(ALL_FILTER_VALUE);
   const [storeFilter, setStoreFilter] = useState(ALL_FILTER_VALUE);
   const [loadingApps, setLoadingApps] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
 
   const appRows = useMemo(() => {
     return storeMappings
@@ -121,6 +124,7 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
     if (nextStore !== ALL_FILTER_VALUE) params.set("store", nextStore);
 
     setLoadingApps(true);
+    setLoadingPage(page);
 
     try {
       const response = await fetch(
@@ -151,6 +155,7 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
       );
     } finally {
       setLoadingApps(false);
+      setLoadingPage(null);
     }
   }
 
@@ -268,7 +273,47 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
               </TableRow>
             </TableHeader>
             <TableBody>
-              {appRows.length ? (
+              {loadingApps ? (
+                Array.from({ length: OVERVIEW_APP_SKELETON_COUNT }).map((_, index) => (
+                  <TableRow key={`overview-app-skeleton-${index}`}>
+                    <TableCell className="max-w-80">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="size-10 animate-pulse rounded-lg bg-muted" />
+                        <div className="min-w-0 flex-1">
+                          <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+                          <div className="mt-2 h-3 w-28 animate-pulse rounded bg-muted" />
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-7 w-64 animate-pulse rounded-md bg-muted" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-5 w-10 animate-pulse rounded bg-muted" />
+                      <div className="mt-2 h-3 w-16 animate-pulse rounded bg-muted" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-5 w-10 animate-pulse rounded bg-muted" />
+                      <div className="mt-2 h-3 w-16 animate-pulse rounded bg-muted" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="h-4 w-4 animate-pulse rounded bg-muted" />
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : appRows.length ? (
                 appRows.map((row) => {
                   const detailAppId = row.app.app_id ?? row.app.id;
                   return (
@@ -334,6 +379,7 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
           shown={appRows.length}
           total={overviewPagination.total}
           totalPages={overviewPagination.totalPages}
+          loadingPage={loadingPage}
         />
       </section>
 
