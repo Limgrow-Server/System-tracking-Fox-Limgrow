@@ -17,15 +17,17 @@ import {
   getAndroidReviewFetchSchedule,
   getAndroidReviewMappingById,
   getAndroidReviewForReply,
+  getAndroidReviewsForMappingPage,
   getAndroidReviewRatingGroups,
   getAndroidReviewReplyGroups,
   getAndroidReviewReplyTemplateForRating,
   getAndroidReviewReplyTemplates,
-  getAndroidReviewsForMapping,
+  getLatestAndroidReviewForMapping,
   updateAndroidReviewDeveloperReply,
   updateAndroidStoreProfileReplyInfo,
   upsertAndroidReviewReplyTemplate,
 } from "@/lib/server/repositories/reviews/android-review.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/android-review-schedule.service";
 import {
   cleanText,
@@ -217,6 +219,54 @@ export async function getReviewAppCards(): Promise<ReviewAppCard[]> {
   );
 }
 
+export function reviewStoreOptions(apps: ReviewAppCard[]) {
+  const stores = new Map<string, string>();
+
+  for (const app of apps) {
+    if (!app.storeProfileId || stores.has(app.storeProfileId)) continue;
+    stores.set(app.storeProfileId, app.storeAccountName);
+  }
+
+  return Array.from(stores.entries())
+    .map(([id, name]) => ({ id, name }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function filterReviewAppCards<T extends ReviewAppCard>(
+  apps: T[],
+  filters: {
+    search?: string;
+    storeProfileId?: string;
+  },
+) {
+  const search = filters.search?.trim().toLowerCase();
+
+  return apps.filter((app) => {
+    const matchesSearch =
+      !search ||
+      app.appName.toLowerCase().includes(search) ||
+      app.identifier.toLowerCase().includes(search) ||
+      app.storeAccountName.toLowerCase().includes(search);
+    const matchesStore =
+      !filters.storeProfileId ||
+      filters.storeProfileId === "all" ||
+      app.storeProfileId === filters.storeProfileId;
+
+    return matchesSearch && matchesStore;
+  });
+}
+
+export function paginateReviewAppCards<T extends ReviewAppCard>(
+  apps: T[],
+  pagination: PaginationQuery,
+) {
+  return paginatedResult(
+    apps.slice(pagination.skip, pagination.skip + pagination.take),
+    apps.length,
+    pagination,
+  );
+}
+
 function reviewDto(review: AndroidStoreReview): AndroidStoreReviewDto {
   const rawUserComment = latestUserCommentFromRawReview(review.rawReview);
 
@@ -281,6 +331,27 @@ function buildRatingBuckets(reviews: AndroidStoreReviewDto[]): ReviewRatingBucke
 
   return RATINGS.map((rating) => {
     const count = reviews.filter((review) => review.rating === rating).length;
+    return {
+      count,
+      rating,
+      share: Math.round((count / total) * 100),
+    };
+  });
+}
+
+function buildRatingBucketsFromGroups(groups: RatingGroup[]): ReviewRatingBucket[] {
+  const total = Math.max(
+    groups.reduce((sum, group) => sum + group._count._all, 0),
+    1,
+  );
+  const countByRating = new Map(
+    groups
+      .filter((group) => group.rating)
+      .map((group) => [group.rating!, group._count._all]),
+  );
+
+  return RATINGS.map((rating) => {
+    const count = countByRating.get(rating) ?? 0;
     return {
       count,
       rating,
@@ -445,6 +516,38 @@ function mockAndroidReviews(mappingId: string): AndroidStoreReviewDto[] {
   ];
 }
 
+function filterMockReviews(
+  reviews: AndroidStoreReviewDto[],
+  filters: {
+    rating?: string;
+    reply?: string;
+    search?: string;
+  },
+) {
+  const search = filters.search?.trim().toLowerCase();
+
+  return reviews.filter((review) => {
+    const matchesSearch =
+      !search ||
+      (review.reviewText ?? "").toLowerCase().includes(search) ||
+      (review.originalText ?? "").toLowerCase().includes(search) ||
+      (review.authorName ?? "").toLowerCase().includes(search) ||
+      review.reviewId.toLowerCase().includes(search);
+    const matchesRating =
+      !filters.rating ||
+      filters.rating === "all" ||
+      String(review.rating ?? "") === filters.rating;
+    const hasReply = Boolean(review.developerReplyText);
+    const matchesReply =
+      !filters.reply ||
+      filters.reply === "all" ||
+      (filters.reply === "replied" && hasReply) ||
+      (filters.reply === "pending" && !hasReply);
+
+    return matchesSearch && matchesRating && matchesReply;
+  });
+}
+
 function buildReviewStats(
   app: ReviewAppCard,
   reviewDtos: AndroidStoreReviewDto[],
@@ -474,6 +577,26 @@ function buildReviewStats(
     repliedCount,
     replyCoverage: totalReviews ? Math.round((repliedCount / totalReviews) * 100) : 0,
     totalReviews,
+  };
+}
+
+function buildReviewStatsFromGroups(
+  app: ReviewAppCard,
+  ratingGroups: RatingGroup[],
+  latestReviewAt: string | null,
+): ReviewAppStats {
+  const { averageRating } = ratingSummary(ratingGroups);
+
+  return {
+    averageRating,
+    latestReviewAt,
+    pendingReplyCount: app.pendingReplyCount,
+    ratingBuckets: buildRatingBucketsFromGroups(ratingGroups),
+    repliedCount: app.repliedCount,
+    replyCoverage: app.reviewCount
+      ? Math.round((app.repliedCount / app.reviewCount) * 100)
+      : 0,
+    totalReviews: app.reviewCount,
   };
 }
 
@@ -512,28 +635,73 @@ function replyTemplatePreviewDto(
 
 export async function getReviewAppDetail(
   mappingId: string,
-  options?: { includeMockData?: boolean },
+  options?: {
+    includeMockData?: boolean;
+    rating?: string;
+    reply?: string;
+    reviewPagination?: PaginationQuery;
+    search?: string;
+  },
 ): Promise<ReviewAppDetailPageData> {
   const mapping = await getAndroidReviewMappingById(mappingId);
   if (!mapping) throw notFound("Android app mapping was not found.");
+  const reviewPagination = options?.reviewPagination ?? {
+    page: 1,
+    pageSize: 10,
+    skip: 0,
+    take: 10,
+  };
 
-  const [ratingGroups, replyGroups, reviews, fetchRuns, fetchSchedule, templates] = await Promise.all([
+  const [
+    ratingGroups,
+    replyGroups,
+    reviewsPage,
+    fetchRuns,
+    fetchSchedule,
+    templates,
+    latestReview,
+  ] = await Promise.all([
     getAndroidReviewRatingGroups([mappingId]),
     getAndroidReviewReplyGroups([mappingId]),
-    getAndroidReviewsForMapping(mappingId),
+    getAndroidReviewsForMappingPage({
+      rating: options?.rating,
+      reply: options?.reply,
+      search: options?.search,
+      skip: reviewPagination.skip,
+      storeMappingId: mappingId,
+      take: reviewPagination.take,
+    }),
     getAndroidReviewFetchRuns(mappingId),
     getAndroidReviewFetchSchedule(mappingId),
     getAndroidReviewReplyTemplates([mappingId]),
+    getLatestAndroidReviewForMapping(mappingId),
   ]);
+  const [reviews, reviewTotal] = reviewsPage;
   const app = reviewAppCard(mapping, ratingGroups, replyCountByMapping(replyGroups));
   const realReviewDtos = reviews.map(reviewDto);
-  const useMockData = Boolean(options?.includeMockData && !realReviewDtos.length);
-  const reviewDtos = useMockData ? mockAndroidReviews(mappingId) : realReviewDtos;
-  const stats = buildReviewStats(
+  const useMockData = Boolean(options?.includeMockData && !reviewTotal);
+  let reviewDtos = realReviewDtos;
+  let total = reviewTotal;
+  let stats = buildReviewStatsFromGroups(
     app,
-    reviewDtos,
-    useMockData ? undefined : app.averageRating,
+    ratingGroups,
+    iso(latestReview?.userCommentUpdatedAt ?? latestReview?.fetchedAt),
   );
+
+  if (useMockData) {
+    const mockReviews = filterMockReviews(mockAndroidReviews(mappingId), {
+      rating: options?.rating,
+      reply: options?.reply,
+      search: options?.search,
+    });
+    reviewDtos = mockReviews.slice(
+      reviewPagination.skip,
+      reviewPagination.skip + reviewPagination.take,
+    );
+    total = mockReviews.length;
+    stats = buildReviewStats(app, mockAndroidReviews(mappingId));
+  }
+  const paginatedReviews = paginatedResult(reviewDtos, total, reviewPagination);
 
   return {
     app,
@@ -552,7 +720,18 @@ export async function getReviewAppDetail(
         },
       ),
     ),
-    reviews: reviewDtos,
+    reviewFilters: {
+      rating: options?.rating ?? "all",
+      reply: options?.reply ?? "all",
+      search: options?.search ?? "",
+    },
+    reviewPagination: {
+      page: paginatedReviews.page,
+      pageSize: paginatedReviews.pageSize,
+      total: paginatedReviews.total,
+      totalPages: paginatedReviews.totalPages,
+    },
+    reviews: paginatedReviews.data,
     stats,
     syncState: syncStateDto(mapping.reviewSyncState),
   };

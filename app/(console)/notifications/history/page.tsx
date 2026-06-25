@@ -10,7 +10,9 @@ export default async function NotificationHistoryRoutePage({
   const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
   const params = await searchParams;
   const initialAppId = Array.isArray(params.app) ? params.app[0] : params.app;
-  const data = await getNotificationHistoryPageData(session);
+  const data = await getNotificationHistoryPageData(session, {
+    appId: initialAppId,
+  });
 
   return <NotificationHistoryPage data={data} initialAppId={initialAppId} />;
 }

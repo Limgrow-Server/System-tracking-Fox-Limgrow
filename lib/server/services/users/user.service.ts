@@ -16,8 +16,10 @@ import {
   createTeamMember,
   deleteTeamMember,
   getTeamMembers,
+  getTeamMembersPage,
   updateTeamMember,
 } from "@/lib/server/repositories/auth/team-member.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { StaffRole, TeamMember } from "@/lib/tracking/types";
 
@@ -119,6 +121,26 @@ async function deleteAuthUserBestEffort(input: Awaited<ReturnType<typeof createV
 export async function getConsoleUsers() {
   const users = await getTeamMembers();
   return { users: users.map(teamMemberToTracking) };
+}
+
+export async function getConsoleUsersPage(
+  options: PaginationQuery & {
+    appScopeKey?: string;
+    role?: StaffRole;
+    search?: string;
+    storeScopeKey?: string;
+  },
+) {
+  const [users, total] = await getTeamMembersPage({
+    appScopeKey: options.appScopeKey,
+    role: options.role ? staffRoleToPrismaRole[options.role] : undefined,
+    search: options.search,
+    skip: options.skip,
+    storeScopeKey: options.storeScopeKey,
+    take: options.take,
+  });
+
+  return paginatedResult(users.map(teamMemberToTracking), total, options);
 }
 
 export async function createConsoleUser(payload: UserPayload, admin: ConsoleSession) {

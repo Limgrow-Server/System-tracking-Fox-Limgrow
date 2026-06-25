@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CalendarClock,
@@ -57,9 +57,12 @@ import {
   PageHeader,
   StatCard,
   StatusBadge,
+  TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
 import type {
+  PaginationMeta,
+  ReviewFetchScheduleApp,
   ReviewFetchScheduleDto,
   ReviewFetchSchedulePageData,
 } from "@/lib/tracking/page-data";
@@ -77,6 +80,19 @@ type BulkScheduleResponse = {
   message?: string;
   ok?: boolean;
   schedules?: Array<ReviewFetchScheduleDto | null>;
+};
+
+type ScheduleAppsResponse = {
+  data?: ReviewFetchScheduleApp[];
+  error?: string;
+  filters?: ReviewFetchSchedulePageData["filters"];
+  page?: number;
+  pageSize?: number;
+  storeOptions?: ReviewFetchSchedulePageData["storeOptions"];
+  success?: boolean;
+  summary?: ReviewFetchSchedulePageData["summary"];
+  total?: number;
+  totalPages?: number;
 };
 
 function scheduleTimeLabel(schedule: ReviewFetchScheduleDto | null) {
@@ -152,57 +168,80 @@ export function ReviewFetchSchedulePage({
   const router = useRouter();
   const initialSchedule = firstConfiguredSchedule(data);
   const [apps, setApps] = useState(data.apps);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedStore, setSelectedStore] = useState("All Stores");
+  const [appPagination, setAppPagination] =
+    useState<PaginationMeta>(data.appPagination);
+  const [summary, setSummary] = useState(data.summary);
+  const [storeOptions, setStoreOptions] = useState(data.storeOptions);
+  const [searchQuery, setSearchQuery] = useState(data.filters.search);
+  const [selectedStore, setSelectedStore] = useState(
+    data.filters.storeProfileId,
+  );
   const [openStoreCombobox, setOpenStoreCombobox] = useState(false);
   const [pendingAction, setPendingAction] = useState<ScheduleAction | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [loadingApps, setLoadingApps] = useState(false);
   const [timeOfDay, setTimeOfDay] = useState(
     normalizedTime(initialSchedule?.timeOfDay),
   );
   const timezone = DEFAULT_REVIEW_FETCH_TIMEZONE;
 
-  const filteredApps = useMemo(() => {
-    const query = searchQuery.toLowerCase();
+  const selectedStoreLabel =
+    selectedStore === "all"
+      ? "All Stores"
+      : storeOptions.find((store) => store.id === selectedStore)?.name ??
+        "All Stores";
+  const formDisabled = Boolean(pendingAction) || summary.appCount === 0;
+  const canPauseSchedule = summary.activeCount > 0;
+  const canResumeSchedule = summary.pausedCount > 0;
 
-    return apps.filter((app) => {
-      const matchesSearch =
-        !query ||
-        app.appName.toLowerCase().includes(query) ||
-        app.identifier.toLowerCase().includes(query) ||
-        app.storeAccountName.toLowerCase().includes(query);
-      const matchesStore =
-        selectedStore === "All Stores" ||
-        app.storeAccountName === selectedStore;
-
-      return matchesSearch && matchesStore;
+  async function loadScheduleAppsPage(
+    page: number,
+    overrides?: {
+      searchQuery?: string;
+      selectedStore?: string;
+    },
+  ) {
+    const nextSearch = overrides?.searchQuery ?? searchQuery;
+    const nextStore = overrides?.selectedStore ?? selectedStore;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: "10",
     });
-  }, [apps, searchQuery, selectedStore]);
 
-  const scheduledCount = apps.filter((app) => app.fetchSchedule).length;
-  const activeCount = apps.filter(
-    (app) => app.fetchSchedule?.status === "active",
-  ).length;
-  const pausedCount = apps.filter(
-    (app) => app.fetchSchedule?.status === "paused",
-  ).length;
-  const unscheduledCount = apps.length - scheduledCount;
-  const scheduleStatus =
-    scheduledCount === 0
-      ? "no_schedule"
-      : unscheduledCount > 0 || (activeCount > 0 && pausedCount > 0)
-        ? "mixed"
-        : activeCount > 0
-          ? "active"
-          : "paused";
-  const nextRunAt =
-    apps
-      .map((app) => app.fetchSchedule?.nextRunAt)
-      .filter(Boolean)
-      .sort()[0] ?? null;
-  const formDisabled = Boolean(pendingAction) || !apps.length;
-  const canPauseSchedule = activeCount > 0;
-  const canResumeSchedule = pausedCount > 0;
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextStore !== "all") params.set("storeProfileId", nextStore);
+
+    setLoadingApps(true);
+
+    try {
+      const response = await fetch(
+        `/api/comments/schedule-apps?${params.toString()}`,
+      );
+      const payload = (await response.json()) as ScheduleAppsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Schedule apps could not be loaded.");
+      }
+
+      setApps(payload.data);
+      setAppPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.summary) setSummary(payload.summary);
+      if (payload.storeOptions) setStoreOptions(payload.storeOptions);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Schedule apps could not be loaded.",
+      );
+    } finally {
+      setLoadingApps(false);
+    }
+  }
 
   function applySchedulesToState(schedules: Array<ReviewFetchScheduleDto | null>) {
     const byMappingId = scheduleMap(schedules);
@@ -245,6 +284,7 @@ export function ReviewFetchSchedulePage({
       }
 
       applySchedulesToState(payload.schedules);
+      await loadScheduleAppsPage(appPagination.page);
       toast.success(payload.message ?? "Schedules saved.");
       router.refresh();
     } catch (error) {
@@ -277,6 +317,7 @@ export function ReviewFetchSchedulePage({
       }
 
       applySchedulesToState(payload.schedules);
+      await loadScheduleAppsPage(appPagination.page);
       toast.success(payload.message ?? "Schedules updated.");
       router.refresh();
     } catch (error) {
@@ -310,6 +351,7 @@ export function ReviewFetchSchedulePage({
       setApps((current) =>
         current.map((app) => ({ ...app, fetchSchedule: null })),
       );
+      await loadScheduleAppsPage(appPagination.page);
       setDeleteDialogOpen(false);
       toast.success(payload.message ?? "Schedules deleted.");
       router.refresh();
@@ -335,28 +377,28 @@ export function ReviewFetchSchedulePage({
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Apps"
-          value={compactNumber(apps.length)}
-          detail={`${compactNumber(scheduledCount)} scheduled`}
+          value={compactNumber(summary.appCount)}
+          detail={`${compactNumber(summary.scheduledCount)} scheduled`}
           icon={Smartphone}
           trend="flat"
         />
         <StatCard
           label="Active"
-          value={compactNumber(activeCount)}
-          detail={`${compactNumber(pausedCount)} paused`}
+          value={compactNumber(summary.activeCount)}
+          detail={`${compactNumber(summary.pausedCount)} paused`}
           icon={Play}
-          trend={activeCount ? "up" : "flat"}
+          trend={summary.activeCount ? "up" : "flat"}
         />
         <StatCard
           label="Unscheduled"
-          value={compactNumber(unscheduledCount)}
+          value={compactNumber(summary.unscheduledCount)}
           detail="Missing fetch schedule"
           icon={Pause}
-          trend={apps.length === scheduledCount ? "up" : "flat"}
+          trend={summary.appCount === summary.scheduledCount ? "up" : "flat"}
         />
         <StatCard
           label="Next Run"
-          value={dateTime(nextRunAt)}
+          value={dateTime(summary.nextRunAt)}
           detail="Earliest scheduled app"
           icon={CalendarClock}
           trend="flat"
@@ -366,7 +408,7 @@ export function ReviewFetchSchedulePage({
       <Card className="rounded-lg">
         <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
           <CardTitle className="text-base">Daily Schedule</CardTitle>
-          <StatusBadge status={scheduleStatus} />
+          <StatusBadge status={summary.scheduleStatus} />
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 md:grid-cols-[minmax(0,14rem)_1fr] md:items-end">
@@ -422,7 +464,7 @@ export function ReviewFetchSchedulePage({
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={formDisabled || scheduledCount === 0}
+                    disabled={formDisabled || summary.scheduledCount === 0}
                   >
                     <Trash2 size={14} />
                     Delete schedule
@@ -474,7 +516,11 @@ export function ReviewFetchSchedulePage({
               placeholder="Search apps, packages or stores..."
               className="pl-8"
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setSearchQuery(nextValue);
+                void loadScheduleAppsPage(1, { searchQuery: nextValue });
+              }}
             />
           </div>
           <Popover open={openStoreCombobox} onOpenChange={setOpenStoreCombobox}>
@@ -485,7 +531,7 @@ export function ReviewFetchSchedulePage({
                 aria-expanded={openStoreCombobox}
                 className="w-full justify-between lg:w-[260px]"
               >
-                {selectedStore}
+                {selectedStoreLabel}
                 <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
               </Button>
             </PopoverTrigger>
@@ -496,40 +542,44 @@ export function ReviewFetchSchedulePage({
                   <CommandEmpty>No store found.</CommandEmpty>
                   <CommandGroup>
                     <CommandItem
-                      value="All Stores"
+                      value="all"
                       onSelect={() => {
-                        setSelectedStore("All Stores");
+                        setSelectedStore("all");
                         setOpenStoreCombobox(false);
+                        void loadScheduleAppsPage(1, { selectedStore: "all" });
                       }}
                     >
                       <Check
                         className={cn(
                           "mr-2 size-4",
-                          selectedStore === "All Stores"
+                          selectedStore === "all"
                             ? "opacity-100"
                             : "opacity-0",
                         )}
                       />
                       All Stores
                     </CommandItem>
-                    {data.storeNames.map((store) => (
+                    {storeOptions.map((store) => (
                       <CommandItem
-                        key={store}
-                        value={store}
-                        onSelect={(currentValue) => {
-                          setSelectedStore(currentValue);
+                        key={store.id}
+                        value={store.name}
+                        onSelect={() => {
+                          setSelectedStore(store.id);
                           setOpenStoreCombobox(false);
+                          void loadScheduleAppsPage(1, {
+                            selectedStore: store.id,
+                          });
                         }}
                       >
                         <Check
                           className={cn(
                             "mr-2 size-4",
-                            selectedStore === store
+                            selectedStore === store.id
                               ? "opacity-100"
                               : "opacity-0",
                           )}
                         />
-                        {store}
+                        {store.name}
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -553,7 +603,7 @@ export function ReviewFetchSchedulePage({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredApps.map((app) => (
+                {apps.map((app) => (
                   <TableRow key={app.mappingId}>
                     <TableCell>
                       <div className="flex min-w-[15rem] items-center gap-3">
@@ -607,13 +657,17 @@ export function ReviewFetchSchedulePage({
                     </TableCell>
                   </TableRow>
                 ))}
-                {!filteredApps.length ? (
+                {!apps.length ? (
                   <TableRow>
                     <TableCell colSpan={6} className="py-10">
                       <EmptyPanel
                         icon={MessageSquareText}
-                        title="No apps found"
-                        description="Adjust the current filters."
+                        title={loadingApps ? "Loading apps" : "No apps found"}
+                        description={
+                          loadingApps
+                            ? "The current page is being loaded."
+                            : "Adjust the current filters."
+                        }
                         className="border-0 shadow-none"
                       />
                     </TableCell>
@@ -622,6 +676,13 @@ export function ReviewFetchSchedulePage({
               </TableBody>
             </Table>
           </div>
+          <TablePaginationFooter
+            onPageChange={(page) => void loadScheduleAppsPage(page)}
+            page={appPagination.page}
+            shown={apps.length}
+            total={appPagination.total}
+            totalPages={appPagination.totalPages}
+          />
         </div>
       </div>
     </div>

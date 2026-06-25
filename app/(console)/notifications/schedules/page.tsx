@@ -10,7 +10,9 @@ export default async function NotificationSchedulesRoutePage({
   const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
   const params = await searchParams;
   const initialAppId = Array.isArray(params.app) ? params.app[0] : params.app;
-  const data = await getNotificationSchedulesPageData(session);
+  const data = await getNotificationSchedulesPageData(session, {
+    appId: initialAppId,
+  });
 
   return <NotificationSchedulesPage data={data} initialAppId={initialAppId} />;
 }

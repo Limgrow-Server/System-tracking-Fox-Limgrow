@@ -25,6 +25,7 @@ export type StoreMappingPageData = {
 
 export type UsersPageData = {
   appOptions: StoreMapping[];
+  usersPagination: PaginationMeta;
   users: TeamMember[];
 };
 
@@ -36,8 +37,12 @@ export type ConfigsPageData = {
 export type NotificationsPageData = {
   credentialSecrets: CredentialSecretMetadata[];
   deviceTokens: DeviceToken[];
+  notificationDeliveryEvents: NotificationEvent[];
   notificationEvents: NotificationEvent[];
   notificationJobs: NotificationJob[];
+  notificationPagination: NotificationPaginationMap;
+  notificationStoreOptions: string[];
+  notificationSummary: NotificationOverviewSummary;
   notificationSchedules: NotificationSchedule[];
   storeMappings: StoreMapping[];
 };
@@ -102,8 +107,17 @@ export type ReviewAppCard = {
 };
 
 export type ReviewAppGridPageData = {
+  appPagination: PaginationMeta;
   apps: ReviewAppCard[];
+  filters: {
+    search: string;
+    storeProfileId: string;
+  };
   storeNames: string[];
+  storeOptions: Array<{
+    id: string;
+    name: string;
+  }>;
 };
 
 export type AndroidStoreReviewDto = {
@@ -197,8 +211,26 @@ export type ReviewFetchScheduleApp = ReviewAppCard & {
 };
 
 export type ReviewFetchSchedulePageData = {
+  appPagination: PaginationMeta;
   apps: ReviewFetchScheduleApp[];
+  filters: {
+    search: string;
+    storeProfileId: string;
+  };
+  summary: {
+    activeCount: number;
+    appCount: number;
+    nextRunAt: string | null;
+    pausedCount: number;
+    scheduleStatus: string;
+    scheduledCount: number;
+    unscheduledCount: number;
+  };
   storeNames: string[];
+  storeOptions: Array<{
+    id: string;
+    name: string;
+  }>;
 };
 
 export type ReviewAppStats = {
@@ -226,6 +258,12 @@ export type ReviewAppDetailPageData = {
   app: ReviewAppCard;
   stats: ReviewAppStats;
   reviews: AndroidStoreReviewDto[];
+  reviewFilters: {
+    rating: string;
+    reply: string;
+    search: string;
+  };
+  reviewPagination: PaginationMeta;
   replyTemplates: ReviewReplyTemplatePreviewDto[];
   syncState: ReviewSyncStateDto | null;
   fetchRuns: ReviewFetchRunDto[];
@@ -260,6 +298,10 @@ export type ReplyStoreSummary = {
 };
 
 export type ReplyStoreListPageData = {
+  filters: {
+    search: string;
+  };
+  storePagination: PaginationMeta;
   stores: ReplyStoreSummary[];
 };
 
@@ -269,5 +311,28 @@ export type ReplyConfigBasePageData = {
 };
 
 export type ReplyConfigPageData = ReplyConfigBasePageData & {
+  appPagination: PaginationMeta;
+  filters: {
+    search: string;
+  };
   store: ReplyStoreSummary;
+};
+
+export type NotificationPaginationKey =
+  | "deliveryEvents"
+  | "historyJobs"
+  | "overviewApps"
+  | "schedules"
+  | "tokens";
+
+export type NotificationPaginationMap = Partial<
+  Record<NotificationPaginationKey, PaginationMeta>
+>;
+
+export type NotificationOverviewSummary = {
+  activeSchedules: number;
+  activeTokens: number;
+  appCount: number;
+  totalSchedules: number;
+  totalTokens: number;
 };

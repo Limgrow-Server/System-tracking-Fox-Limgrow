@@ -6,3 +6,6 @@ export {
   handleAdminNotificationSchedulesPatch as PATCH,
   handleAdminNotificationSchedulesPost as POST,
 } from "@/lib/server/api/admin-notifications.handler";
+export {
+  handleAdminNotificationSchedulesGet as GET,
+} from "@/lib/server/api/admin-notification-lists.handler";
