@@ -85,7 +85,25 @@ function errorForLog(error: unknown) {
     };
   }
 
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    return error as Record<string, unknown>;
+  }
+
   return { message: String(error) };
+}
+
+function errorString(error: unknown, key: string) {
+  const record = errorForLog(error);
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error
+    ? error.message
+    : errorString(error, "message")
+      ?? errorString(error, "error")
+      ?? fallback;
 }
 
 function logSendFailure(message: string, details: Record<string, unknown>) {
@@ -354,6 +372,42 @@ function fcmPayload(input: {
   return { message };
 }
 
+function redactedFcmPayload(payload: ReturnType<typeof fcmPayload>) {
+  const message = { ...payload.message };
+  if ("token" in message) {
+    message.token = "fcm-token-redacted";
+  }
+
+  return {
+    ...payload,
+    message,
+  };
+}
+
+function logIosFcmPayload(
+  input: {
+    deviceId?: string | null;
+    platform: MobilePlatform;
+    projectId: string;
+    targetType: TargetType;
+    targetValue: string;
+    topicCode?: string | null;
+  },
+  payload: ReturnType<typeof fcmPayload>
+) {
+  if (input.platform !== "ios") return;
+
+  console.info("[send-notification] iOS FCM request payload", {
+    deviceId: input.deviceId ?? null,
+    fcmPayload: redactedFcmPayload(payload),
+    platform: input.platform,
+    projectId: input.projectId,
+    targetType: input.targetType,
+    targetValue: logTargetValue(input),
+    topicCode: input.topicCode ?? null,
+  });
+}
+
 function formatFcmError(body: unknown, projectId: string, clientEmail: string | null) {
   const message =
     body && typeof body === "object" && "error" in body
@@ -426,26 +480,31 @@ async function sendFcm(input: {
   deviceTokenId?: string | null;
   endpoint: string;
   imageUrl: string;
+  platform: MobilePlatform;
   projectId: string;
   targetType: TargetType;
   targetValue: string;
   title: string;
   topicCode?: string | null;
 }): Promise<SendResult> {
+  const requestPayload = fcmPayload({
+    body: input.body,
+    data: input.data,
+    imageUrl: input.imageUrl,
+    targetType: input.targetType,
+    targetValue: input.targetValue,
+    title: input.title,
+  });
+
+  logIosFcmPayload(input, requestPayload);
+
   const response = await fetch(input.endpoint, {
     method: "POST",
     headers: {
       authorization: `Bearer ${input.accessToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(fcmPayload({
-      body: input.body,
-      data: input.data,
-      imageUrl: input.imageUrl,
-      targetType: input.targetType,
-      targetValue: input.targetValue,
-      title: input.title,
-    })),
+    body: JSON.stringify(requestPayload),
   });
   const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
 
@@ -576,6 +635,7 @@ async function insertJob(
   const appName = clean(input.payload.appName) || clean(input.payload.productAppId) || input.topicBase || "unknown_app";
   const appId = normalizeAppId(input.payload.appId) || normalizeAppId(input.payload.productAppId) || null;
   const firstLocale = primaryLocale(input.locales);
+  const now = new Date().toISOString();
   const { data, error } = await supabase
     .from("notification_jobs")
     .insert({
@@ -598,6 +658,7 @@ async function insertJob(
       target_values: input.targetValues,
       title: firstLocale?.title ?? null,
       topic_base: input.topicBase || "device",
+      updated_at: now,
     })
     .select("*")
     .single();
@@ -827,6 +888,7 @@ export async function sendNotificationPayload(
           },
           endpoint,
           imageUrl,
+          platform,
           projectId,
           targetType,
           targetValue: `${topicBase}-${locale.topicCode}`,
@@ -880,6 +942,7 @@ export async function sendNotificationPayload(
           deviceTokenId: device.id,
           endpoint,
           imageUrl,
+          platform,
           projectId,
           targetType,
           targetValue: device.fcmToken,
@@ -942,7 +1005,7 @@ export async function sendNotificationPayload(
       topicBase,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown notification send error";
+    const failureMessage = errorMessage(error, "Unknown notification send error");
     logSendFailure("Notification job failed before FCM send completed", {
       appId,
       error: errorForLog(error),
@@ -957,7 +1020,7 @@ export async function sendNotificationPayload(
     const results = failedTargets.map((targetValue) =>
       failedResult({
         deviceId: targetType === "device" ? targetValue : null,
-        error: errorMessage,
+        error: failureMessage,
         targetType,
         targetValue,
       })
