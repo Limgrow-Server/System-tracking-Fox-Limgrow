@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowLeft, Bell, Clock3, RefreshCw, Search } from "lucide-react";
+import { ArrowLeft, Bell, Clock3, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -13,7 +13,9 @@ import {
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
@@ -40,11 +42,41 @@ function statusValue(value: string | null | undefined) {
 }
 
 function identifierForToken(token: DeviceToken) {
-  return token.package_name ?? token.bundle_id ?? token.product_app_id ?? token.app_id ?? "No identifier";
+  return token.app_identifier ?? token.package_name ?? token.bundle_id ?? token.product_app_id ?? token.app_id ?? "No identifier";
 }
 
 function appMatchesRouteId(app: StoreMapping, appId: string) {
-  return app.id === appId || app.app_id?.toLowerCase() === appId.toLowerCase();
+  const normalizedAppId = appId.toLowerCase();
+
+  return (
+    app.id === appId ||
+    app.app_id?.toLowerCase() === normalizedAppId ||
+    app.package_name?.toLowerCase() === normalizedAppId ||
+    app.bundle_id?.toLowerCase() === normalizedAppId
+  );
+}
+
+function tokenDetailValue(value: string | null | undefined) {
+  return value?.trim() || "No data";
+}
+
+function TokenDetailItem({
+  label,
+  mono = false,
+  value,
+}: {
+  label: string;
+  mono?: boolean;
+  value: string | null | undefined;
+}) {
+  return (
+    <div className="min-w-0 rounded-md border bg-muted/20 p-3">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className={mono ? "mt-1 break-all font-mono text-xs" : "mt-1 break-words text-sm font-medium"}>
+        {tokenDetailValue(value)}
+      </div>
+    </div>
+  );
 }
 
 type TokenListResponse = {
@@ -61,11 +93,18 @@ type TokenListResponse = {
   totalPages?: number;
 };
 
+type DeleteTokenResponse = {
+  error?: string;
+  ok?: boolean;
+};
+
 export function NotificationTokenDetailPage({
   appId,
+  canManage,
   data,
 }: {
   appId: string;
+  canManage: boolean;
   data: NotificationsPageData;
 }) {
   const router = useRouter();
@@ -88,6 +127,9 @@ export function NotificationTokenDetailPage({
   const [tokenSummary, setTokenSummary] = useState(data.notificationSummary);
   const [tokenSearch, setTokenSearch] = useState("");
   const [loadingTokens, setLoadingTokens] = useState(false);
+  const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
+  const [selectedToken, setSelectedToken] = useState<DeviceToken | null>(null);
+  const [tokenToDelete, setTokenToDelete] = useState<DeviceToken | null>(null);
   const selectedApp = useMemo(
     () => data.storeMappings.find((app) => appMatchesRouteId(app, appId)) ?? null,
     [appId, data.storeMappings]
@@ -160,6 +202,41 @@ export function NotificationTokenDetailPage({
       );
     } finally {
       setLoadingTokens(false);
+    }
+  }
+
+  function openDeleteTokenDialog(token: DeviceToken) {
+    setSelectedToken(null);
+    setTokenToDelete(token);
+  }
+
+  async function deleteToken(token: DeviceToken) {
+    setDeletingTokenId(token.id);
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/tokens?id=${encodeURIComponent(token.id)}`,
+        { method: "DELETE" },
+      );
+      const payload = (await response.json()) as DeleteTokenResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "FCM token could not be deleted.");
+      }
+
+      toast.success("FCM token deleted.");
+      setTokenToDelete(null);
+      setSelectedToken((current) => current?.id === token.id ? null : current);
+      const nextPage = selectedTokens.length <= 1 && tokenPagination.page > 1
+        ? tokenPagination.page - 1
+        : tokenPagination.page;
+      await loadTokenPage(nextPage);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "FCM token could not be deleted.",
+      );
+    } finally {
+      setDeletingTokenId(null);
     }
   }
 
@@ -236,21 +313,27 @@ export function NotificationTokenDetailPage({
               </div>
             </div>
             <div className="overflow-auto">
-              <Table className="min-w-[980px] text-sm">
+              <Table className={canManage ? "min-w-[1160px] text-sm" : "min-w-[1080px] text-sm"}>
                 <TableHeader>
                   <TableRow>
                     <TableHead>FCM token</TableHead>
                     <TableHead className="w-28">Status</TableHead>
+                    <TableHead className="w-32">Device type</TableHead>
                     <TableHead className="w-24">Locale</TableHead>
                     <TableHead className="w-40">App version</TableHead>
                     <TableHead className="w-40">OS</TableHead>
                     <TableHead className="w-44">Last seen</TableHead>
+                    {canManage ? <TableHead className="w-20 text-right">Action</TableHead> : null}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {selectedTokens.length ? (
                     selectedTokens.map((token) => (
-                      <TableRow key={token.id}>
+                      <TableRow
+                        key={token.id}
+                        className="cursor-pointer transition-colors hover:bg-muted/35"
+                        onClick={() => setSelectedToken(token)}
+                      >
                         <TableCell className="max-w-[32rem]">
                           <div className="truncate font-mono text-sm font-medium" title={token.fcm_token}>
                             {token.fcm_token}
@@ -262,6 +345,7 @@ export function NotificationTokenDetailPage({
                         <TableCell>
                           <StatusBadge status={statusValue(token.status)} />
                         </TableCell>
+                        <TableCell className="font-mono text-xs">{token.device_type ?? "No data"}</TableCell>
                         <TableCell className="font-mono text-xs">{token.locale ?? "No data"}</TableCell>
                         <TableCell>
                           <div className="text-sm">{token.app_version ?? "No data"}</div>
@@ -275,11 +359,29 @@ export function NotificationTokenDetailPage({
                             {dateTime(token.last_seen_at)}
                           </div>
                         </TableCell>
+                        {canManage ? (
+                          <TableCell className="text-right">
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="icon-sm"
+                              title="Delete FCM token"
+                              disabled={deletingTokenId === token.id}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openDeleteTokenDialog(token);
+                              }}
+                            >
+                              {deletingTokenId === token.id ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
+                              <span className="sr-only">Delete FCM token</span>
+                            </Button>
+                          </TableCell>
+                        ) : null}
                       </TableRow>
                     ))
                   ) : (
                     <TableEmptyState
-                      colSpan={6}
+                      colSpan={canManage ? 8 : 7}
                       icon={Bell}
                       description="Mobile has not registered an FCM token for this app yet."
                       title={loadingTokens ? "Loading token records" : "No token records"}
@@ -296,6 +398,106 @@ export function NotificationTokenDetailPage({
               totalPages={tokenPagination.totalPages}
             />
           </section>
+
+          <Dialog open={Boolean(selectedToken)} onOpenChange={(open) => !open && setSelectedToken(null)}>
+            <DialogContent className="max-h-[86dvh] overflow-y-auto sm:max-w-3xl">
+              <DialogHeader>
+                <DialogTitle>FCM token detail</DialogTitle>
+                <DialogDescription>
+                  Token identity, app matching fields, and device metadata for this app.
+                </DialogDescription>
+              </DialogHeader>
+
+              {selectedToken ? (
+                <div className="space-y-4">
+                  <div className="rounded-md border bg-muted/20 p-3">
+                    <div className="text-xs font-medium text-muted-foreground">FCM token</div>
+                    <div className="mt-1 break-all font-mono text-xs">{selectedToken.fcm_token}</div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <TokenDetailItem label="Device ID" value={selectedToken.device_id} mono />
+                    <TokenDetailItem label="App identifier" value={selectedToken.app_identifier} mono />
+                    <TokenDetailItem label="Status" value={selectedToken.status} />
+                    <TokenDetailItem label="Device type" value={selectedToken.device_type} />
+                    <TokenDetailItem label="App ID" value={selectedToken.app_id} mono />
+                    <TokenDetailItem label="Product app ID" value={selectedToken.product_app_id} mono />
+                    <TokenDetailItem label="Package name" value={selectedToken.package_name} mono />
+                    <TokenDetailItem label="Bundle ID" value={selectedToken.bundle_id} mono />
+                    <TokenDetailItem label="Store" value={selectedToken.store_account_name} />
+                    <TokenDetailItem label="Store platform" value={selectedToken.store_platform} />
+                    <TokenDetailItem label="Locale" value={selectedToken.locale} />
+                    <TokenDetailItem label="App version" value={selectedToken.app_version} />
+                    <TokenDetailItem label="OS version" value={selectedToken.os_version} />
+                    <TokenDetailItem label="Device model" value={selectedToken.device_model} />
+                    <TokenDetailItem label="Manufacturer" value={selectedToken.device_manufacturer} />
+                    <TokenDetailItem label="Firebase project" value={selectedToken.firebase_project_id} mono />
+                    <TokenDetailItem label="Last seen" value={dateTime(selectedToken.last_seen_at)} />
+                    <TokenDetailItem label="Created" value={dateTime(selectedToken.created_at)} />
+                    <TokenDetailItem label="Updated" value={dateTime(selectedToken.updated_at)} />
+                  </div>
+                  {canManage ? (
+                    <DialogFooter>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={deletingTokenId === selectedToken.id}
+                        onClick={() => openDeleteTokenDialog(selectedToken)}
+                      >
+                        {deletingTokenId === selectedToken.id ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
+                        Delete token
+                      </Button>
+                    </DialogFooter>
+                  ) : null}
+                </div>
+              ) : null}
+            </DialogContent>
+          </Dialog>
+
+          <Dialog
+            open={Boolean(tokenToDelete)}
+            onOpenChange={(open) => {
+              if (!open && !deletingTokenId) setTokenToDelete(null);
+            }}
+          >
+            <DialogContent showCloseButton={!deletingTokenId}>
+              <DialogHeader>
+                <DialogTitle>Delete FCM token</DialogTitle>
+                <DialogDescription>
+                  This token will be removed from active targeting and token lists.
+                </DialogDescription>
+              </DialogHeader>
+
+              {tokenToDelete ? (
+                <div className="rounded-md border bg-muted/20 p-3">
+                  <div className="text-xs font-medium text-muted-foreground">Device</div>
+                  <div className="mt-1 truncate font-mono text-xs">{tokenToDelete.device_id}</div>
+                  <div className="mt-2 text-xs font-medium text-muted-foreground">FCM token</div>
+                  <div className="mt-1 break-all font-mono text-xs">{tokenToDelete.fcm_token}</div>
+                </div>
+              ) : null}
+
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={Boolean(deletingTokenId)}
+                  onClick={() => setTokenToDelete(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={!tokenToDelete || Boolean(deletingTokenId)}
+                  onClick={() => tokenToDelete && void deleteToken(tokenToDelete)}
+                >
+                  {deletingTokenId ? <Spinner className="size-3.5" /> : <Trash2 size={14} />}
+                  Delete token
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       ) : (
         <section className="overflow-hidden rounded-xl border bg-background p-10 shadow-sm shadow-slate-200/50">

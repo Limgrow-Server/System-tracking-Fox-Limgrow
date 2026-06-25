@@ -202,6 +202,7 @@ export function TableEmptyState({
 
 export function TablePaginationFooter({
   from,
+  loadingPage,
   onPageChange,
   page,
   shown,
@@ -210,6 +211,7 @@ export function TablePaginationFooter({
   totalPages,
 }: {
   from?: number;
+  loadingPage?: number | null;
   onPageChange?: (page: number) => void;
   page?: number;
   shown: number;
@@ -221,8 +223,13 @@ export function TablePaginationFooter({
 
   const currentPage = page ?? 1;
   const lastPage = Math.max(totalPages ?? 1, 1);
-  const canGoPrevious = Boolean(onPageChange && currentPage > 1);
-  const canGoNext = Boolean(onPageChange && currentPage < lastPage);
+  const pendingPage = typeof loadingPage === "number" ? loadingPage : null;
+  const previousPage = currentPage - 1;
+  const nextPage = currentPage + 1;
+  const previousLoading = pendingPage === previousPage;
+  const nextLoading = pendingPage === nextPage;
+  const canGoPrevious = Boolean(onPageChange && currentPage > 1 && !pendingPage);
+  const canGoNext = Boolean(onPageChange && currentPage < lastPage && !pendingPage);
   const rangeLabel = from && to ? `Showing ${from}-${to} of ${total}` : `Showing ${shown} of ${total}`;
 
   function goPrevious(event: MouseEvent<HTMLAnchorElement>) {
@@ -243,8 +250,12 @@ export function TablePaginationFooter({
           <PaginationItem>
             <PaginationPrevious
               href="#"
+              loading={previousLoading}
               text="Prev"
-              className={cn(!canGoPrevious && "pointer-events-none opacity-50")}
+              className={cn(
+                !canGoPrevious && !previousLoading && "pointer-events-none opacity-50",
+                previousLoading && "pointer-events-none"
+              )}
               onClick={goPrevious}
             />
           </PaginationItem>
@@ -262,8 +273,12 @@ export function TablePaginationFooter({
           <PaginationItem>
             <PaginationNext
               href="#"
+              loading={nextLoading}
               text="Next"
-              className={cn(!canGoNext && "pointer-events-none opacity-50")}
+              className={cn(
+                !canGoNext && !nextLoading && "pointer-events-none opacity-50",
+                nextLoading && "pointer-events-none"
+              )}
               onClick={goNext}
             />
           </PaginationItem>

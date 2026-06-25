@@ -11,10 +11,15 @@ export default async function NotificationTokenDetailRoutePage({
   const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
   const { appId } = await params;
   const data = await getNotificationTokenDetailPageData(session, appId);
+  const normalizedAppId = appId.toLowerCase();
   const selectedApp = data.storeMappings.find(
-    (app) => app.id === appId || app.app_id?.toLowerCase() === appId.toLowerCase(),
+    (app) =>
+      app.id === appId ||
+      app.app_id?.toLowerCase() === normalizedAppId ||
+      app.package_name?.toLowerCase() === normalizedAppId ||
+      app.bundle_id?.toLowerCase() === normalizedAppId,
   );
   if (!selectedApp) notFound();
 
-  return <NotificationTokenDetailPage appId={appId} data={data} />;
+  return <NotificationTokenDetailPage appId={appId} canManage={session.role === "Admin"} data={data} />;
 }

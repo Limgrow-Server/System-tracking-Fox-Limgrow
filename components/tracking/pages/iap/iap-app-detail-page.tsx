@@ -18,7 +18,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Spinner } from "@/components/ui/spinner";
 import {
   TableEmptyState,
   TablePaginationFooter,
@@ -56,6 +55,8 @@ type IapTransactionListResponse = {
   totalPages?: number;
   transactionStates?: string[];
 };
+
+const IAP_TRANSACTION_SKELETON_COUNT = 8;
 
 function formatRevenue(
   micros: number | string | null,
@@ -251,6 +252,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [filterState, setFilterState] = useState<string>(data.filters.state);
   const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
   const [tableLoading, setTableLoading] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
 
   async function loadTransactionsPage(
@@ -277,6 +279,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
 
     setTableLoading(true);
+    setLoadingPage(page);
 
     try {
       const response = await fetch(
@@ -309,6 +312,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       );
     } finally {
       setTableLoading(false);
+      setLoadingPage(null);
     }
   }
 
@@ -616,7 +620,6 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 void loadTransactionsPage(1, { search: e.target.value });
               }}
             />
-            {tableLoading ? <Spinner className="size-4" /> : null}
           </div>
           <div className="flex items-center gap-2 w-full sm:w-auto">
             {!isIos && (
@@ -672,7 +675,33 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
               </tr>
             </thead>
             <tbody className="divide-y border-b bg-background">
-              {visible.map((tx) => {
+              {tableLoading ? (
+                Array.from({ length: IAP_TRANSACTION_SKELETON_COUNT }).map((_, index) => (
+                  <tr key={`iap-transaction-skeleton-${index}`}>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-44 animate-pulse rounded bg-muted" />
+                      <div className="mt-2 h-3 w-32 animate-pulse rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-5 w-24 animate-pulse rounded-full bg-muted" />
+                      <div className="mt-2 h-3 w-36 animate-pulse rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+                      <div className="mt-2 h-3 w-28 animate-pulse rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-8 w-20 animate-pulse rounded-md bg-muted" />
+                    </td>
+                  </tr>
+                ))
+              ) : visible.map((tx) => {
                 const txId = transactionDisplayId(tx);
                 const secondaryId = transactionSecondaryId(tx);
                 const productId = transactionProductId(tx);
@@ -780,7 +809,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   </tr>
                 );
               })}
-              {!visible.length && (
+              {!tableLoading && !visible.length && (
                 <TableEmptyState
                   colSpan={6}
                   icon={CreditCard}
@@ -794,6 +823,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
 
         <TablePaginationFooter
           from={tableStartIndex + 1}
+          loadingPage={loadingPage}
           onPageChange={(page) => void loadTransactionsPage(page)}
           page={currentPage}
           shown={visible.length}

@@ -1,9 +1,10 @@
 import "server-only";
 
+import { prisma } from "@/lib/prisma";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
-import { badRequest } from "@/lib/server/api/errors";
+import { badRequest, notFound } from "@/lib/server/api/errors";
 import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
-import { errorJson } from "@/lib/server/api/responses";
+import { errorJson, okJson } from "@/lib/server/api/responses";
 import {
   getNotificationHistoryDetailPageData,
   getNotificationHistoryPageData,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/server/page-loaders/notifications/notifications.loader";
 
 const notificationRoles = ["Admin", "Dev", "Marketing"] as const;
+const notificationManageRoles = ["Admin"] as const;
 
 function clean(value: string | null) {
   return value?.trim() ?? "";
@@ -87,6 +89,30 @@ export async function handleAdminNotificationTokensGet(request: Request) {
     );
   } catch (error) {
     return errorJson(error, "List notification tokens failed.");
+  }
+}
+
+export async function handleAdminNotificationTokensDelete(request: Request) {
+  try {
+    await requireConsoleApiSession([...notificationManageRoles]);
+    const url = new URL(request.url);
+    const id = clean(url.searchParams.get("id"));
+    if (!id) throw badRequest("FCM token id is required.");
+
+    const token = await prisma.deviceToken.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!token) throw notFound("FCM token not found.");
+
+    await prisma.deviceToken.delete({ where: { id } });
+
+    return okJson({
+      deleted: id,
+      message: "FCM token deleted.",
+    });
+  } catch (error) {
+    return errorJson(error, "Delete notification token failed.");
   }
 }
 

@@ -5,7 +5,7 @@ import {
   type MobilePlatform,
   type SupabaseAdminClient,
 } from "../_shared/edge-config.ts";
-import { normalizeAppId } from "../_shared/mobile-normalize.ts";
+import { normalizeAppId, normalizeAppIdentifier } from "../_shared/mobile-normalize.ts";
 
 export type TargetType = "topic" | "device";
 
@@ -66,6 +66,7 @@ export type SendResult = {
 };
 
 type DeviceTarget = {
+  appIdentifier: string | null;
   appId: string | null;
   bundleId: string | null;
   deviceId: string;
@@ -573,13 +574,14 @@ async function getDeviceTargets(
     deviceIds: string[];
     packageName?: string | null;
     platform: MobilePlatform;
+    productAppId?: string | null;
   }
 ) {
   if (!input.deviceIds.length) return [];
 
   const query = supabase
     .from("device_tokens")
-    .select("id,app_id,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,status")
+    .select("id,app_id,app_identifier,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,status")
     .eq("platform", input.platform)
     .eq("status", "active")
     .in("device_id", input.deviceIds);
@@ -592,11 +594,20 @@ async function getDeviceTargets(
   const appName = clean(input.appName);
   const packageName = clean(input.packageName);
   const bundleId = clean(input.bundleId);
-  const requestedAppKeys = Array.from(new Set([appId, appId ? "" : appName].filter(Boolean)));
+  const productAppId = normalizeAppId(input.productAppId);
+  const requestedAppIdentifier = normalizeAppIdentifier({
+    appId,
+    bundleId,
+    packageName,
+    platform: input.platform,
+    productAppId,
+  });
+  const requestedAppKeys = Array.from(new Set([appId, productAppId, appId || productAppId ? "" : appName].filter(Boolean)));
 
   return (data ?? []).map((row) => {
     const record = row as Record<string, unknown>;
     return {
+      appIdentifier: stringValue(record.app_identifier),
       appId: stringValue(record.app_id),
       bundleId: stringValue(record.bundle_id),
       deviceId: clean(record.device_id),
@@ -608,6 +619,7 @@ async function getDeviceTargets(
     };
   }).filter((device) => {
     if (!device.id || !device.deviceId || !device.fcmToken) return false;
+    if (requestedAppIdentifier && device.appIdentifier === requestedAppIdentifier) return true;
     const deviceAppKeys = [device.appId, device.productAppId].filter(Boolean);
     if (requestedAppKeys.length && deviceAppKeys.length) {
       return deviceAppKeys.some((deviceKey) => requestedAppKeys.includes(deviceKey));
@@ -904,6 +916,7 @@ export async function sendNotificationPayload(
         deviceIds,
         packageName: resolvedPayload.packageName,
         platform,
+        productAppId: resolvedPayload.productAppId,
       });
       const devicesById = new Map(devices.map((device) => [device.deviceId, device]));
 
