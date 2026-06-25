@@ -1,7 +1,9 @@
 import "server-only";
 
 import { MappingStatus, Prisma } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
   deleteIosStoreMapping,
@@ -62,9 +64,20 @@ function mapIosStoreMappingError(error: unknown): never {
   throw error;
 }
 
+const getCachedIosStoreMappingDtos = unstable_cache(
+  async (take: number) => {
+    const mappings = await getIosStoreMappings({ take });
+    return mappings.map(iosStoreMappingToTracking);
+  },
+  ["ios-store-mapping-dtos"],
+  {
+    revalidate: 300,
+    tags: [CACHE_TAGS.iosStoreMappings],
+  },
+);
+
 export async function getIosStoreMappingDtos(options?: { take?: number }) {
-  const mappings = await getIosStoreMappings(options);
-  return mappings.map(iosStoreMappingToTracking);
+  return getCachedIosStoreMappingDtos(options?.take ?? 200);
 }
 
 export async function getIosStoreMappingPageResult(options: PaginationQuery & {

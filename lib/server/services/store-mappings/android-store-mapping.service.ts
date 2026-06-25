@@ -1,7 +1,9 @@
 import "server-only";
 
 import { MappingStatus, Prisma } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
   deleteAndroidStoreMapping,
@@ -62,9 +64,20 @@ function mapAndroidStoreMappingError(error: unknown): never {
   throw error;
 }
 
+const getCachedAndroidStoreMappingDtos = unstable_cache(
+  async (take: number) => {
+    const mappings = await getAndroidStoreMappings({ take });
+    return mappings.map(androidStoreMappingToTracking);
+  },
+  ["android-store-mapping-dtos"],
+  {
+    revalidate: 300,
+    tags: [CACHE_TAGS.androidStoreMappings],
+  },
+);
+
 export async function getAndroidStoreMappingDtos(options?: { take?: number }) {
-  const mappings = await getAndroidStoreMappings(options);
-  return mappings.map(androidStoreMappingToTracking);
+  return getCachedAndroidStoreMappingDtos(options?.take ?? 200);
 }
 
 export async function getAndroidStoreMappingPageResult(options: PaginationQuery & {
