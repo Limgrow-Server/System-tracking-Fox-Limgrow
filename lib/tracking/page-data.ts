@@ -12,11 +12,6 @@ import type {
   IapAndroidDto,
 } from "@/lib/server/services/iap/android-iap.service";
 
-export type SupabaseAuthUser = {
-  id: string;
-  email: string;
-};
-
 export type StoreMappingPageData = {
   storeMappings: StoreMapping[];
   credentialSecrets: CredentialSecretMetadata[];
@@ -24,7 +19,6 @@ export type StoreMappingPageData = {
 
 export type ConfigsPageData = {
   credentialSecrets: CredentialSecretMetadata[];
-  supabaseAuthUsers: SupabaseAuthUser[];
 };
 
 export type IosIapVerifyPageData = {

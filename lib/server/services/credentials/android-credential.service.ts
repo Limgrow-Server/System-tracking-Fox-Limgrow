@@ -224,8 +224,7 @@ async function updateAndroidCredentialMetadata(input: {
     const profile =
       input.payload.storeAccountName !== undefined ||
       input.payload.linkStore !== undefined ||
-      input.payload.avatarUrl !== undefined ||
-      input.payload.supabaseUserId !== undefined
+      input.payload.avatarUrl !== undefined
         ? await updateAndroidStoreProfileMetadata(tx, input.target.storeProfileId, {
             ...profileMetadataPatch(input.payload),
             storeAccountName: patchStoreAccountName,

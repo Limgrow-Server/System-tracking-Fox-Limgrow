@@ -15,7 +15,6 @@ export type CredentialPayload = {
   projectId?: string | null;
   linkStore?: string | null;
   avatarUrl?: string | null;
-  supabaseUserId?: string | null;
   status?: "active" | "disabled";
   description?: string | null;
   secretFileName?: string | null;
