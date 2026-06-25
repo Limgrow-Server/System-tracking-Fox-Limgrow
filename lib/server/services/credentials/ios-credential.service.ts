@@ -4,11 +4,13 @@ import {
   CredentialPurpose,
   IosSecretType,
 } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 import type {
   CredentialStatus,
   SecretFormat,
 } from "@prisma/client";
 
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, notFound } from "@/lib/server/api/errors";
 import {
   createIosCredential,
@@ -67,12 +69,23 @@ const iosCredentialPurposeMap: Record<string, CredentialPurpose> = {
   firebase_service_account: CredentialPurpose.FIREBASE_ADMIN,
 };
 
-export async function getIosCredentialConfigs(take = 200) {
-  const credentials = await getIosCredentials(take);
+const getCachedIosCredentialConfigs = unstable_cache(
+  async (take: number) => {
+    const credentials = await getIosCredentials(take);
 
-  return {
-    credentials: credentials.map(iosCredentialToMetadata),
-  };
+    return {
+      credentials: credentials.map(iosCredentialToMetadata),
+    };
+  },
+  ["ios-credential-configs"],
+  {
+    revalidate: 300,
+    tags: [CACHE_TAGS.iosCredentials],
+  },
+);
+
+export function getIosCredentialConfigs(take = 200) {
+  return getCachedIosCredentialConfigs(take);
 }
 
 export async function getIosCredentialConfigsPage(options: PaginationQuery & {

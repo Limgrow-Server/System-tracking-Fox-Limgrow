@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "crypto";
 
 import { Prisma } from "@prisma/client";
 
+import { CACHE_TAGS, revalidateCacheTags } from "@/lib/server/cache-tags";
 import {
   canAccessRecordViaStoreMappings,
   canAccessScopedRecord,
@@ -343,9 +344,14 @@ export async function handleAdminNotificationSendPost(request: Request) {
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     await assertNotificationAccess(session, payload);
+    const result = await callEdgeFunction("send-notification", payload);
+    revalidateCacheTags([
+      CACHE_TAGS.notificationEvents,
+      CACHE_TAGS.notificationJobs,
+    ]);
     return okJson({
       message: "Notification sent.",
-      result: await callEdgeFunction("send-notification", payload),
+      result,
     });
   } catch (error) {
     logNotificationFailure("Send notification API failed", {
@@ -659,6 +665,8 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
       },
     });
 
+    revalidateCacheTags([CACHE_TAGS.notificationSchedules]);
+
     return okJson({
       message: "Notification schedule saved.",
       schedule: notificationScheduleToTracking(schedule),
@@ -720,6 +728,8 @@ export async function handleAdminNotificationSchedulesPatch(request: Request) {
       data: updatePayload,
     });
 
+    revalidateCacheTags([CACHE_TAGS.notificationSchedules]);
+
     return okJson({
       message: status ? `Schedule ${status}.` : "Schedule updated.",
       schedule: notificationScheduleToTracking(schedule),
@@ -739,6 +749,8 @@ export async function handleAdminNotificationSchedulesDelete(request: Request) {
 
     await prisma.notificationSchedule.delete({ where: { id } });
 
+    revalidateCacheTags([CACHE_TAGS.notificationSchedules]);
+
     return okJson({
       deleted: id,
       message: "Schedule deleted.",
@@ -755,9 +767,15 @@ export async function handleAdminNotificationDispatchPost(request: Request) {
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     await assertNotificationAccess(session, payload);
+    const result = await callEdgeFunction("dispatch-notifications", payload);
+    revalidateCacheTags([
+      CACHE_TAGS.notificationEvents,
+      CACHE_TAGS.notificationJobs,
+      CACHE_TAGS.notificationSchedules,
+    ]);
     return okJson({
       message: "Dispatcher finished.",
-      result: await callEdgeFunction("dispatch-notifications", payload),
+      result,
     });
   } catch (error) {
     logNotificationFailure("Dispatch notifications API failed", {
@@ -807,6 +825,8 @@ export async function handleAdminNotificationTestDevicePost(request: Request) {
         storePlatform: clean(payload.storePlatform) || null,
       },
     });
+
+    revalidateCacheTags([CACHE_TAGS.deviceTokens]);
 
     return okJson({
       device: deviceTokenToTracking(device),

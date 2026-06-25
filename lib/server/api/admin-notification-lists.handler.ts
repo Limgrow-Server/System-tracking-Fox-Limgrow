@@ -1,5 +1,6 @@
 import "server-only";
 
+import { CACHE_TAGS, revalidateCacheTags } from "@/lib/server/cache-tags";
 import { prisma } from "@/lib/prisma";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, notFound } from "@/lib/server/api/errors";
@@ -106,6 +107,7 @@ export async function handleAdminNotificationTokensDelete(request: Request) {
     if (!token) throw notFound("FCM token not found.");
 
     await prisma.deviceToken.delete({ where: { id } });
+    revalidateCacheTags([CACHE_TAGS.deviceTokens]);
 
     return okJson({
       deleted: id,

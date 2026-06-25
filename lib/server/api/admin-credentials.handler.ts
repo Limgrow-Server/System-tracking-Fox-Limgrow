@@ -1,5 +1,6 @@
 import "server-only";
 
+import { CACHE_TAGS, revalidateCacheTags } from "@/lib/server/cache-tags";
 import { requireAdminSession } from "@/lib/server/api/auth";
 import { badRequest } from "@/lib/server/api/errors";
 import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
@@ -89,11 +90,16 @@ export async function handleAdminCredentialsPost(request: Request) {
   try {
     const admin = await requireAdminSession();
     const payload = await parseCredentialPayload(request);
-    return okJson(
-      platformFromCredentialPayload(payload) === "android"
-        ? await saveAndroidCredentialConfig(payload, admin.email)
-        : await saveIosCredentialConfig(payload, admin.email)
-    );
+    const platform = platformFromCredentialPayload(payload);
+    const result = platform === "android"
+      ? await saveAndroidCredentialConfig(payload, admin.email)
+      : await saveIosCredentialConfig(payload, admin.email);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidCredentials
+        : CACHE_TAGS.iosCredentials,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }
@@ -103,11 +109,16 @@ export async function handleAdminCredentialsPatch(request: Request) {
   try {
     const admin = await requireAdminSession();
     const payload = await parseCredentialPayload(request);
-    return okJson(
-      platformFromCredentialPayload(payload) === "android"
-        ? await updateAndroidCredentialConfig(payload, admin.email)
-        : await updateIosCredentialConfig(payload, admin.email)
-    );
+    const platform = platformFromCredentialPayload(payload);
+    const result = platform === "android"
+      ? await updateAndroidCredentialConfig(payload, admin.email)
+      : await updateIosCredentialConfig(payload, admin.email);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidCredentials
+        : CACHE_TAGS.iosCredentials,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }
@@ -117,11 +128,16 @@ export async function handleAdminCredentialsDelete(request: Request) {
   try {
     await requireAdminSession();
     const payload = await parseCredentialPayload(request);
-    return okJson(
-      platformFromCredentialPayload(payload) === "android"
-        ? await deleteAndroidCredentialConfig(payload)
-        : await deleteIosCredentialConfig(payload)
-    );
+    const platform = platformFromCredentialPayload(payload);
+    const result = platform === "android"
+      ? await deleteAndroidCredentialConfig(payload)
+      : await deleteIosCredentialConfig(payload);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidCredentials
+        : CACHE_TAGS.iosCredentials,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }

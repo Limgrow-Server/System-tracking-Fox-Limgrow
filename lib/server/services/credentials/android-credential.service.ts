@@ -1,7 +1,9 @@
 import "server-only";
 
 import type { CredentialStatus } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, notFound } from "@/lib/server/api/errors";
 import {
   createAndroidCredential,
@@ -46,12 +48,23 @@ import { androidCredentialToMetadata } from "@/lib/tracking/mappers/android";
 
 type ExistingAndroidCredential = Awaited<ReturnType<typeof import("@/lib/server/repositories/android/credential.repository").getAndroidCredentialTarget>>;
 
-export async function getAndroidCredentialConfigs(take = 200) {
-  const credentials = await getAndroidCredentials(take);
+const getCachedAndroidCredentialConfigs = unstable_cache(
+  async (take: number) => {
+    const credentials = await getAndroidCredentials(take);
 
-  return {
-    credentials: credentials.map(androidCredentialToMetadata),
-  };
+    return {
+      credentials: credentials.map(androidCredentialToMetadata),
+    };
+  },
+  ["android-credential-configs"],
+  {
+    revalidate: 300,
+    tags: [CACHE_TAGS.androidCredentials],
+  },
+);
+
+export function getAndroidCredentialConfigs(take = 200) {
+  return getCachedAndroidCredentialConfigs(take);
 }
 
 export async function getAndroidCredentialConfigsPage(options: PaginationQuery & {

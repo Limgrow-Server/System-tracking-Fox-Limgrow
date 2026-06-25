@@ -1,5 +1,6 @@
 import "server-only";
 
+import { CACHE_TAGS, revalidateCacheTags } from "@/lib/server/cache-tags";
 import { requireAdminSession } from "@/lib/server/api/auth";
 import { badRequest } from "@/lib/server/api/errors";
 import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
@@ -61,11 +62,16 @@ export async function handleAdminStoreMappingsPost(request: Request) {
   try {
     await requireAdminSession();
     const payload = await parseJsonBody<StoreMappingPayload>(request);
-    return okJson(
-      platformFromPayload(payload) === "android"
-        ? await createAndroidStoreMapping(payload)
-        : await createIosStoreMapping(payload)
-    );
+    const platform = platformFromPayload(payload);
+    const result = platform === "android"
+      ? await createAndroidStoreMapping(payload)
+      : await createIosStoreMapping(payload);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidStoreMappings
+        : CACHE_TAGS.iosStoreMappings,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Create app mapping failed.");
   }
@@ -75,11 +81,16 @@ export async function handleAdminStoreMappingsPatch(request: Request) {
   try {
     await requireAdminSession();
     const payload = await parseJsonBody<StoreMappingPayload>(request);
-    return okJson(
-      platformFromPayload(payload) === "android"
-        ? await updateAndroidStoreMapping(payload)
-        : await updateIosStoreMapping(payload)
-    );
+    const platform = platformFromPayload(payload);
+    const result = platform === "android"
+      ? await updateAndroidStoreMapping(payload)
+      : await updateIosStoreMapping(payload);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidStoreMappings
+        : CACHE_TAGS.iosStoreMappings,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Update app mapping failed.");
   }
@@ -89,11 +100,16 @@ export async function handleAdminStoreMappingsDelete(request: Request) {
   try {
     await requireAdminSession();
     const payload = await parseJsonBody<StoreMappingPayload>(request);
-    return okJson(
-      platformFromPayload(payload) === "android"
-        ? await deleteAndroidStoreMappingConfig(payload)
-        : await deleteIosStoreMappingConfig(payload)
-    );
+    const platform = platformFromPayload(payload);
+    const result = platform === "android"
+      ? await deleteAndroidStoreMappingConfig(payload)
+      : await deleteIosStoreMappingConfig(payload);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidStoreMappings
+        : CACHE_TAGS.iosStoreMappings,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Delete app mapping failed.");
   }

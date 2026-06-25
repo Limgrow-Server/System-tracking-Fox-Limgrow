@@ -27,6 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
@@ -454,6 +455,107 @@ export function scheduleLabel(schedule: NotificationSchedule) {
 
 export function compactIdentifier(app: StoreMapping) {
   return app.app_id ?? app.package_name ?? app.bundle_id ?? app.id;
+}
+
+export function AppSearchDropdown({
+  apps,
+  onValueChange,
+  placeholder,
+  value,
+}: {
+  apps: StoreMapping[];
+  onValueChange: (value: string) => void;
+  placeholder: string;
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState(value);
+  const suggestions = useMemo(
+    () => apps.filter((app) => appMatchesSearch(app, query)).slice(0, 8),
+    [apps, query],
+  );
+
+  function applyValue(nextValue: string) {
+    const cleanValue = nextValue.trim();
+    onValueChange(cleanValue);
+    setQuery(cleanValue);
+    setOpen(false);
+  }
+
+  function chooseApp(app: StoreMapping) {
+    applyValue(app.app_name);
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setQuery(value);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <label className="relative block min-w-0">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
+          <Input
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                applyValue(query);
+              }
+              if (event.key === "Escape") {
+                setQuery(value);
+                setOpen(false);
+              }
+            }}
+            className="h-9 pl-9"
+            placeholder={placeholder}
+          />
+        </label>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[var(--radix-popover-trigger-width)] min-w-80 max-w-[calc(100vw-2rem)] p-1.5"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+      >
+        {suggestions.length ? (
+          <div className="space-y-1">
+            {suggestions.map((app) => (
+              <button
+                key={app.id}
+                type="button"
+                onClick={() => chooseApp(app)}
+                onMouseDown={(event) => event.preventDefault()}
+                className="flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+              >
+                <AppIcon app={app} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{app.app_name}</div>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                    {compactIdentifier(app)}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    {app.store_account_name ?? "Unknown store"}
+                  </div>
+                </div>
+                <PlatformBadge platform={app.platform} className="shrink-0" />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+            No matching apps
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 export function numberLabel(value: number) {
@@ -937,10 +1039,14 @@ export function AppSelectionTable({
               {apps.length} mapped app(s), {totalDeviceCount} active FCM token(s). Select one or more apps to send together.
             </CardDescription>
           </div>
-          <label className="relative block w-full lg:w-80">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
-            <Input value={search} onChange={(event) => onSearchChange(event.target.value)} className="h-9 pl-9" placeholder="Search app, package, bundle, store..." />
-          </label>
+          <div className="w-full lg:w-80">
+            <AppSearchDropdown
+              apps={apps}
+              onValueChange={onSearchChange}
+              placeholder="Search app, package, bundle, store..."
+              value={search}
+            />
+          </div>
         </div>
       </CardHeader>
       <CardContent className={cn("px-0", fillHeight && "min-h-0 flex-1")}>
@@ -1051,15 +1157,12 @@ export function RecordFilterControls({
 }) {
   return (
     <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_15rem_13rem]">
-      <label className="relative block min-w-0">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
-        <Input
-          value={search}
-          onChange={(event) => onSearchChange(event.target.value)}
-          className="h-9 pl-9"
-          placeholder={placeholder}
-        />
-      </label>
+      <AppSearchDropdown
+        apps={apps}
+        onValueChange={onSearchChange}
+        placeholder={placeholder}
+        value={search}
+      />
       <Select value={appFilter} onValueChange={onAppFilterChange}>
         <SelectTrigger className="h-9">
           <SelectValue placeholder="All apps" />

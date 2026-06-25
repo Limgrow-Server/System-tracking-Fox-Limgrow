@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bell, ChevronRight, ListFilter, RefreshCw, Search } from "lucide-react";
+import { Bell, ChevronRight, ListFilter, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -12,7 +12,6 @@ import {
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
@@ -22,6 +21,7 @@ import type { DeviceToken, NotificationSchedule, StoreMapping } from "@/lib/trac
 import {
   ALL_FILTER_VALUE,
   AppIcon,
+  AppSearchDropdown,
   PlatformBadge,
   numberLabel,
   scheduleMatchesApp,
@@ -207,19 +207,15 @@ export function NotificationOverviewPage({ data }: { data: NotificationsPageData
             </Button>
           </div>
           <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_12rem_14rem]">
-            <label className="relative block min-w-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
-              <Input
-                value={search}
-                onChange={(event) => {
-                  const nextValue = event.target.value;
-                  setSearch(nextValue);
-                  void loadOverviewPage(1, { search: nextValue });
-                }}
-                className="h-9 pl-9"
-                placeholder="Search app, app id, package, bundle, store..."
-              />
-            </label>
+            <AppSearchDropdown
+              apps={storeMappings}
+              onValueChange={(nextValue) => {
+                setSearch(nextValue);
+                void loadOverviewPage(1, { search: nextValue });
+              }}
+              placeholder="Search app, app id, package, bundle, store..."
+              value={search}
+            />
             <Select
               value={platformFilter}
               onValueChange={(value) => {

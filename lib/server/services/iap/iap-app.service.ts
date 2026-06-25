@@ -1,5 +1,8 @@
 import "server-only";
 
+import { unstable_cache } from "next/cache";
+
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import {
   getAllActiveStoreMappings,
   getAndroidMappingById,
@@ -25,36 +28,87 @@ type IapAppCardOptions = {
   storeAccountName?: string;
 };
 
+type CachedIapAppCard = IapAppCard & {
+  appId: string | null;
+};
+
+function toPublicIapAppCard(app: CachedIapAppCard): IapAppCard {
+  return {
+    appIconUrl: app.appIconUrl,
+    appLink: app.appLink,
+    appName: app.appName,
+    identifier: app.identifier,
+    mappingId: app.mappingId,
+    platform: app.platform,
+    storeAccountName: app.storeAccountName,
+    storeProfileId: app.storeProfileId,
+  };
+}
+
+function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions) {
+  const search = options?.search?.trim().toLowerCase();
+  const storeAccountName = options?.storeAccountName?.trim().toLowerCase();
+
+  return apps.filter((app) => {
+    const matchesStore =
+      !storeAccountName ||
+      app.storeAccountName.toLowerCase() === storeAccountName;
+    const matchesSearch =
+      !search ||
+      app.appName.toLowerCase().includes(search) ||
+      app.identifier.toLowerCase().includes(search) ||
+      app.storeAccountName.toLowerCase().includes(search) ||
+      Boolean(app.appId?.toLowerCase().includes(search));
+
+    return matchesStore && matchesSearch;
+  });
+}
+
+const getCachedIapAppCards = unstable_cache(
+  async (): Promise<CachedIapAppCard[]> => {
+    const { androidMappings, iosMappings } =
+      await getAllActiveStoreMappings();
+
+    const androidCards: CachedIapAppCard[] = androidMappings.map((m) => ({
+      appId: m.appId,
+      mappingId: m.id,
+      platform: "android",
+      appName: m.appName,
+      identifier: m.packageName,
+      appIconUrl: m.appIconUrl,
+      appLink: m.appLink,
+      storeAccountName: m.storeProfile?.storeAccountName ?? m.storeAccountName,
+      storeProfileId: m.storeProfileId,
+    }));
+
+    const iosCards: CachedIapAppCard[] = iosMappings.map((m) => ({
+      appId: m.appId,
+      mappingId: m.id,
+      platform: "ios",
+      appName: m.appName,
+      identifier: m.bundleId,
+      appIconUrl: m.appIconUrl,
+      appLink: m.appLink,
+      storeAccountName: m.storeProfile?.storeAccountName ?? m.storeAccountName,
+      storeProfileId: m.storeProfileId,
+    }));
+
+    return [...androidCards, ...iosCards].sort((a, b) =>
+      a.appName.localeCompare(b.appName),
+    );
+  },
+  ["iap-app-cards"],
+  {
+    revalidate: 300,
+    tags: [CACHE_TAGS.androidStoreMappings, CACHE_TAGS.iosStoreMappings],
+  },
+);
+
 export async function getIapAppCards(
   options?: IapAppCardOptions,
 ): Promise<IapAppCard[]> {
-  const { androidMappings, iosMappings } =
-    await getAllActiveStoreMappings(options);
-
-  const androidCards: IapAppCard[] = androidMappings.map((m) => ({
-    mappingId: m.id,
-    platform: "android",
-    appName: m.appName,
-    identifier: m.packageName,
-    appIconUrl: m.appIconUrl,
-    appLink: m.appLink,
-    storeAccountName: m.storeProfile?.storeAccountName ?? m.storeAccountName,
-    storeProfileId: m.storeProfileId,
-  }));
-
-  const iosCards: IapAppCard[] = iosMappings.map((m) => ({
-    mappingId: m.id,
-    platform: "ios",
-    appName: m.appName,
-    identifier: m.bundleId,
-    appIconUrl: m.appIconUrl,
-    appLink: m.appLink,
-    storeAccountName: m.storeProfile?.storeAccountName ?? m.storeAccountName,
-    storeProfileId: m.storeProfileId,
-  }));
-
-  return [...androidCards, ...iosCards].sort((a, b) =>
-    a.appName.localeCompare(b.appName),
+  return filterIapAppCards(await getCachedIapAppCards(), options).map(
+    toPublicIapAppCard,
   );
 }
 
