@@ -37,6 +37,8 @@ import {
   tokensForApp,
 } from "./shared";
 
+const TOKEN_SKELETON_COUNT = 8;
+
 function statusValue(value: string | null | undefined) {
   return (value ?? "unknown").toLowerCase();
 }
@@ -127,6 +129,7 @@ export function NotificationTokenDetailPage({
   const [tokenSummary, setTokenSummary] = useState(data.notificationSummary);
   const [tokenSearch, setTokenSearch] = useState("");
   const [loadingTokens, setLoadingTokens] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [deletingTokenId, setDeletingTokenId] = useState<string | null>(null);
   const [selectedToken, setSelectedToken] = useState<DeviceToken | null>(null);
   const [tokenToDelete, setTokenToDelete] = useState<DeviceToken | null>(null);
@@ -174,6 +177,7 @@ export function NotificationTokenDetailPage({
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
 
     setLoadingTokens(true);
+    setLoadingPage(page);
 
     try {
       const response = await fetch(
@@ -202,6 +206,7 @@ export function NotificationTokenDetailPage({
       );
     } finally {
       setLoadingTokens(false);
+      setLoadingPage(null);
     }
   }
 
@@ -327,7 +332,39 @@ export function NotificationTokenDetailPage({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {selectedTokens.length ? (
+                  {loadingTokens ? (
+                    Array.from({ length: TOKEN_SKELETON_COUNT }).map((_, index) => (
+                      <TableRow key={`token-skeleton-${index}`}>
+                        <TableCell className="max-w-[32rem]">
+                          <div className="h-4 w-72 animate-pulse rounded bg-muted" />
+                          <div className="mt-2 h-3 w-52 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-14 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-16 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        {canManage ? (
+                          <TableCell className="text-right">
+                            <div className="ml-auto h-7 w-7 animate-pulse rounded-md bg-muted" />
+                          </TableCell>
+                        ) : null}
+                      </TableRow>
+                    ))
+                  ) : selectedTokens.length ? (
                     selectedTokens.map((token) => (
                       <TableRow
                         key={token.id}
@@ -396,6 +433,7 @@ export function NotificationTokenDetailPage({
               shown={selectedTokens.length}
               total={tokenPagination.total}
               totalPages={tokenPagination.totalPages}
+              loadingPage={loadingPage}
             />
           </section>
 
