@@ -288,10 +288,12 @@ function filterTokens(tokens: DeviceToken[], options?: NotificationListOptions) 
       [
         token.fcm_token,
         token.device_id,
+        token.app_identifier,
         token.app_id,
         token.product_app_id,
         token.package_name,
         token.bundle_id,
+        token.device_type,
         token.locale,
         token.app_version,
         token.os_version,

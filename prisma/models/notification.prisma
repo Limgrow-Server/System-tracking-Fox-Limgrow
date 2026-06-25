@@ -6,6 +6,7 @@ model DeviceToken {
   platform           String
   firebaseAppId      String?  @map("firebase_app_id")
   firebaseProjectId  String?  @map("firebase_project_id")
+  appIdentifier      String?  @map("app_identifier")
   tokenHash          String   @unique @map("token_hash")
   fcmToken           String   @map("fcm_token")
   appVersion         String?  @map("app_version")
@@ -18,6 +19,7 @@ model DeviceToken {
   productAppId       String?  @map("product_app_id")
   packageName        String?  @map("package_name")
   bundleId           String?  @map("bundle_id")
+  deviceType         String?  @map("device_type")
   deviceModel        String?  @map("device_model")
   deviceManufacturer String?  @map("device_manufacturer")
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -25,6 +27,7 @@ model DeviceToken {
 
   @@index([platform, status, lastSeenAt], map: "device_tokens_platform_status_seen_idx")
   @@index([deviceId, platform], map: "device_tokens_device_platform_idx")
+  @@index([platform, appIdentifier, status], map: "device_tokens_identifier_platform_status_idx")
   @@index([appId, platform, status], map: "device_tokens_app_id_platform_status_idx")
   @@index([productAppId, platform, status], map: "device_tokens_app_platform_status_idx")
   @@index([packageName, status], map: "device_tokens_package_status_idx")

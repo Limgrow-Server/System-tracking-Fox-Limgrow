@@ -29,11 +29,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Spinner } from "@/components/ui/spinner";
 import { PageHeader, TablePaginationFooter } from "@/components/tracking/primitives";
 import { cn } from "@/lib/utils";
 import type { IapAppCard, IapAppGridPageData } from "@/lib/tracking/page-data";
 import { toast } from "sonner";
+
+const IAP_APP_SKELETON_COUNT = 12;
 
 type IapAppListResponse = {
   success?: boolean;
@@ -56,6 +57,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
   );
   const [storeNames, setStoreNames] = useState(data.storeNames);
   const [loading, setLoading] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [openStoreCombobox, setOpenStoreCombobox] = useState(false);
 
   async function loadAppsPage(
@@ -76,6 +78,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
     }
 
     setLoading(true);
+    setLoadingPage(page);
 
     try {
       const response = await fetch(`/api/admin/iap/apps?${params.toString()}`);
@@ -97,6 +100,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
       toast.error(error instanceof Error ? error.message : "Load IAP apps failed.");
     } finally {
       setLoading(false);
+      setLoadingPage(null);
     }
   }
 
@@ -188,86 +192,100 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
             </Command>
           </PopoverContent>
         </Popover>
-        {loading ? <Spinner className="size-4" /> : null}
       </div>
 
       {/* Grid Layout */}
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {apps.map((app) => (
-          <li key={app.mappingId}>
-            <Card
-              className="hover:bg-muted/50 transition-colors h-full cursor-pointer"
-              onClick={() =>
-                router.push(`/iap/${app.mappingId}?platform=${app.platform}`)
-              }
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <Avatar className="h-10 w-10 border rounded-lg">
-                  {app.appIconUrl ? (
-                    <AvatarImage
-                      src={app.appIconUrl}
-                      alt={app.appName}
-                      className="rounded-lg"
-                    />
-                  ) : null}
-                  <AvatarFallback className="text-xs rounded-lg">
-                    {app.appName.substring(0, 2).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <div>
-                  {app.platform === "ios" ? (
-                    <Badge
-                      variant="outline"
-                      className="border-zinc-200 bg-zinc-50 text-zinc-700 gap-1.5 text-sm px-2.5 py-1"
-                    >
-                      <Apple size={16} />
-                      iOS
-                    </Badge>
-                  ) : (
-                    <Badge
-                      variant="outline"
-                      className="border-emerald-200 bg-emerald-50 text-emerald-700 gap-1.5 text-sm px-2.5 py-1"
-                    >
-                      <Smartphone size={16} />
-                      Android
-                    </Badge>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-2">
-                  <CardTitle
-                    className="text-lg line-clamp-1 flex-1"
-                    title={app.appName}
-                  >
-                    {app.appName}
-                  </CardTitle>
-                  {app.appLink && (
-                    <a
-                      href={app.appLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={app.appLink}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Button
+        {loading ? (
+          Array.from({ length: IAP_APP_SKELETON_COUNT }).map((_, index) => (
+            <li key={`iap-app-skeleton-${index}`}>
+              <Card className="h-full">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <div className="size-10 animate-pulse rounded-lg bg-muted" />
+                  <div className="h-7 w-20 animate-pulse rounded-md bg-muted" />
+                </CardHeader>
+                <CardContent>
+                  <div className="h-5 w-3/4 animate-pulse rounded bg-muted" />
+                  <div className="mt-3 h-4 w-1/2 animate-pulse rounded bg-muted" />
+                </CardContent>
+              </Card>
+            </li>
+          ))
+        ) : apps.map((app) => (
+            <li key={app.mappingId}>
+              <Card
+                className="hover:bg-muted/50 transition-colors h-full cursor-pointer"
+                onClick={() =>
+                  router.push(`/iap/${app.mappingId}?platform=${app.platform}`)
+                }
+              >
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <Avatar className="h-10 w-10 border rounded-lg">
+                    {app.appIconUrl ? (
+                      <AvatarImage
+                        src={app.appIconUrl}
+                        alt={app.appName}
+                        className="rounded-lg"
+                      />
+                    ) : null}
+                    <AvatarFallback className="text-xs rounded-lg">
+                      {app.appName.substring(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    {app.platform === "ios" ? (
+                      <Badge
                         variant="outline"
-                        size="icon"
-                        className="h-8 w-8 shrink-0"
-                        asChild
+                        className="border-zinc-200 bg-zinc-50 text-zinc-700 gap-1.5 text-sm px-2.5 py-1"
                       >
-                        <span>
-                          <Link2 size={16} />
-                        </span>
-                      </Button>
-                    </a>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </li>
-        ))}
-        {apps.length === 0 && (
+                        <Apple size={16} />
+                        iOS
+                      </Badge>
+                    ) : (
+                      <Badge
+                        variant="outline"
+                        className="border-emerald-200 bg-emerald-50 text-emerald-700 gap-1.5 text-sm px-2.5 py-1"
+                      >
+                        <Smartphone size={16} />
+                        Android
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center gap-2">
+                    <CardTitle
+                      className="text-lg line-clamp-1 flex-1"
+                      title={app.appName}
+                    >
+                      {app.appName}
+                    </CardTitle>
+                    {app.appLink && (
+                      <a
+                        href={app.appLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={app.appLink}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8 shrink-0"
+                          asChild
+                        >
+                          <span>
+                            <Link2 size={16} />
+                          </span>
+                        </Button>
+                      </a>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </li>
+          ))}
+        {!loading && apps.length === 0 && (
           <div className="col-span-full py-12 text-center text-muted-foreground">
             No applications found matching your criteria.
           </div>
@@ -275,6 +293,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
       </ul>
       <TablePaginationFooter
         from={tableStartIndex + 1}
+        loadingPage={loadingPage}
         onPageChange={(page) => void loadAppsPage(page)}
         page={pagination.page}
         shown={apps.length}

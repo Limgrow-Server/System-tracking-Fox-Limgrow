@@ -333,6 +333,10 @@ export function deviceTokenMatchesApp(
   if (device.platform !== app.platform) return false;
   if (options.activeOnly && device.status !== "active") return false;
 
+  const appIdentifier = app.platform === "android" ? app.package_name : app.bundle_id;
+  const deviceIdentifiers = normalizedValues([device.app_identifier]);
+  if (sameValue(appIdentifier, device.app_identifier)) return true;
+
   const appIds = normalizedValues([app.app_id]);
   const deviceIds = normalizedValues([device.app_id, device.product_app_id]);
   if (appIds.length && deviceIds.length) {
@@ -341,7 +345,7 @@ export function deviceTokenMatchesApp(
 
   if (sameValue(app.package_name, device.package_name)) return true;
   if (sameValue(app.bundle_id, device.bundle_id)) return true;
-  return !deviceIds.length && sameValue(device.store_account_name, app.store_account_name);
+  return !deviceIds.length && !deviceIdentifiers.length && sameValue(device.store_account_name, app.store_account_name);
 }
 
 export function tokensForApp(app: StoreMapping | null, devices: DeviceToken[], options: { activeOnly?: boolean } = {}) {

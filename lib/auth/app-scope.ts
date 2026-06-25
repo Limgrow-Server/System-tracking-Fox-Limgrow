@@ -10,6 +10,8 @@ import type {
 
 type ScopeRecord = Partial<{
   app_id: string | null;
+  app_identifier: string | null;
+  appIdentifier: string | null;
   app_mapping_id: string | null;
   app_name: string | null;
   appId: string | null;
@@ -82,6 +84,8 @@ function scopeFieldsFromRecord(record: ScopeRecord): ScopeFields {
       record.mappingId,
       record.id,
       record.app_id,
+      record.app_identifier,
+      record.appIdentifier,
       record.appId,
       record.product_app_id,
       record.app_name,

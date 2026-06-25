@@ -11,9 +11,11 @@ import {
 import { requirePublicApiKey } from "./mobile-api-auth.ts";
 import { sha256Hex } from "./mobile-crypto.ts";
 import {
+  normalizeAppIdentifier,
   normalizeAppId,
   normalizeBundleId,
   normalizeDeviceId,
+  normalizeDeviceType,
   normalizeFirebaseProjectId,
   normalizeLocale,
   normalizePackageName,
@@ -37,6 +39,8 @@ type DeviceTokenRequest = {
   locale?: string;
   languageCode?: string;
   language_code?: string;
+  deviceType?: string;
+  device_type?: string;
   deviceModel?: string;
   deviceManufacturer?: string;
   errorCode?: string;
@@ -44,7 +48,7 @@ type DeviceTokenRequest = {
 };
 
 const safeColumns =
-  "id,user_id,app_id,device_id,platform,firebase_app_id,firebase_project_id,app_version,os_version,locale,status,last_seen_at,store_platform,store_account_name,product_app_id,package_name,bundle_id,device_model,device_manufacturer,created_at,updated_at";
+  "id,user_id,app_id,device_id,platform,firebase_app_id,firebase_project_id,app_identifier,app_version,os_version,locale,status,last_seen_at,store_platform,store_account_name,product_app_id,package_name,bundle_id,device_type,device_model,device_manufacturer,created_at,updated_at";
 
 function requestAppId(payload: DeviceTokenRequest) {
   return normalizeAppId(payload.appId) || normalizeAppId(payload.app_id);
@@ -223,6 +227,16 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
       const productAppId = normalizeAppId(payload.productAppId) || normalizeAppId(integration?.product_app_id) || appId;
       const integrationStorePlatform = clean(integration?.store_platform) as StorePlatform;
       const storePlatform = payload.storePlatform ?? (integrationStorePlatform || inferredStorePlatform(expectedPlatform));
+      const packageName = expectedPlatform === "android" ? normalizePackageName(payload.packageName) || normalizePackageName(integration?.package_name) || null : null;
+      const bundleId = expectedPlatform === "ios" ? normalizeBundleId(payload.bundleId) || normalizeBundleId(integration?.bundle_id) || null : null;
+      const appIdentifier = normalizeAppIdentifier({
+        appId,
+        bundleId,
+        packageName,
+        platform: expectedPlatform,
+        productAppId,
+      }) || null;
+      const deviceType = normalizeDeviceType(payload.deviceType) || normalizeDeviceType(payload.device_type) || null;
       const userId = `app:${appId}:device:${deviceId || tokenHash.slice(0, 12)}`;
 
       const row = {
@@ -232,6 +246,7 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         platform: expectedPlatform,
         firebase_app_id: clean(payload.firebaseAppId) || clean(integration?.firebase_app_id) || null,
         firebase_project_id: normalizeFirebaseProjectId(payload.firebaseProjectId) || normalizeFirebaseProjectId(integration?.firebase_project_id) || null,
+        app_identifier: appIdentifier,
         token_hash: tokenHash,
         fcm_token: fcmToken,
         app_version: clean(payload.appVersion) || null,
@@ -242,8 +257,9 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         store_platform: storePlatform,
         store_account_name: clean(integration?.store_account_name) || null,
         product_app_id: productAppId,
-        package_name: expectedPlatform === "android" ? normalizePackageName(payload.packageName) || normalizePackageName(integration?.package_name) || null : null,
-        bundle_id: expectedPlatform === "ios" ? normalizeBundleId(payload.bundleId) || normalizeBundleId(integration?.bundle_id) || null : null,
+        package_name: packageName,
+        bundle_id: bundleId,
+        device_type: deviceType,
         device_model: clean(payload.deviceModel) || null,
         device_manufacturer: clean(payload.deviceManufacturer) || null,
         updated_at: now,
@@ -264,6 +280,7 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         device: data,
         app: {
           appId,
+          appIdentifier,
           productAppId,
           packageName: row.package_name,
           bundleId: row.bundle_id,
