@@ -6,6 +6,7 @@ import type {
   NotificationJob,
   NotificationSchedule,
   StoreMapping,
+  TeamMember,
 } from "@/lib/tracking/types";
 import type {
   AndroidStoreProfileSummary,
@@ -15,6 +16,11 @@ import type {
 export type StoreMappingPageData = {
   storeMappings: StoreMapping[];
   credentialSecrets: CredentialSecretMetadata[];
+};
+
+export type UsersPageData = {
+  appOptions: StoreMapping[];
+  users: TeamMember[];
 };
 
 export type ConfigsPageData = {

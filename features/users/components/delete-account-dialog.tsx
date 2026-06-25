@@ -12,6 +12,7 @@ import type { ManagedAccount } from "../types";
 type DeleteAccountDialogProps = {
   account: ManagedAccount | null;
   confirmEmail: string;
+  deleting?: boolean;
   onConfirm: () => void;
   onConfirmEmailChange: (value: string) => void;
   onOpenChange: (open: boolean) => void;
@@ -20,6 +21,7 @@ type DeleteAccountDialogProps = {
 export function DeleteAccountDialog({
   account,
   confirmEmail,
+  deleting = false,
   onConfirm,
   onConfirmEmailChange,
   onOpenChange,
@@ -58,12 +60,13 @@ export function DeleteAccountDialog({
               type="button"
               variant="destructive"
               disabled={
+                deleting ||
                 !account ||
                 confirmEmail.trim().toLowerCase() !== account.email.toLowerCase()
               }
               onClick={onConfirm}
             >
-              Delete account
+              {deleting ? "Deleting..." : "Delete account"}
             </Button>
           </div>
         </div>

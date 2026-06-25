@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   Apple,
@@ -11,6 +11,16 @@ import {
   Smartphone,
   TriangleAlert,
 } from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { TableEmptyState } from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
@@ -292,6 +302,29 @@ export function appMatchesSearch(app: StoreMapping, search: string) {
   ].some((value) => value?.toLowerCase().includes(query));
 }
 
+function normalizedValue(value: string | null | undefined) {
+  return value?.trim().toLowerCase() || null;
+}
+
+function normalizedValues(values: Array<string | null | undefined>) {
+  return values
+    .map(normalizedValue)
+    .filter((value): value is string => Boolean(value));
+}
+
+function valuesOverlap(
+  leftValues: Array<string | null | undefined>,
+  rightValues: Array<string | null | undefined>
+) {
+  const rightSet = new Set(normalizedValues(rightValues));
+  return normalizedValues(leftValues).some((value) => rightSet.has(value));
+}
+
+function sameValue(left: string | null | undefined, right: string | null | undefined) {
+  const normalizedLeft = normalizedValue(left);
+  return Boolean(normalizedLeft && normalizedLeft === normalizedValue(right));
+}
+
 export function deviceTokenMatchesApp(
   device: DeviceToken,
   app: StoreMapping,
@@ -300,15 +333,15 @@ export function deviceTokenMatchesApp(
   if (device.platform !== app.platform) return false;
   if (options.activeOnly && device.status !== "active") return false;
 
-  const appKeys = [app.app_id, app.app_name].filter(Boolean) as string[];
-  const deviceKeys = [device.app_id, device.product_app_id].filter(Boolean) as string[];
-  if (appKeys.length && deviceKeys.length) {
-    return deviceKeys.some((deviceKey) => appKeys.includes(deviceKey));
+  const appIds = normalizedValues([app.app_id]);
+  const deviceIds = normalizedValues([device.app_id, device.product_app_id]);
+  if (appIds.length && deviceIds.length) {
+    return valuesOverlap(appIds, deviceIds);
   }
 
-  if (app.package_name && device.package_name === app.package_name) return true;
-  if (app.bundle_id && device.bundle_id === app.bundle_id) return true;
-  return !deviceKeys.length && device.store_account_name === app.store_account_name;
+  if (sameValue(app.package_name, device.package_name)) return true;
+  if (sameValue(app.bundle_id, device.bundle_id)) return true;
+  return !deviceIds.length && sameValue(device.store_account_name, app.store_account_name);
 }
 
 export function tokensForApp(app: StoreMapping | null, devices: DeviceToken[], options: { activeOnly?: boolean } = {}) {
@@ -330,20 +363,40 @@ export function devicesForApp(app: StoreMapping | null, devices: DeviceToken[]) 
 
 export function jobMatchesApp(job: NotificationJob, app: StoreMapping) {
   if (job.platform !== app.platform) return false;
-  if (app.app_id && job.app_id === app.app_id) return true;
-  if (app.package_name && job.package_name === app.package_name) return true;
-  if (app.bundle_id && job.bundle_id === app.bundle_id) return true;
-  if (job.app_name === app.app_name) return true;
-  return job.store_account_name === app.store_account_name;
+  if (job.app_mapping_id) return sameValue(job.app_mapping_id, app.id);
+
+  const appIds = normalizedValues([app.app_id]);
+  const jobIds = normalizedValues([job.app_id]);
+  if (appIds.length && jobIds.length) {
+    return valuesOverlap(appIds, jobIds);
+  }
+
+  if (sameValue(app.package_name, job.package_name)) return true;
+  if (sameValue(app.bundle_id, job.bundle_id)) return true;
+  if (!jobIds.length && sameValue(job.app_name, app.app_name)) return true;
+  return !jobIds.length
+    && !job.package_name
+    && !job.bundle_id
+    && sameValue(job.store_account_name, app.store_account_name);
 }
 
 export function scheduleMatchesApp(schedule: NotificationSchedule, app: StoreMapping) {
   if (schedule.platform !== app.platform) return false;
-  if (app.app_id && schedule.app_id === app.app_id) return true;
-  if (app.package_name && schedule.package_name === app.package_name) return true;
-  if (app.bundle_id && schedule.bundle_id === app.bundle_id) return true;
-  if (schedule.app_name === app.app_name) return true;
-  return schedule.store_account_name === app.store_account_name;
+  if (schedule.app_mapping_id) return sameValue(schedule.app_mapping_id, app.id);
+
+  const appIds = normalizedValues([app.app_id]);
+  const scheduleIds = normalizedValues([schedule.app_id]);
+  if (appIds.length && scheduleIds.length) {
+    return valuesOverlap(appIds, scheduleIds);
+  }
+
+  if (sameValue(app.package_name, schedule.package_name)) return true;
+  if (sameValue(app.bundle_id, schedule.bundle_id)) return true;
+  if (!scheduleIds.length && sameValue(schedule.app_name, app.app_name)) return true;
+  return !scheduleIds.length
+    && !schedule.package_name
+    && !schedule.bundle_id
+    && sameValue(schedule.store_account_name, app.store_account_name);
 }
 
 export function AppIcon({ app }: { app: StoreMapping }) {
@@ -543,68 +596,63 @@ function DeliveryLineChart({
   buckets: DeliveryBucket[];
   metrics: typeof DELIVERY_METRICS;
 }) {
-  const width = 760;
-  const height = 260;
-  const left = 46;
-  const right = 18;
-  const top = 18;
-  const bottom = 34;
-  const innerWidth = width - left - right;
-  const innerHeight = height - top - bottom;
-  const maxValue = Math.max(1, ...buckets.flatMap((bucket) => metrics.map((metric) => bucket[metric.key])));
-  const xFor = (index: number) => left + (buckets.length <= 1 ? 0 : (index / (buckets.length - 1)) * innerWidth);
-  const yFor = (value: number) => top + innerHeight - (value / maxValue) * innerHeight;
-  const line = (key: DeliveryMetricKey) =>
-    buckets.map((bucket, index) => `${xFor(index)},${yFor(bucket[key])}`).join(" ");
-  const lastIndex = buckets.length - 1;
-  const axisIndexes = buckets
-    .map((_, index) => index)
-    .filter((index) => index === 0 || index === lastIndex || (index % 7 === 0 && index < lastIndex - 2));
-  const tickValues = [0, 0.25, 0.5, 0.75, 1].map((item) => Math.round(item * maxValue));
-  const showSentFill = metrics.some((metric) => metric.key === "sent");
+  const metricLabels = new Map<string, string>(
+    DELIVERY_METRICS.map((metric) => [metric.key, metric.label]),
+  );
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Notification delivery chart" className="h-full min-h-64 w-full">
-      <defs>
-        <linearGradient id="notificationSentFill" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="#2563eb" stopOpacity="0.18" />
-          <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {tickValues.map((tick, index) => (
-        <g key={`${index}-${tick}`}>
-          <line x1={left} x2={width - right} y1={yFor(tick)} y2={yFor(tick)} stroke="hsl(var(--border))" strokeDasharray="4 6" />
-          <text x={left - 10} y={yFor(tick) + 4} textAnchor="end" className="fill-muted-foreground text-[11px]">
-            {numberLabel(tick)}
-          </text>
-        </g>
-      ))}
-      {showSentFill ? (
-        <polygon
-          points={`${left},${height - bottom} ${line("sent")} ${width - right},${height - bottom}`}
-          fill="url(#notificationSentFill)"
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={buckets} margin={{ bottom: 4, left: 0, right: 12, top: 12 }}>
+        <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="4 6" vertical={false} />
+        <XAxis
+          axisLine={false}
+          dataKey="label"
+          minTickGap={22}
+          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+          tickLine={false}
         />
-      ) : null}
-      {metrics.map((metric) => (
-        <polyline
-          key={metric.key}
-          points={line(metric.key)}
-          fill="none"
-          stroke={metric.stroke}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={metric.key === "sent" ? "3" : "2"}
+        <YAxis
+          allowDecimals={false}
+          tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+          tickFormatter={(value) => numberLabel(Number(value))}
+          tickLine={false}
+          width={44}
         />
-      ))}
-      {axisIndexes.map((index) => {
-        const bucket = buckets[index];
-        return (
-          <text key={bucket.key} x={xFor(index)} y={height - 10} textAnchor={index === 0 ? "start" : index === buckets.length - 1 ? "end" : "middle"} className="fill-muted-foreground text-[11px]">
-            {bucket.label}
-          </text>
-        );
-      })}
-    </svg>
+        <Tooltip
+          contentStyle={{
+            background: "hsl(var(--background))",
+            border: "1px solid hsl(var(--border))",
+            borderRadius: "8px",
+            boxShadow: "0 12px 30px rgb(15 23 42 / 0.12)",
+            fontSize: "12px",
+          }}
+          formatter={(value, name) => [
+            numberLabel(Number(value)),
+            metricLabels.get(String(name)) ?? String(name),
+          ]}
+          labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
+        />
+        <Legend
+          formatter={(value) => metricLabels.get(String(value)) ?? String(value)}
+          iconType="circle"
+          wrapperStyle={{ fontSize: "12px", paddingTop: "6px" }}
+        />
+        {metrics.map((metric) => (
+          <Area
+            activeDot={{ r: 4 }}
+            dataKey={metric.key}
+            dot={false}
+            fill={metric.stroke}
+            fillOpacity={metric.key === "sent" ? 0.16 : 0.06}
+            key={metric.key}
+            name={metric.key}
+            stroke={metric.stroke}
+            strokeWidth={metric.key === "sent" ? 3 : 2}
+            type="monotone"
+          />
+        ))}
+      </AreaChart>
+    </ResponsiveContainer>
   );
 }
 
@@ -834,7 +882,22 @@ export function AppSelectionTable({
   updateAppSelection: (appId: string, checked?: boolean) => void;
   onSearchChange: (value: string) => void;
 }) {
-  const filteredApps = apps.filter((app) => appMatchesSearch(app, search));
+  const totalDeviceCount = useMemo(
+    () => apps.reduce((total, app) => total + devicesForApp(app, devices).length, 0),
+    [apps, devices],
+  );
+  const filteredApps = useMemo(
+    () =>
+      apps
+        .filter((app) => appMatchesSearch(app, search))
+        .map((app) => ({
+          app,
+          credentials: matchingFirebaseCredentials(app, credentials),
+          devices: devicesForApp(app, devices),
+          schedules: schedules.filter((schedule) => scheduleMatchesApp(schedule, app)),
+        })),
+    [apps, credentials, devices, schedules, search],
+  );
 
   return (
     <Card size="sm" className={cn("min-h-0 overflow-hidden rounded-xl bg-card shadow-sm shadow-slate-200/50", fillHeight && "flex h-full flex-col")}>
@@ -842,7 +905,9 @@ export function AppSelectionTable({
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <CardTitle className="text-sm">Target app</CardTitle>
-            <CardDescription className="max-w-3xl text-xs">{appSelectionDescription(apps, devices)}</CardDescription>
+            <CardDescription className="max-w-3xl text-xs">
+              {apps.length} mapped app(s), {totalDeviceCount} active FCM token(s). Select one or more apps to send together.
+            </CardDescription>
           </div>
           <label className="relative block w-full lg:w-80">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
@@ -866,11 +931,8 @@ export function AppSelectionTable({
             </TableHeader>
             <TableBody>
               {filteredApps.length ? (
-                filteredApps.map((app) => {
+                filteredApps.map(({ app, credentials: appCredentials, devices: appDevices, schedules: appSchedules }) => {
                   const selected = selectedAppIdSet.has(app.id);
-                  const appCredentials = matchingFirebaseCredentials(app, credentials);
-                  const appDevices = devicesForApp(app, devices);
-                  const appSchedules = schedules.filter((schedule) => scheduleMatchesApp(schedule, app));
 
                   return (
                     <TableRow

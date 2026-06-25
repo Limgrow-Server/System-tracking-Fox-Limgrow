@@ -3,9 +3,9 @@ import { ReviewFetchSchedulePage } from "@/components/tracking/pages/reviews/rev
 import { getReviewFetchSchedulePageData } from "@/lib/server/page-loaders/reviews/review-fetch-schedule.loader";
 
 export default async function CommentsScheduleRoutePage() {
-  await requireConsoleSession(["Admin", "Marketing"]);
+  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
-  const data = await getReviewFetchSchedulePageData();
+  const data = await getReviewFetchSchedulePageData(session);
 
   return <ReviewFetchSchedulePage data={data} />;
 }

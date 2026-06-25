@@ -10,7 +10,7 @@ export default async function IapAppDetailRoutePage({
   params: Promise<{ mappingId: string }>;
   searchParams: Promise<{ platform?: string }>;
 }) {
-  await requireConsoleSession(["Admin", "Marketing"]);
+  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
   const { mappingId } = await params;
   const { platform } = await searchParams;
@@ -19,7 +19,8 @@ export default async function IapAppDetailRoutePage({
     notFound();
   }
 
-  const data = await getIapAppDetailPageData(mappingId, platform);
+  const data = await getIapAppDetailPageData(mappingId, platform, session);
+  if (!data) notFound();
 
   return <IapAppDetailPage data={data} />;
 }
