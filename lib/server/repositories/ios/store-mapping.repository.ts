@@ -14,12 +14,20 @@ type SaveIosStoreMappingInput = {
   id?: string | null;
   status: MappingStatus;
   storeAccountName: string;
+  storeProfileId?: string | null;
 };
 
 export function getIosStoreMappings(options?: { take?: number }) {
   const take = options?.take ?? 200;
 
   return prisma.iosStoreMapping.findMany({
+    include: {
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+    },
     orderBy: { updatedAt: "desc" },
     take,
   });
@@ -38,9 +46,14 @@ export async function saveIosStoreMapping(
   tx: Prisma.TransactionClient,
   input: SaveIosStoreMappingInput
 ) {
-  const profile = await upsertIosStoreProfile(tx, {
-    storeAccountName: input.storeAccountName,
-  });
+  const profile = input.storeProfileId
+    ? {
+        id: input.storeProfileId,
+        storeAccountName: input.storeAccountName,
+      }
+    : await upsertIosStoreProfile(tx, {
+        storeAccountName: input.storeAccountName,
+      });
 
   const data = {
     appId: input.appId,

@@ -9,6 +9,7 @@ import {
   getAndroidStoreMappings,
   saveAndroidStoreMapping,
 } from "@/lib/server/repositories/android/store-mapping.repository";
+import { getAndroidStoreProfileById } from "@/lib/server/repositories/android/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
 import { androidStoreMappingToTracking } from "@/lib/tracking/mappers/android";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
@@ -37,11 +38,12 @@ function normalizeAndroidMappingPayload(payload: StoreMappingPayload) {
     packageName: nullableText(payload.packageName),
     status: mappingStatusMap[cleanText(payload.status).toLowerCase()] ?? MappingStatus.ACTIVE,
     storeAccountName: cleanText(payload.storeAccountName),
+    storeProfileId: cleanText(payload.storeProfileId),
   };
 }
 
 function validateAndroidMapping(payload: ReturnType<typeof normalizeAndroidMappingPayload>) {
-  if (!payload.storeAccountName || !payload.appName) {
+  if ((!payload.storeProfileId && !payload.storeAccountName) || !payload.appName) {
     throw badRequest("Store ref and app name are required.");
   }
 
@@ -80,8 +82,25 @@ export async function saveAndroidStoreMappingDto(input: {
   packageName: string;
   status: MappingStatus;
   storeAccountName: string;
+  storeProfileId?: string | null;
 }) {
-  const mapping = await runRepositoryTransaction((tx) => saveAndroidStoreMapping(tx, input));
+  let storeAccountName = input.storeAccountName;
+
+  if (input.storeProfileId) {
+    const profile = await getAndroidStoreProfileById(input.storeProfileId);
+    if (!profile) {
+      throw notFound("Android store profile was not found.");
+    }
+
+    storeAccountName = profile.storeAccountName;
+  }
+
+  const mapping = await runRepositoryTransaction((tx) =>
+    saveAndroidStoreMapping(tx, {
+      ...input,
+      storeAccountName,
+    })
+  );
   return androidStoreMappingToTracking(mapping);
 }
 
@@ -106,6 +125,7 @@ export async function createAndroidStoreMapping(payload: StoreMappingPayload) {
       packageName: row.packageName!,
       status: row.status,
       storeAccountName: row.storeAccountName,
+      storeProfileId: row.storeProfileId,
     });
 
     return { mapping, message: `Android app mapping for ${row.appName} has been saved.` };
@@ -138,6 +158,7 @@ export async function updateAndroidStoreMapping(payload: StoreMappingPayload) {
       packageName: row.packageName!,
       status: row.status,
       storeAccountName: row.storeAccountName,
+      storeProfileId: row.storeProfileId,
     });
 
     return { mapping, message: `Android app mapping for ${row.appName} has been updated.` };

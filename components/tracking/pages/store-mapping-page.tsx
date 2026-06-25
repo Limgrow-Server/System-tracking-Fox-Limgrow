@@ -2,7 +2,7 @@
 
 import { FormEvent, type ReactNode, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Cable, Eye, Link2, Pencil, Plus, Power, PowerOff, Trash2 } from "lucide-react";
+import { Cable, Eye, Link2, Pencil, Plus, Power, PowerOff, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader, StatusBadge, TableEmptyState, TablePaginationFooter } from "@/components/tracking/primitives";
@@ -24,6 +24,7 @@ type StoreMappingForm = {
   appLink: string;
   appId: string;
   storeAccountName: string;
+  storeProfileId: string;
   appName: string;
   platform: "android" | "ios";
   packageName: string;
@@ -33,6 +34,12 @@ type StoreMappingForm = {
 
 type StoreMappingPlatformFilter = "android" | "ios";
 type DrawerMode = "create" | "edit" | "view";
+type StoreOption = {
+  id: string;
+  name: string;
+};
+
+const APP_MAPPING_PAGE_SIZE = 10;
 
 function appInitial(value: string | null | undefined) {
   return (value?.trim().charAt(0) || "A").toUpperCase();
@@ -83,6 +90,7 @@ function createEmptyForm(platform: StoreMappingPlatformFilter): StoreMappingForm
     appLink: "",
     appId: "",
     storeAccountName: "",
+    storeProfileId: "",
     appName: "",
     platform,
     packageName: "",
@@ -101,6 +109,7 @@ function formFromMapping(mapping: StoreMapping): StoreMappingForm {
     appLink: value(mapping.app_link),
     appId: value(mapping.app_id),
     storeAccountName: mapping.store_account_name,
+    storeProfileId: mapping.store_profile_id,
     appName: mapping.app_name,
     platform: mapping.platform,
     packageName: value(mapping.package_name),
@@ -135,17 +144,26 @@ export function StoreMappingPage({
   const [pendingRow, setPendingRow] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<StoreMapping | null>(null);
   const [deleteConfirmationName, setDeleteConfirmationName] = useState("");
-  const storeNameOptions = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          data.credentialSecrets
-            .filter((credential) => credential.platform === form.platform && credential.store_account_name)
-            .map((credential) => credential.store_account_name!)
-        )
-      ).sort((left, right) => left.localeCompare(right)),
-    [data.credentialSecrets, form.platform]
-  );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [storeFilter, setStoreFilter] = useState("all");
+  const [tablePage, setTablePage] = useState(1);
+  const storeOptions = useMemo(() => {
+    const options = new Map<string, StoreOption>();
+
+    for (const credential of data.credentialSecrets) {
+      if (credential.platform !== form.platform || !credential.store_profile_id) continue;
+
+      const name = credential.store_account_name?.trim();
+      if (!name || options.has(credential.store_profile_id)) continue;
+
+      options.set(credential.store_profile_id, {
+        id: credential.store_profile_id,
+        name,
+      });
+    }
+
+    return Array.from(options.values()).sort((left, right) => left.name.localeCompare(right.name));
+  }, [data.credentialSecrets, form.platform]);
 
   function openCreate() {
     setDrawerMode("create");
@@ -172,13 +190,30 @@ export function StoreMappingPage({
     setForm((current) => ({ ...current, [key]: nextValue }));
   }
 
-  function selectStoreAccount(nextValue: string) {
+  function selectStoreProfile(nextValue: string) {
     if (nextValue === "none") {
-      setForm((current) => ({ ...current, storeAccountName: "" }));
+      setForm((current) => ({ ...current, storeAccountName: "", storeProfileId: "" }));
       return;
     }
 
-    setForm((current) => ({ ...current, storeAccountName: nextValue }));
+    const option = storeOptions.find((store) => store.id === nextValue);
+    if (!option) return;
+
+    setForm((current) => ({
+      ...current,
+      storeAccountName: option.name,
+      storeProfileId: option.id,
+    }));
+  }
+
+  function updateSearchQuery(nextValue: string) {
+    setSearchQuery(nextValue);
+    setTablePage(1);
+  }
+
+  function updateStoreFilter(nextValue: string) {
+    setStoreFilter(nextValue);
+    setTablePage(1);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -288,8 +323,52 @@ export function StoreMappingPage({
   const isAndroidForm = form.platform === "android";
   const pageLabel = platformFilter === "android" ? "Android App Mapping" : platformFilter === "ios" ? "iOS App Mapping" : "App Mapping";
   const tableTitle = platformFilter === "android" ? "Android App Mapping" : platformFilter === "ios" ? "iOS App Mapping" : "App Mapping";
-  const selectedStoreAccountValue = form.storeAccountName || "none";
-  const hasSelectedStoreName = form.storeAccountName ? storeNameOptions.includes(form.storeAccountName) : false;
+  const tableStoreOptions = useMemo(() => {
+    const options = new Map<string, StoreOption>();
+
+    for (const mapping of mappings) {
+      if (!mapping.store_profile_id || options.has(mapping.store_profile_id)) continue;
+
+      options.set(mapping.store_profile_id, {
+        id: mapping.store_profile_id,
+        name: mapping.store_account_name,
+      });
+    }
+
+    return Array.from(options.values()).sort((left, right) => left.name.localeCompare(right.name));
+  }, [mappings]);
+  const filteredMappings = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return mappings.filter((mapping) => {
+      const matchesStore = storeFilter === "all" || mapping.store_profile_id === storeFilter;
+      if (!matchesStore) return false;
+
+      if (!query) return true;
+
+      const runtimeId = mapping.platform === "ios" ? mapping.bundle_id : mapping.package_name;
+      const searchText = [
+        mapping.app_name,
+        mapping.app_id,
+        runtimeId,
+        mapping.store_account_name,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return searchText.includes(query);
+    });
+  }, [mappings, searchQuery, storeFilter]);
+  const totalTablePages = Math.max(1, Math.ceil(filteredMappings.length / APP_MAPPING_PAGE_SIZE));
+  const currentTablePage = Math.min(tablePage, totalTablePages);
+  const tableStartIndex = (currentTablePage - 1) * APP_MAPPING_PAGE_SIZE;
+  const visibleMappings = filteredMappings.slice(tableStartIndex, tableStartIndex + APP_MAPPING_PAGE_SIZE);
+  const hasTableFilters = Boolean(searchQuery.trim()) || storeFilter !== "all";
+  const selectedStoreProfileValue = form.storeProfileId || "none";
+  const hasSelectedStoreProfile = form.storeProfileId
+    ? storeOptions.some((store) => store.id === form.storeProfileId)
+    : false;
   const pageDescription =
     platformFilter === "android"
       ? "Manage Android app mappings by app profile, package name, and store ref."
@@ -385,21 +464,21 @@ export function StoreMappingPage({
                       </div>
                     )}
                     <div className="grid gap-2">
-                      <Label htmlFor="storeAccountName">Store ref</Label>
-                      <Select value={selectedStoreAccountValue} onValueChange={selectStoreAccount}>
-                        <SelectTrigger id="storeAccountName" className="w-full" disabled={drawerReadOnly}>
+                      <Label htmlFor="storeProfileId">Store ref</Label>
+                      <Select value={selectedStoreProfileValue} onValueChange={selectStoreProfile}>
+                        <SelectTrigger id="storeProfileId" className="w-full" disabled={drawerReadOnly}>
                           <SelectValue placeholder="Select store ref" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">
-                            {storeNameOptions.length ? "No store ref selected" : "No store ref in credentials"}
+                            {storeOptions.length ? "No store ref selected" : "No store ref in credentials"}
                           </SelectItem>
-                          {form.storeAccountName && !hasSelectedStoreName && form.storeAccountName !== "none" ? (
-                            <SelectItem value={form.storeAccountName}>Current: {form.storeAccountName}</SelectItem>
+                          {form.storeProfileId && form.storeAccountName && !hasSelectedStoreProfile ? (
+                            <SelectItem value={form.storeProfileId}>Current: {form.storeAccountName}</SelectItem>
                           ) : null}
-                          {storeNameOptions.map((storeName) => (
-                            <SelectItem key={storeName} value={storeName}>
-                              {storeName}
+                          {storeOptions.map((store) => (
+                            <SelectItem key={store.id} value={store.id}>
+                              {store.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -472,8 +551,34 @@ export function StoreMappingPage({
       </Dialog>
 
       <Card className="rounded-lg">
-        <CardHeader className="border-b">
-          <CardTitle>{tableTitle}</CardTitle>
+        <CardHeader className="gap-4 border-b">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <CardTitle>{tableTitle}</CardTitle>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <div className="relative sm:w-[320px]">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchQuery}
+                  onChange={(event) => updateSearchQuery(event.target.value)}
+                  placeholder={platformFilter === "ios" ? "Search apps, stores, BundleId..." : "Search apps, stores, packages..."}
+                  className="pl-9"
+                />
+              </div>
+              <Select value={storeFilter} onValueChange={updateStoreFilter}>
+                <SelectTrigger className="sm:w-[220px]">
+                  <SelectValue placeholder="All stores" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All stores</SelectItem>
+                  {tableStoreOptions.map((store) => (
+                    <SelectItem key={store.id} value={store.id}>
+                      {store.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="px-0">
           <Table>
@@ -489,7 +594,7 @@ export function StoreMappingPage({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {mappings.slice(0, 30).map((mapping) => {
+              {visibleMappings.map((mapping) => {
                 const runtimeId = mapping.platform === "ios" ? mapping.bundle_id : mapping.package_name;
 
                 return (
@@ -550,17 +655,29 @@ export function StoreMappingPage({
                   </TableRow>
                 );
               })}
-              {!mappings.length ? (
+              {!filteredMappings.length ? (
                 <TableEmptyState
                   colSpan={7}
                   icon={Cable}
-                  title="No App Mapping"
-                  description="Create the first app mapping and select a store ref with credentials in the vault."
+                  title={hasTableFilters ? "No matching app mappings" : "No App Mapping"}
+                  description={
+                    hasTableFilters
+                      ? "Adjust the search or store filter to see more app mappings."
+                      : "Create the first app mapping and select a store ref with credentials in the vault."
+                  }
                 />
               ) : null}
             </TableBody>
           </Table>
-          <TablePaginationFooter shown={Math.min(mappings.length, 30)} total={mappings.length} />
+          <TablePaginationFooter
+            from={tableStartIndex + 1}
+            onPageChange={setTablePage}
+            page={currentTablePage}
+            shown={visibleMappings.length}
+            to={tableStartIndex + visibleMappings.length}
+            total={filteredMappings.length}
+            totalPages={totalTablePages}
+          />
         </CardContent>
       </Card>
     </div>

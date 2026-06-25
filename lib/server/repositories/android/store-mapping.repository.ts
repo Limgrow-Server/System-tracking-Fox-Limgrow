@@ -14,12 +14,20 @@ type SaveAndroidStoreMappingInput = {
   packageName: string;
   status: MappingStatus;
   storeAccountName: string;
+  storeProfileId?: string | null;
 };
 
 export function getAndroidStoreMappings(options?: { take?: number }) {
   const take = options?.take ?? 200;
 
   return prisma.androidStoreMapping.findMany({
+    include: {
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+    },
     orderBy: { updatedAt: "desc" },
     take,
   });
@@ -38,9 +46,14 @@ export async function saveAndroidStoreMapping(
   tx: Prisma.TransactionClient,
   input: SaveAndroidStoreMappingInput
 ) {
-  const profile = await upsertAndroidStoreProfile(tx, {
-    storeAccountName: input.storeAccountName,
-  });
+  const profile = input.storeProfileId
+    ? {
+        id: input.storeProfileId,
+        storeAccountName: input.storeAccountName,
+      }
+    : await upsertAndroidStoreProfile(tx, {
+        storeAccountName: input.storeAccountName,
+      });
 
   const data = {
     appId: input.appId,
