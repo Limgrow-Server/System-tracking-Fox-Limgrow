@@ -42,24 +42,16 @@ export function AccountTableFooter({
               }}
             />
           </PaginationItem>
-          {Array.from({ length: Math.min(totalPages, 4) }).map((_, index) => {
-            const pageNumber = index + 1;
-
-            return (
-              <PaginationItem key={pageNumber}>
-                <PaginationLink
-                  href="#"
-                  isActive={currentPage === pageNumber}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    onPageChange(pageNumber);
-                  }}
-                >
-                  {pageNumber}
-                </PaginationLink>
-              </PaginationItem>
-            );
-          })}
+          <PaginationItem>
+            <PaginationLink
+              href="#"
+              isActive
+              className="min-w-24 px-3"
+              onClick={(event) => event.preventDefault()}
+            >
+              {currentPage} / {Math.max(totalPages, 1)}
+            </PaginationLink>
+          </PaginationItem>
           <PaginationItem>
             <PaginationNext
               href="#"

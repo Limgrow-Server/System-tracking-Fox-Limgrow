@@ -2,17 +2,18 @@ import "server-only";
 
 import { requireAdminSession } from "@/lib/server/api/auth";
 import { badRequest } from "@/lib/server/api/errors";
+import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import {
   deleteAndroidCredentialConfig,
-  getAndroidCredentialConfigs,
+  getAndroidCredentialConfigsPage,
   getAndroidCredentialSecret,
   saveAndroidCredentialConfig,
   updateAndroidCredentialConfig,
 } from "@/lib/server/services/credentials/android-credential.service";
 import {
   deleteIosCredentialConfig,
-  getIosCredentialConfigs,
+  getIosCredentialConfigsPage,
   getIosCredentialSecret,
   saveIosCredentialConfig,
   updateIosCredentialConfig,
@@ -28,6 +29,10 @@ import type {
 
 function platformFromSearch(value: string): CredentialPlatform | null {
   return value === "android" || value === "ios" ? value : null;
+}
+
+function searchText(value: string | null) {
+  return value?.trim() || undefined;
 }
 
 function platformFromCredentialPayload(payload: CredentialPayload): CredentialPlatform {
@@ -64,7 +69,17 @@ export async function handleAdminCredentialsGet(request: Request) {
       throw badRequest("Credential platform is required.");
     }
 
-    return okJson(platform === "android" ? await getAndroidCredentialConfigs() : await getIosCredentialConfigs());
+    const pagination = paginationFromSearchParams(url.searchParams);
+    const query = {
+      ...pagination,
+      search: searchText(url.searchParams.get("search")),
+    };
+
+    return paginatedJson(
+      platform === "android"
+        ? await getAndroidCredentialConfigsPage(query)
+        : await getIosCredentialConfigsPage(query)
+    );
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }

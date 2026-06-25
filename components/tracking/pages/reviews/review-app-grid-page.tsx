@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
@@ -30,34 +30,98 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { StatusBadge, PageHeader } from "@/components/tracking/primitives";
+import {
+  PageHeader,
+  StatusBadge,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import { cn } from "@/lib/utils";
-import type { ReviewAppGridPageData } from "@/lib/tracking/page-data";
+import type {
+  PaginationMeta,
+  ReviewAppCard,
+  ReviewAppGridPageData,
+} from "@/lib/tracking/page-data";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
+import { toast } from "sonner";
 
 function ratingLabel(value: number | null) {
   return value ? value.toFixed(1) : "N/A";
 }
 
+type ReviewAppListResponse = {
+  data?: ReviewAppCard[];
+  error?: string;
+  filters?: ReviewAppGridPageData["filters"];
+  page?: number;
+  pageSize?: number;
+  storeOptions?: ReviewAppGridPageData["storeOptions"];
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
+};
+
 export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   const router = useRouter();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedStore, setSelectedStore] = useState("All Stores");
+  const [apps, setApps] = useState(data.apps);
+  const [appPagination, setAppPagination] =
+    useState<PaginationMeta>(data.appPagination);
+  const [storeOptions, setStoreOptions] = useState(data.storeOptions);
+  const [searchQuery, setSearchQuery] = useState(data.filters.search);
+  const [selectedStore, setSelectedStore] = useState(
+    data.filters.storeProfileId,
+  );
   const [openStoreCombobox, setOpenStoreCombobox] = useState(false);
+  const [loadingApps, setLoadingApps] = useState(false);
 
-  const filteredApps = useMemo(() => {
-    return data.apps.filter((app) => {
-      const query = searchQuery.toLowerCase();
-      const matchesSearch =
-        app.appName.toLowerCase().includes(query) ||
-        app.identifier.toLowerCase().includes(query);
-      const matchesStore =
-        selectedStore === "All Stores" ||
-        app.storeAccountName === selectedStore;
+  const selectedStoreLabel =
+    selectedStore === "all"
+      ? "All Stores"
+      : storeOptions.find((store) => store.id === selectedStore)?.name ??
+        "All Stores";
 
-      return matchesSearch && matchesStore;
+  async function loadAppsPage(
+    page: number,
+    overrides?: {
+      searchQuery?: string;
+      selectedStore?: string;
+    },
+  ) {
+    const nextSearch = overrides?.searchQuery ?? searchQuery;
+    const nextStore = overrides?.selectedStore ?? selectedStore;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: "12",
     });
-  }, [data.apps, searchQuery, selectedStore]);
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextStore !== "all") params.set("storeProfileId", nextStore);
+
+    setLoadingApps(true);
+
+    try {
+      const response = await fetch(`/api/comments/apps?${params.toString()}`);
+      const payload = (await response.json()) as ReviewAppListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Applications could not be loaded.");
+      }
+
+      setApps(payload.data);
+      setAppPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 12,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.storeOptions) setStoreOptions(payload.storeOptions);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Applications could not be loaded.",
+      );
+    } finally {
+      setLoadingApps(false);
+    }
+  }
 
   return (
     <div className="flex h-full flex-col gap-6 p-6">
@@ -75,7 +139,11 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
             placeholder="Search apps or packages..."
             className="pl-8"
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setSearchQuery(nextValue);
+              void loadAppsPage(1, { searchQuery: nextValue });
+            }}
           />
         </div>
 
@@ -87,7 +155,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
               aria-expanded={openStoreCombobox}
               className="w-full justify-between sm:w-[250px]"
             >
-              {selectedStore}
+              {selectedStoreLabel}
               <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
             </Button>
           </PopoverTrigger>
@@ -98,38 +166,42 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
                 <CommandEmpty>No store found.</CommandEmpty>
                 <CommandGroup>
                   <CommandItem
-                    value="All Stores"
+                    value="all"
                     onSelect={() => {
-                      setSelectedStore("All Stores");
+                      setSelectedStore("all");
                       setOpenStoreCombobox(false);
+                      void loadAppsPage(1, { selectedStore: "all" });
                     }}
                   >
                     <Check
                       className={cn(
                         "mr-2 size-4",
-                        selectedStore === "All Stores"
+                        selectedStore === "all"
                           ? "opacity-100"
                           : "opacity-0",
                       )}
                     />
                     All Stores
                   </CommandItem>
-                  {data.storeNames.map((store) => (
+                  {storeOptions.map((store) => (
                     <CommandItem
-                      key={store}
-                      value={store}
-                      onSelect={(currentValue) => {
-                        setSelectedStore(currentValue);
+                      key={store.id}
+                      value={store.name}
+                      onSelect={() => {
+                        setSelectedStore(store.id);
                         setOpenStoreCombobox(false);
+                        void loadAppsPage(1, { selectedStore: store.id });
                       }}
                     >
                       <Check
                         className={cn(
                           "mr-2 size-4",
-                          selectedStore === store ? "opacity-100" : "opacity-0",
+                          selectedStore === store.id
+                            ? "opacity-100"
+                            : "opacity-0",
                         )}
                       />
-                      {store}
+                      {store.name}
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -140,7 +212,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
       </div>
 
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {filteredApps.map((app) => (
+        {apps.map((app) => (
           <li key={app.mappingId}>
             <Card
               className="h-full cursor-pointer rounded-lg transition-colors hover:bg-muted/50"
@@ -236,12 +308,19 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
             </Card>
           </li>
         ))}
-        {filteredApps.length === 0 ? (
+        {!apps.length ? (
           <div className="col-span-full py-12 text-center text-muted-foreground">
-            No applications found.
+            {loadingApps ? "Loading applications..." : "No applications found."}
           </div>
         ) : null}
       </ul>
+      <TablePaginationFooter
+        onPageChange={(page) => void loadAppsPage(page)}
+        page={appPagination.page}
+        shown={apps.length}
+        total={appPagination.total}
+        totalPages={appPagination.totalPages}
+      />
     </div>
   );
 }

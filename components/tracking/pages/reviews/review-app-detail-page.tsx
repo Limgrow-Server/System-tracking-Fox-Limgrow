@@ -59,13 +59,19 @@ import {
   PageHeader,
   StatCard,
   StatusBadge,
+  TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
 import type {
   AndroidDeviceMetadataDto,
   AndroidStoreReviewDto,
+  PaginationMeta,
   ReviewAppDetailPageData,
+  ReviewAppStats,
+  ReviewFetchRunDto,
+  ReviewFetchScheduleDto,
   ReviewReplyTemplatePreviewDto,
+  ReviewSyncStateDto,
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -657,41 +663,113 @@ function CommentJsonDialog({ review }: { review: AndroidStoreReviewDto }) {
   );
 }
 
+type ReviewCommentsResponse = {
+  data?: AndroidStoreReviewDto[];
+  error?: string;
+  fetchRuns?: ReviewFetchRunDto[];
+  fetchSchedule?: ReviewFetchScheduleDto | null;
+  isMockData?: boolean;
+  page?: number;
+  pageSize?: number;
+  replyTemplates?: ReviewReplyTemplatePreviewDto[];
+  reviewFilters?: ReviewAppDetailPageData["reviewFilters"];
+  stats?: ReviewAppStats;
+  success?: boolean;
+  syncState?: ReviewSyncStateDto | null;
+  total?: number;
+  totalPages?: number;
+};
+
 export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData }) {
   const router = useRouter();
   const [fetchingReviews, setFetchingReviews] = useState(false);
   const [fetchFromDate, setFetchFromDate] = useState(defaultFetchFromDate);
   const [fetchToDate, setFetchToDate] = useState(defaultFetchToDate);
-  const [search, setSearch] = useState("");
-  const [ratingFilter, setRatingFilter] = useState("all");
-  const [replyFilter, setReplyFilter] = useState("all");
+  const [reviews, setReviews] = useState(data.reviews);
+  const [reviewPagination, setReviewPagination] =
+    useState<PaginationMeta>(data.reviewPagination);
+  const [stats, setStats] = useState(data.stats);
+  const [syncState, setSyncState] = useState(data.syncState);
+  const [fetchRuns, setFetchRuns] = useState(data.fetchRuns);
+  const [fetchSchedule, setFetchSchedule] = useState(data.fetchSchedule);
+  const [replyTemplates, setReplyTemplates] = useState(data.replyTemplates);
+  const [isMockData, setIsMockData] = useState(Boolean(data.isMockData));
+  const [search, setSearch] = useState(data.reviewFilters.search);
+  const [ratingFilter, setRatingFilter] = useState(data.reviewFilters.rating);
+  const [replyFilter, setReplyFilter] = useState(data.reviewFilters.reply);
+  const [loadingComments, setLoadingComments] = useState(false);
   const [replyingReviewId, setReplyingReviewId] = useState<string | null>(null);
   const replyTemplateByRating = useMemo(
-    () => new Map(data.replyTemplates.map((template) => [template.rating, template])),
-    [data.replyTemplates],
+    () => new Map(replyTemplates.map((template) => [template.rating, template])),
+    [replyTemplates],
   );
+  const pageData: ReviewAppDetailPageData = {
+    ...data,
+    fetchRuns,
+    fetchSchedule,
+    isMockData,
+    replyTemplates,
+    reviews,
+    stats,
+    syncState,
+  };
 
-  const filteredReviews = useMemo(() => {
-    const query = search.toLowerCase();
-
-    return data.reviews.filter((review) => {
-      const matchesSearch =
-        !query ||
-        (review.reviewText ?? "").toLowerCase().includes(query) ||
-        (review.originalText ?? "").toLowerCase().includes(query) ||
-        (review.authorName ?? "").toLowerCase().includes(query) ||
-        review.reviewId.toLowerCase().includes(query);
-      const matchesRating =
-        ratingFilter === "all" || String(review.rating ?? "") === ratingFilter;
-      const hasReply = Boolean(review.developerReplyText);
-      const matchesReply =
-        replyFilter === "all" ||
-        (replyFilter === "replied" && hasReply) ||
-        (replyFilter === "pending" && !hasReply);
-
-      return matchesSearch && matchesRating && matchesReply;
+  async function loadReviewPage(
+    page: number,
+    overrides?: {
+      ratingFilter?: string;
+      replyFilter?: string;
+      search?: string;
+    },
+  ) {
+    const nextSearch = overrides?.search ?? search;
+    const nextRating = overrides?.ratingFilter ?? ratingFilter;
+    const nextReply = overrides?.replyFilter ?? replyFilter;
+    const params = new URLSearchParams({
+      mappingId: data.app.mappingId,
+      page: String(page),
+      pageSize: "10",
     });
-  }, [data.reviews, ratingFilter, replyFilter, search]);
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextRating !== "all") params.set("rating", nextRating);
+    if (nextReply !== "all") params.set("reply", nextReply);
+    if (isMockData) params.set("mock", "1");
+
+    setLoadingComments(true);
+
+    try {
+      const response = await fetch(`/api/comments/reviews?${params.toString()}`);
+      const payload = (await response.json()) as ReviewCommentsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Comments could not be loaded.");
+      }
+
+      setReviews(payload.data);
+      setReviewPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.stats) setStats(payload.stats);
+      if (payload.syncState !== undefined) setSyncState(payload.syncState);
+      if (payload.fetchRuns) setFetchRuns(payload.fetchRuns);
+      if (payload.fetchSchedule !== undefined) {
+        setFetchSchedule(payload.fetchSchedule);
+      }
+      if (payload.replyTemplates) setReplyTemplates(payload.replyTemplates);
+      if (payload.isMockData !== undefined) setIsMockData(payload.isMockData);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Comments could not be loaded.",
+      );
+    } finally {
+      setLoadingComments(false);
+    }
+  }
+
   async function fetchReviews() {
     if (fetchingReviews) return;
 
@@ -730,6 +808,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       toast.success(
         `Fetched ${payload.result.reviewsFetched ?? 0} reviews, matched ${payload.result.reviewsMatched ?? 0}, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
       );
+      await loadReviewPage(1);
       router.refresh();
     } catch (error) {
       toast.error(
@@ -765,7 +844,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       }
 
       toast.success(payload.message ?? "Reply sent.");
-      router.refresh();
+      await loadReviewPage(reviewPagination.page);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Reply could not be sent.",
@@ -795,7 +874,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         description={data.app.identifier}
         action={
           <div className="flex flex-wrap items-center gap-2">
-            {data.isMockData ? (
+            {isMockData ? (
               <Badge
                 variant="outline"
                 className="border-amber-200 bg-amber-50 text-amber-700"
@@ -817,28 +896,28 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Total Comments"
-          value={compactNumber(data.stats.totalReviews)}
-          detail={`${compactNumber(data.stats.pendingReplyCount)} pending replies`}
+          value={compactNumber(stats.totalReviews)}
+          detail={`${compactNumber(stats.pendingReplyCount)} pending replies`}
           icon={MessageSquareText}
           trend="flat"
         />
         <StatCard
           label="Average Rating"
-          value={formatRating(data.stats.averageRating)}
+          value={formatRating(stats.averageRating)}
           detail="Google Play review score"
           icon={Star}
           trend="flat"
         />
         <StatCard
           label="Reply Coverage"
-          value={`${data.stats.replyCoverage}%`}
-          detail={`${compactNumber(data.stats.repliedCount)} replied comments`}
+          value={`${stats.replyCoverage}%`}
+          detail={`${compactNumber(stats.repliedCount)} replied comments`}
           icon={MessageSquareReply}
-          trend={data.stats.replyCoverage >= 80 ? "up" : "flat"}
+          trend={stats.replyCoverage >= 80 ? "up" : "flat"}
         />
         <StatCard
           label="Latest Comment"
-          value={dateTime(data.stats.latestReviewAt)}
+          value={dateTime(stats.latestReviewAt)}
           detail="Newest user comment"
           icon={CalendarIcon}
           trend="flat"
@@ -846,9 +925,9 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <RatingDistribution data={data} />
+        <RatingDistribution data={pageData} />
         <SyncPanel
-          data={data}
+          data={pageData}
           fetching={fetchingReviews}
           fromDate={fetchFromDate}
           onFetch={fetchReviews}
@@ -867,11 +946,21 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
               className="pl-8"
               placeholder="Search comments, reviewer or review id..."
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setSearch(nextValue);
+                void loadReviewPage(1, { search: nextValue });
+              }}
             />
           </div>
           <div className="flex gap-2">
-            <Select value={ratingFilter} onValueChange={setRatingFilter}>
+            <Select
+              value={ratingFilter}
+              onValueChange={(value) => {
+                setRatingFilter(value);
+                void loadReviewPage(1, { ratingFilter: value });
+              }}
+            >
               <SelectTrigger className="w-[120px] bg-background">
                 <SelectValue placeholder="Rating" />
               </SelectTrigger>
@@ -884,7 +973,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                 ))}
               </SelectContent>
             </Select>
-            <Select value={replyFilter} onValueChange={setReplyFilter}>
+            <Select
+              value={replyFilter}
+              onValueChange={(value) => {
+                setReplyFilter(value);
+                void loadReviewPage(1, { replyFilter: value });
+              }}
+            >
               <SelectTrigger className="w-[130px] bg-background">
                 <SelectValue placeholder="Reply" />
               </SelectTrigger>
@@ -913,7 +1008,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredReviews.map((review) => (
+                {reviews.map((review) => (
                   <TableRow key={review.id}>
                     <TableCell className="align-top">
                       <CommentAuthorCell review={review} />
@@ -957,13 +1052,17 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                     </TableCell>
                   </TableRow>
                 ))}
-                {!filteredReviews.length ? (
+                {!reviews.length ? (
                   <TableRow>
                     <TableCell colSpan={8} className="py-10">
                       <EmptyPanel
                         icon={MessageSquareText}
-                        title="No comments found"
-                        description="Fetch Google Play comments or adjust the current filters."
+                        title={loadingComments ? "Loading comments" : "No comments found"}
+                        description={
+                          loadingComments
+                            ? "The current page is being loaded."
+                            : "Fetch Google Play comments or adjust the current filters."
+                        }
                         className="border-0 shadow-none"
                       />
                     </TableCell>
@@ -972,6 +1071,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
               </TableBody>
             </Table>
           </div>
+          <TablePaginationFooter
+            onPageChange={(page) => void loadReviewPage(page)}
+            page={reviewPagination.page}
+            shown={reviews.length}
+            total={reviewPagination.total}
+            totalPages={reviewPagination.totalPages}
+          />
         </div>
       </div>
     </div>

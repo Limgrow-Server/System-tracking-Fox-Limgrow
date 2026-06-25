@@ -11,6 +11,66 @@ export function getTeamMembers(options?: { take?: number }) {
   });
 }
 
+type TeamMemberPageOptions = {
+  appScopeKey?: string;
+  role?: Prisma.TeamMemberWhereInput["role"];
+  search?: string;
+  skip: number;
+  storeScopeKey?: string;
+  take: number;
+};
+
+function teamMemberPageWhere(
+  options: TeamMemberPageOptions,
+): Prisma.TeamMemberWhereInput {
+  const where: Prisma.TeamMemberWhereInput = {};
+  const search = options.search?.trim();
+
+  if (options.role) {
+    where.role = options.role;
+  }
+
+  if (search) {
+    const contains = { contains: search, mode: "insensitive" as const };
+    where.OR = [
+      { name: contains },
+      { email: contains },
+    ];
+  }
+
+  if (options.appScopeKey || options.storeScopeKey) {
+    const scopeFilter: Prisma.TeamMemberWhereInput = {
+      OR: [
+        { globalAccess: true },
+        ...(options.appScopeKey
+          ? [{ appScope: { has: options.appScopeKey } }]
+          : []),
+        ...(options.storeScopeKey
+          ? [{ storeScope: { has: options.storeScopeKey } }]
+          : []),
+      ],
+    };
+
+    where.AND = [...(Array.isArray(where.AND) ? where.AND : []), scopeFilter];
+  }
+
+  return where;
+}
+
+export function getTeamMembersPage(options: TeamMemberPageOptions) {
+  const where = teamMemberPageWhere(options);
+
+  return prisma.$transaction([
+    prisma.teamMember.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: options.skip,
+      take: options.take,
+    }),
+    prisma.teamMember.count({ where }),
+  ]);
+}
+
 export function getTeamMemberByAuthUserId(authUserId: string) {
   return prisma.teamMember.findUnique({
     where: { authUserId },

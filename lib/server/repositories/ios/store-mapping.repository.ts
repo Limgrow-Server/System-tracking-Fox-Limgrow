@@ -14,15 +14,74 @@ type SaveIosStoreMappingInput = {
   id?: string | null;
   status: MappingStatus;
   storeAccountName: string;
+  storeProfileId?: string | null;
 };
 
 export function getIosStoreMappings(options?: { take?: number }) {
   const take = options?.take ?? 200;
 
   return prisma.iosStoreMapping.findMany({
+    include: {
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+    },
     orderBy: { updatedAt: "desc" },
     take,
   });
+}
+
+type IosStoreMappingPageOptions = {
+  search?: string;
+  skip: number;
+  storeProfileId?: string;
+  take: number;
+};
+
+function iosStoreMappingWhere(options: IosStoreMappingPageOptions): Prisma.IosStoreMappingWhereInput {
+  const where: Prisma.IosStoreMappingWhereInput = {};
+  const search = options.search?.trim();
+
+  if (options.storeProfileId) {
+    where.storeProfileId = options.storeProfileId;
+  }
+
+  if (search) {
+    const contains = { contains: search, mode: "insensitive" as const };
+
+    where.OR = [
+      { appName: contains },
+      { appId: contains },
+      { bundleId: contains },
+      { storeAccountName: contains },
+      { storeProfile: { storeAccountName: contains } },
+    ];
+  }
+
+  return where;
+}
+
+export function getIosStoreMappingsPage(options: IosStoreMappingPageOptions) {
+  const where = iosStoreMappingWhere(options);
+
+  return prisma.$transaction([
+    prisma.iosStoreMapping.findMany({
+      where,
+      include: {
+        storeProfile: {
+          select: {
+            storeAccountName: true,
+          },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      skip: options.skip,
+      take: options.take,
+    }),
+    prisma.iosStoreMapping.count({ where }),
+  ]);
 }
 
 export async function getIosStoreMappingId(id: string) {
@@ -38,9 +97,14 @@ export async function saveIosStoreMapping(
   tx: Prisma.TransactionClient,
   input: SaveIosStoreMappingInput
 ) {
-  const profile = await upsertIosStoreProfile(tx, {
-    storeAccountName: input.storeAccountName,
-  });
+  const profile = input.storeProfileId
+    ? {
+        id: input.storeProfileId,
+        storeAccountName: input.storeAccountName,
+      }
+    : await upsertIosStoreProfile(tx, {
+        storeAccountName: input.storeAccountName,
+      });
 
   const data = {
     appId: input.appId,

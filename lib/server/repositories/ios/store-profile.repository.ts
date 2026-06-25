@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
 type IosStoreProfileInput = {
   avatarUrl?: string | null;
@@ -33,6 +34,16 @@ export function upsertIosStoreProfile(
       storeAccountName: input.storeAccountName,
       ...metadata,
       issuerId: input.issuerId,
+    },
+  });
+}
+
+export function getIosStoreProfileById(id: string) {
+  return prisma.iosStoreProfile.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      storeAccountName: true,
     },
   });
 }

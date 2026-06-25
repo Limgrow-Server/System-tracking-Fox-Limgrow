@@ -1,6 +1,7 @@
 export type StoreMappingPayload = {
   id?: string;
   storeAccountName?: string;
+  storeProfileId?: string | null;
   appId?: string | null;
   appName?: string;
   appIconUrl?: string | null;

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ArrowLeft, BarChart3, ChevronRight, Eye, History, MessageSquareText, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   Bar,
   BarChart,
@@ -15,7 +16,12 @@ import {
   YAxis,
 } from "recharts";
 
-import { PageHeader, StatusBadge, TableEmptyState } from "@/components/tracking/primitives";
+import {
+  PageHeader,
+  StatusBadge,
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +29,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
-import type { NotificationsPageData } from "@/lib/tracking/page-data";
+import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
 import type { DeviceToken, NotificationEvent, NotificationJob } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
@@ -32,7 +38,6 @@ import {
   PlatformIcon,
   RecordFilterControls,
   jobFailedCount,
-  jobMatchesApp,
   jobRequestedCount,
   jobSuccessRate,
   localePayloadForRows,
@@ -48,7 +53,6 @@ import {
   platformLabel,
   primaryLocaleRow,
   rateLabel,
-  valuesMatchSearch,
 } from "./shared";
 
 type SentContent = {
@@ -68,6 +72,30 @@ type DeliveryRow = {
   status: "failed" | "opened" | "sent";
   token: DeviceToken | null;
   topicCode: string | null;
+};
+
+type HistoryJobsResponse = {
+  data?: NotificationJob[];
+  error?: string;
+  notificationEvents?: NotificationEvent[];
+  page?: number;
+  pageSize?: number;
+  storeOptions?: string[];
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
+};
+
+type HistoryEventsResponse = {
+  data?: NotificationEvent[];
+  error?: string;
+  notificationEvents?: NotificationEvent[];
+  notificationJobs?: NotificationJob[];
+  page?: number;
+  pageSize?: number;
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
 };
 
 function metadataRecord(metadata: unknown) {
@@ -390,55 +418,58 @@ export function NotificationHistoryPage({
   const router = useRouter();
   const platformApps = useMemo(() => data.storeMappings, [data.storeMappings]);
   const resolvedInitialAppId = platformApps.find((app) => app.id === initialAppId)?.id ?? "";
+  const [notificationJobs, setNotificationJobs] = useState(data.notificationJobs);
+  const [notificationEvents, setNotificationEvents] = useState(
+    data.notificationEvents,
+  );
+  const [deliveryEvents, setDeliveryEvents] = useState(
+    data.notificationDeliveryEvents.length
+      ? data.notificationDeliveryEvents
+      : data.notificationEvents,
+  );
+  const [historyPagination, setHistoryPagination] = useState<PaginationMeta>(
+    data.notificationPagination.historyJobs ?? {
+      page: 1,
+      pageSize: 10,
+      total: data.notificationJobs.length,
+      totalPages: 1,
+    },
+  );
+  const [deliveryPagination, setDeliveryPagination] = useState<PaginationMeta>(
+    data.notificationPagination.deliveryEvents ?? {
+      page: 1,
+      pageSize: 10,
+      total: data.notificationDeliveryEvents.length || data.notificationEvents.length,
+      totalPages: 1,
+    },
+  );
+  const [storeFilterOptions, setStoreFilterOptions] = useState(
+    data.notificationStoreOptions,
+  );
+  const [loadingHistoryJobs, setLoadingHistoryJobs] = useState(false);
+  const [loadingDeliveryEvents, setLoadingDeliveryEvents] = useState(false);
   const [recordSearch, setRecordSearch] = useState("");
   const [recordAppFilter, setRecordAppFilter] = useState(resolvedInitialAppId || ALL_FILTER_VALUE);
   const [recordStoreFilter, setRecordStoreFilter] = useState(ALL_FILTER_VALUE);
   const [selectedDeliveryEventId, setSelectedDeliveryEventId] = useState<string | null>(null);
 
-  const storeFilterOptions = useMemo(
-    () =>
-      Array.from(new Set(platformApps.flatMap((app) => (app.store_account_name ? [app.store_account_name] : []))))
-        .sort((first, second) => first.localeCompare(second)),
-    [platformApps]
-  );
-
-  const historyListJobs = useMemo(() => {
-    const filterApp = recordAppFilter === ALL_FILTER_VALUE
-      ? null
-      : platformApps.find((app) => app.id === recordAppFilter) ?? null;
-
-    return data.notificationJobs.filter((job) => {
-      if (filterApp && !jobMatchesApp(job, filterApp)) return false;
-      if (recordStoreFilter !== ALL_FILTER_VALUE && job.store_account_name !== recordStoreFilter) return false;
-      return valuesMatchSearch([
-        job.app_name,
-        job.app_id,
-        job.store_account_name,
-        job.package_name,
-        job.bundle_id,
-        job.platform,
-        job.status,
-        job.topic_base,
-        job.id,
-      ], recordSearch);
-    });
-  }, [data.notificationJobs, platformApps, recordAppFilter, recordSearch, recordStoreFilter]);
+  const historyListJobs = notificationJobs;
 
   const eventsByJobId = useMemo(() => {
     const byJobId = new Map<string, NotificationEvent[]>();
-    data.notificationEvents.forEach((event) => {
+    notificationEvents.forEach((event) => {
       if (!event.job_id) return;
       const current = byJobId.get(event.job_id) ?? [];
       current.push(event);
       byJobId.set(event.job_id, current);
     });
     return byJobId;
-  }, [data.notificationEvents]);
+  }, [notificationEvents]);
 
-  const historyDetailJob = historyJobId ? data.notificationJobs.find((job) => job.id === historyJobId) ?? null : null;
+  const historyDetailJob = historyJobId ? notificationJobs.find((job) => job.id === historyJobId) ?? null : null;
   const historyDetailEvents = useMemo(
-    () => historyDetailJob ? data.notificationEvents.filter((event) => event.job_id === historyDetailJob.id) : [],
-    [data.notificationEvents, historyDetailJob]
+    () => historyDetailJob ? notificationEvents.filter((event) => event.job_id === historyDetailJob.id) : [],
+    [notificationEvents, historyDetailJob]
   );
   const historyDetailRequested = historyDetailJob ? jobRequestedCount(historyDetailJob) : 0;
   const historyDetailFailed = historyDetailJob ? jobFailedCount(historyDetailJob) : 0;
@@ -470,10 +501,10 @@ export function NotificationHistoryPage({
     ? sentContentForTopic(historyContentRows, historyDetailJob, null)
     : null;
   const historyDeliveryEvents = useMemo(
-    () => historyDetailEvents
+    () => deliveryEvents
       .filter((event) => event.target_type === "device" || event.device_id || event.event_type.startsWith("fcm_"))
       .sort((first, second) => new Date(second.created_at).getTime() - new Date(first.created_at).getTime()),
-    [historyDetailEvents]
+    [deliveryEvents]
   );
   const historyDeliveryRows: DeliveryRow[] = historyDetailJob
     ? aggregateDeliveryRows(historyDeliveryEvents.map((event) => {
@@ -499,6 +530,97 @@ export function NotificationHistoryPage({
     ? historyDeliveryRows.find((row) => row.event.id === selectedDeliveryEventId) ?? null
     : null;
 
+  async function loadHistoryJobsPage(
+    page: number,
+    overrides?: {
+      appFilter?: string;
+      search?: string;
+      storeFilter?: string;
+    },
+  ) {
+    const nextSearch = overrides?.search ?? recordSearch;
+    const nextAppFilter = overrides?.appFilter ?? recordAppFilter;
+    const nextStoreFilter = overrides?.storeFilter ?? recordStoreFilter;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: "10",
+    });
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextAppFilter !== ALL_FILTER_VALUE) params.set("appId", nextAppFilter);
+    if (nextStoreFilter !== ALL_FILTER_VALUE) params.set("store", nextStoreFilter);
+
+    setLoadingHistoryJobs(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/history-jobs?${params.toString()}`,
+      );
+      const payload = (await response.json()) as HistoryJobsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Notification history could not be loaded.");
+      }
+
+      setNotificationJobs(payload.data);
+      setNotificationEvents(payload.notificationEvents ?? []);
+      setHistoryPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.storeOptions) setStoreFilterOptions(payload.storeOptions);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Notification history could not be loaded.",
+      );
+    } finally {
+      setLoadingHistoryJobs(false);
+    }
+  }
+
+  async function loadDeliveryEventsPage(page: number) {
+    if (!historyJobId) return;
+
+    const params = new URLSearchParams({
+      jobId: historyJobId,
+      page: String(page),
+      pageSize: "10",
+    });
+
+    setLoadingDeliveryEvents(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/notifications/history-events?${params.toString()}`,
+      );
+      const payload = (await response.json()) as HistoryEventsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Delivery events could not be loaded.");
+      }
+
+      setDeliveryEvents(payload.data);
+      if (payload.notificationEvents) setNotificationEvents(payload.notificationEvents);
+      if (payload.notificationJobs) setNotificationJobs(payload.notificationJobs);
+      setDeliveryPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Delivery events could not be loaded.",
+      );
+    } finally {
+      setLoadingDeliveryEvents(false);
+    }
+  }
+
   const pageTitle = historyJobId ? "Notification detail" : "Notification history";
   const pageDescription = historyJobId
     ? "Delivery dashboard for one send job."
@@ -522,7 +644,7 @@ export function NotificationHistoryPage({
                   Send history
                 </div>
                 <div className="text-sm text-muted-foreground">
-                  {historyListJobs.length} send job(s). Open a row to view the dashboard.
+                  {historyPagination.total} send job(s). Open a row to view the dashboard.
                 </div>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>
@@ -533,9 +655,18 @@ export function NotificationHistoryPage({
             <RecordFilterControls
               apps={platformApps}
               appFilter={recordAppFilter}
-              onAppFilterChange={setRecordAppFilter}
-              onSearchChange={setRecordSearch}
-              onStoreFilterChange={setRecordStoreFilter}
+              onAppFilterChange={(value) => {
+                setRecordAppFilter(value);
+                void loadHistoryJobsPage(1, { appFilter: value });
+              }}
+              onSearchChange={(value) => {
+                setRecordSearch(value);
+                void loadHistoryJobsPage(1, { search: value });
+              }}
+              onStoreFilterChange={(value) => {
+                setRecordStoreFilter(value);
+                void loadHistoryJobsPage(1, { storeFilter: value });
+              }}
               placeholder="Search job, app, package, bundle, store..."
               search={recordSearch}
               storeFilter={recordStoreFilter}
@@ -623,11 +754,27 @@ export function NotificationHistoryPage({
                     );
                   })
                 ) : (
-                  <TableEmptyState colSpan={9} icon={History} title="No send jobs" description="Send attempts will appear here after a notification is sent." />
+                  <TableEmptyState
+                    colSpan={9}
+                    icon={History}
+                    title={loadingHistoryJobs ? "Loading send jobs" : "No send jobs"}
+                    description={
+                      loadingHistoryJobs
+                        ? "The current page is being loaded."
+                        : "Send attempts will appear here after a notification is sent."
+                    }
+                  />
                 )}
               </TableBody>
             </Table>
           </div>
+          <TablePaginationFooter
+            onPageChange={(page) => void loadHistoryJobsPage(page)}
+            page={historyPagination.page}
+            shown={historyListJobs.length}
+            total={historyPagination.total}
+            totalPages={historyPagination.totalPages}
+          />
         </section>
       ) : null}
 
@@ -741,7 +888,7 @@ export function NotificationHistoryPage({
                           FCM tokens sent
                         </div>
                         <div className="mt-1 text-sm text-muted-foreground">
-                          {historyDeliveryRows.length} token(s) for this send job. Open Detail to view the latest provider log and metadata.
+                          {deliveryPagination.total} token(s) for this send job. Open Detail to view the latest provider log and metadata.
                         </div>
                       </div>
                       <div className="overflow-auto">
@@ -806,11 +953,27 @@ export function NotificationHistoryPage({
                                 </TableRow>
                               ))
                             ) : (
-                              <TableEmptyState colSpan={8} icon={History} title="No delivery events" description="FCM send and mobile delivery events for this job will appear here." />
+                              <TableEmptyState
+                                colSpan={8}
+                                icon={History}
+                                title={loadingDeliveryEvents ? "Loading delivery events" : "No delivery events"}
+                                description={
+                                  loadingDeliveryEvents
+                                    ? "The current page is being loaded."
+                                    : "FCM send and mobile delivery events for this job will appear here."
+                                }
+                              />
                             )}
                           </TableBody>
                         </Table>
                       </div>
+                      <TablePaginationFooter
+                        onPageChange={(page) => void loadDeliveryEventsPage(page)}
+                        page={deliveryPagination.page}
+                        shown={historyDeliveryRows.length}
+                        total={deliveryPagination.total}
+                        totalPages={deliveryPagination.totalPages}
+                      />
                     </section>
                   </TabsContent>
                 </Tabs>

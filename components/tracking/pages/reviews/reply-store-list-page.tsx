@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronRight,
@@ -17,12 +17,15 @@ import { Input } from "@/components/ui/input";
 import {
   EmptyPanel,
   PageHeader,
+  TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { compactNumber } from "@/lib/tracking/format";
 import type {
+  PaginationMeta,
   ReplyStoreListPageData,
   ReplyStoreSummary,
 } from "@/lib/tracking/page-data";
+import { toast } from "sonner";
 
 function StoreCard({ store }: { store: ReplyStoreSummary }) {
   const router = useRouter();
@@ -91,22 +94,56 @@ function StoreCard({ store }: { store: ReplyStoreSummary }) {
   );
 }
 
-export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
-  const [search, setSearch] = useState("");
-  const filteredStores = useMemo(() => {
-    const query = search.toLowerCase();
+type ReplyStoresResponse = {
+  data?: ReplyStoreSummary[];
+  error?: string;
+  page?: number;
+  pageSize?: number;
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
+};
 
-    return data.stores.filter(
-      (store) =>
-        !query ||
-        store.storeAccountName.toLowerCase().includes(query) ||
-        store.apps.some(
-          (app) =>
-            app.appName.toLowerCase().includes(query) ||
-            app.identifier.toLowerCase().includes(query),
-        ),
-    );
-  }, [data.stores, search]);
+export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
+  const [stores, setStores] = useState(data.stores);
+  const [storePagination, setStorePagination] =
+    useState<PaginationMeta>(data.storePagination);
+  const [search, setSearch] = useState(data.filters.search);
+  const [loadingStores, setLoadingStores] = useState(false);
+
+  async function loadStoresPage(page: number, nextSearch = search) {
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: "10",
+    });
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+
+    setLoadingStores(true);
+
+    try {
+      const response = await fetch(`/api/reply/stores?${params.toString()}`);
+      const payload = (await response.json()) as ReplyStoresResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Reply stores could not be loaded.");
+      }
+
+      setStores(payload.data);
+      setStorePagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Reply stores could not be loaded.",
+      );
+    } finally {
+      setLoadingStores(false);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
@@ -134,25 +171,40 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
             value={search}
             className="pl-8"
             placeholder="Search stores or apps..."
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setSearch(nextValue);
+              void loadStoresPage(1, nextValue);
+            }}
           />
         </div>
       </div>
 
-      {filteredStores.length ? (
+      {stores.length ? (
         <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-          {filteredStores.map((store) => (
+          {stores.map((store) => (
             <StoreCard key={store.storeProfileId} store={store} />
           ))}
         </div>
       ) : (
         <EmptyPanel
           icon={Search}
-          title="No stores found"
-          description="No Android store matches the current search."
+          title={loadingStores ? "Loading stores" : "No stores found"}
+          description={
+            loadingStores
+              ? "The current page is being loaded."
+              : "No Android store matches the current search."
+          }
           className="rounded-lg border"
         />
       )}
+      <TablePaginationFooter
+        onPageChange={(page) => void loadStoresPage(page)}
+        page={storePagination.page}
+        shown={stores.length}
+        total={storePagination.total}
+        totalPages={storePagination.totalPages}
+      />
     </div>
   );
 }

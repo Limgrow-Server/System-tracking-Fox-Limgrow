@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import { Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,10 +26,8 @@ import { accountPageSize, roleOptions } from "./constants";
 import type { ManagedAccount } from "./types";
 import {
   accountFromTeamMember,
-  accountHasApp,
   isInactiveUser,
   managedAppsForAccount,
-  searchAccount,
 } from "./utils";
 
 type AccountManagementPageProps = {
@@ -44,14 +42,25 @@ type UserMutationResponse = {
   user?: TeamMember;
 };
 
+type UserListResponse = {
+  data?: TeamMember[];
+  error?: string;
+  page?: number;
+  pageSize?: number;
+  success?: boolean;
+  total?: number;
+  totalPages?: number;
+};
+
 export function AccountManagementPage({ data }: AccountManagementPageProps) {
   const [accounts, setAccounts] = useState<ManagedAccount[]>(() =>
     data.users.map(accountFromTeamMember),
   );
+  const [usersPagination, setUsersPagination] = useState(data.usersPagination);
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | StaffRole>("all");
   const [appFilter, setAppFilter] = useState("all");
-  const [page, setPage] = useState(1);
+  const [loadingUsers, setLoadingUsers] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
@@ -74,36 +83,57 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
   const [togglingAccountId, setTogglingAccountId] = useState<string | null>(null);
 
   const appOptions = data.appOptions;
-  const selectedFilterApp = useMemo(
-    () => appOptions.find((app) => app.id === appFilter) ?? null,
-    [appFilter, appOptions],
-  );
-  const search = query.trim().toLowerCase();
-  const filteredAccounts = useMemo(
-    () =>
-      accounts.filter((account) => {
-        const matchesRole = roleFilter === "all" || account.role === roleFilter;
-        const matchesSearch =
-          !search || searchAccount(account, appOptions).includes(search);
-        const matchesApp =
-          !selectedFilterApp ||
-          account.role === "Admin" ||
-          accountHasApp(account, selectedFilterApp);
+  async function loadUsersPage(
+    page: number,
+    overrides?: {
+      appFilter?: string;
+      query?: string;
+      roleFilter?: "all" | StaffRole;
+    },
+  ) {
+    const nextQuery = overrides?.query ?? query;
+    const nextRoleFilter = overrides?.roleFilter ?? roleFilter;
+    const nextAppFilter = overrides?.appFilter ?? appFilter;
+    const nextSelectedApp =
+      nextAppFilter === "all"
+        ? null
+        : appOptions.find((app) => app.id === nextAppFilter) ?? null;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(accountPageSize),
+    });
+    const cleanedQuery = nextQuery.trim();
 
-        return matchesRole && matchesSearch && matchesApp;
-      }),
-    [accounts, appOptions, roleFilter, search, selectedFilterApp],
-  );
+    if (cleanedQuery) params.set("search", cleanedQuery);
+    if (nextRoleFilter !== "all") params.set("role", nextRoleFilter);
+    if (nextSelectedApp) {
+      params.set("appScopeKey", nextSelectedApp.id);
+      params.set("storeScopeKey", nextSelectedApp.store_profile_id);
+    }
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredAccounts.length / accountPageSize),
-  );
-  const currentPage = Math.min(page, totalPages);
-  const visibleRows = filteredAccounts.slice(
-    (currentPage - 1) * accountPageSize,
-    currentPage * accountPageSize,
-  );
+    setLoadingUsers(true);
+
+    try {
+      const response = await fetch(`/api/admin/users?${params.toString()}`);
+      const payload = (await response.json()) as UserListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Load users failed.");
+      }
+
+      setAccounts(payload.data.map(accountFromTeamMember));
+      setUsersPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? accountPageSize,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Load users failed.");
+    } finally {
+      setLoadingUsers(false);
+    }
+  }
 
   async function mutateUser(
     method: "DELETE" | "PATCH" | "POST",
@@ -166,9 +196,8 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
 
       if (!payload.user) throw new Error("Created user was missing.");
 
-      setAccounts((current) => [accountFromTeamMember(payload.user!), ...current]);
       resetCreateForm();
-      setPage(1);
+      await loadUsersPage(1);
       setDialogOpen(false);
       toast.success(payload.message ?? "Account created.");
     } catch (error) {
@@ -262,8 +291,10 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
     setDeleting(true);
     try {
       const payload = await mutateUser("DELETE", { id: deleteAccount.id });
-      setAccounts((current) =>
-        current.filter((account) => account.id !== payload.deleted),
+      await loadUsersPage(
+        accounts.length <= 1 && usersPagination.page > 1
+          ? usersPagination.page - 1
+          : usersPagination.page,
       );
       closeDeleteAccount();
       toast.success(payload.message ?? "Account deleted.");
@@ -349,7 +380,8 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex items-center gap-2">
               <CardTitle>Members</CardTitle>
-              <Badge variant="secondary">{filteredAccounts.length}</Badge>
+              <Badge variant="secondary">{usersPagination.total}</Badge>
+              {loadingUsers ? <Badge variant="outline">Loading</Badge> : null}
             </div>
 
             <div className="flex flex-col gap-2 md:flex-row md:items-center">
@@ -362,8 +394,9 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
                   className="h-9 pl-9"
                   value={query}
                   onChange={(event) => {
-                    setQuery(event.target.value);
-                    setPage(1);
+                    const nextValue = event.target.value;
+                    setQuery(nextValue);
+                    void loadUsersPage(1, { query: nextValue });
                   }}
                   placeholder="Search members..."
                 />
@@ -371,8 +404,9 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
               <Select
                 value={roleFilter}
                 onValueChange={(value) => {
-                  setRoleFilter(value as typeof roleFilter);
-                  setPage(1);
+                  const nextValue = value as typeof roleFilter;
+                  setRoleFilter(nextValue);
+                  void loadUsersPage(1, { roleFilter: nextValue });
                 }}
               >
                 <SelectTrigger className="h-9 w-full md:w-36">
@@ -391,7 +425,7 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
                 value={appFilter}
                 onValueChange={(value) => {
                   setAppFilter(value);
-                  setPage(1);
+                  void loadUsersPage(1, { appFilter: value });
                 }}
               >
                 <SelectTrigger className="h-9 w-full md:w-56">
@@ -411,7 +445,7 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
         </CardHeader>
         <CardContent className="px-0">
           <UserTable
-            accounts={visibleRows}
+            accounts={accounts}
             appOptions={appOptions}
             onDelete={openDeleteAccount}
             onEdit={openEditAccount}
@@ -420,11 +454,11 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
           />
 
           <AccountTableFooter
-            currentPage={currentPage}
-            onPageChange={setPage}
-            shown={visibleRows.length}
-            total={filteredAccounts.length}
-            totalPages={totalPages}
+            currentPage={usersPagination.page}
+            onPageChange={(page) => void loadUsersPage(page)}
+            shown={accounts.length}
+            total={usersPagination.total}
+            totalPages={usersPagination.totalPages}
           />
         </CardContent>
       </Card>
