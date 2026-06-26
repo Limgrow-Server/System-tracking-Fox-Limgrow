@@ -147,6 +147,73 @@ function transactionRawReceipt(transaction: IapAppTransaction) {
     : transaction.rawReceipt;
 }
 
+type JsonRecord = Record<string, unknown>;
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function decodeBase64UrlJson(value: string): unknown {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const json = new TextDecoder().decode(bytes);
+
+  return JSON.parse(json) as unknown;
+}
+
+function decodeJws(jws: string) {
+  const [header, payload] = jws.split(".");
+  if (!header || !payload) return null;
+
+  try {
+    return {
+      header: decodeBase64UrlJson(header),
+      payload: decodeBase64UrlJson(payload),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function signedTransactionInfoFromReceipt(receipt: unknown) {
+  if (!isJsonRecord(receipt)) return null;
+
+  const direct = receipt.signedTransactionInfo;
+  if (typeof direct === "string") return direct;
+
+  const transactionInfoResponse = receipt.transactionInfoResponse;
+  if (isJsonRecord(transactionInfoResponse)) {
+    const nested = transactionInfoResponse.signedTransactionInfo;
+    if (typeof nested === "string") return nested;
+  }
+
+  return null;
+}
+
+function receiptDisplayPayload(receipt: unknown) {
+  if (!isJsonRecord(receipt)) return receipt;
+
+  const existingDecoded =
+    isJsonRecord(receipt.decodedTransactionInfo) ||
+    Array.isArray(receipt.decodedTransactionInfo)
+      ? receipt.decodedTransactionInfo
+      : null;
+  const signedTransactionInfo = signedTransactionInfoFromReceipt(receipt);
+  const decoded = signedTransactionInfo ? decodeJws(signedTransactionInfo) : null;
+  const decodedTransactionInfo = existingDecoded ?? decoded?.payload ?? null;
+
+  if (!decodedTransactionInfo) return receipt;
+
+  return {
+    receiptType: "app_store_server_api_transaction",
+    decodedTransactionInfo,
+    jwsHeader: decoded?.header ?? receipt.jwsHeader ?? null,
+    source: receipt.source ?? "app_store_server_api.get_transaction_info",
+  };
+}
+
 function transactionRevenueValue(transaction: IapAppTransaction) {
   const micros = transactionRevenueMicros(transaction);
   if (micros === null) return 0;
@@ -784,7 +851,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             size="sm"
                             className="h-8 gap-1.5 px-2.5"
                             onClick={() =>
-                              setSelectedReceipt(transactionRawReceipt(tx))
+                              setSelectedReceipt(
+                                receiptDisplayPayload(transactionRawReceipt(tx)),
+                              )
                             }
                           >
                             <FileJson size={13} />
@@ -795,7 +864,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                           <DialogHeader className="pb-2 border-b">
                             <DialogTitle className="flex items-center gap-2">
                               <FileJson size={18} className="text-primary" />
-                              <span>Receipt Details</span>
+                              <span>Decoded Receipt Details</span>
                             </DialogTitle>
                           </DialogHeader>
                           <div className="flex-1 overflow-auto mt-4 p-4 rounded-lg bg-zinc-950 font-mono text-xs text-zinc-300 border border-zinc-800">
