@@ -64,6 +64,8 @@ function AppIcon({ src, name }: { src: string | null | undefined; name: string |
         src={cleanedSrc}
         alt={name ? `${name} icon` : "App icon"}
         className="size-10 rounded-md border object-cover"
+        decoding="async"
+        loading="lazy"
       />
     );
   }
@@ -625,12 +627,13 @@ export function StoreMappingPage({
             </div>
           </div>
         </CardHeader>
-        <CardContent className="px-0">
-          <Table>
+        <CardContent className="overflow-x-auto px-0">
+          <Table className="min-w-[1120px]">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[72px] pl-4">Avatar</TableHead>
                 <TableHead>App name</TableHead>
+                <TableHead>App ID</TableHead>
                 <TableHead>{platformFilter === "ios" ? "BundleId" : "Package name"}</TableHead>
                 <TableHead>Store ref</TableHead>
                 <TableHead>Status</TableHead>
@@ -652,6 +655,9 @@ export function StoreMappingPage({
                         <span className="min-w-0 truncate font-medium">{mapping.app_name}</span>
                         <InlineAppLink href={mapping.app_link} appName={mapping.app_name} />
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="max-w-[140px] truncate font-mono text-sm">{mapping.app_id ?? "N/A"}</div>
                     </TableCell>
                     <TableCell>
                       <div className="max-w-[260px] truncate font-mono text-sm">{runtimeId ?? "N/A"}</div>
@@ -702,7 +708,7 @@ export function StoreMappingPage({
               })}
               {!mappings.length ? (
                 <TableEmptyState
-                  colSpan={7}
+                  colSpan={8}
                   icon={Cable}
                   title={hasTableFilters ? "No matching app mappings" : "No App Mapping"}
                   description={

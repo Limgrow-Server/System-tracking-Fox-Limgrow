@@ -7,6 +7,7 @@ import type {
   NotificationSchedule,
   StoreMapping,
 } from "@/lib/tracking/types";
+import { firstAppId, normalizeScopeKey } from "@/lib/tracking/identity";
 
 type ScopeRecord = Partial<{
   app_id: string | null;
@@ -44,12 +45,12 @@ function clean(value: unknown) {
 
 function unique(values: unknown[]) {
   return Array.from(
-    new Set(values.map(clean).filter(Boolean)),
+    new Set(values.map(normalizeScopeKey).filter(Boolean)),
   );
 }
 
 function scopeSet(values: string[] | null | undefined) {
-  return new Set((values ?? []).map(clean).filter(Boolean));
+  return new Set((values ?? []).map(normalizeScopeKey).filter(Boolean));
 }
 
 function hasOverlap(keys: string[], values: Set<string>) {
@@ -220,7 +221,7 @@ export function canAccessReviewApp(session: ConsoleSession, app: ReviewAppCard) 
 
 export function notificationRecordFromPayload(payload: Record<string, unknown>): ScopeRecord {
   return {
-    app_id: clean(payload.appId) || clean(payload.productAppId) || null,
+    app_id: firstAppId(payload.appId, payload.productAppId),
     app_mapping_id: clean(payload.appMappingId) || clean(payload.mappingId) || null,
     app_name: clean(payload.appName) || null,
     bundle_id: clean(payload.bundleId) || null,

@@ -4,6 +4,7 @@ import type { MappingStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { upsertAndroidStoreProfile } from "@/lib/server/repositories/android/store-profile.repository";
+import { nullableAppId } from "@/lib/tracking/identity";
 
 type SaveAndroidStoreMappingInput = {
   appId: string | null;
@@ -107,7 +108,7 @@ export async function saveAndroidStoreMapping(
       });
 
   const data = {
-    appId: input.appId,
+    appId: nullableAppId(input.appId),
     appIconUrl: input.appIconUrl,
     appLink: input.appLink,
     appName: input.appName,

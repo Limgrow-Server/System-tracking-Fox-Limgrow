@@ -51,7 +51,14 @@ type LocaleNotification = {
 };
 
 export type SendResult = {
+  credentialProjectId: string | null;
+  deviceAppId: string | null;
+  deviceAppIdentifier: string | null;
+  deviceBundleId: string | null;
+  deviceFirebaseProjectId: string | null;
   deviceId: string | null;
+  devicePackageName: string | null;
+  deviceProductAppId: string | null;
   deviceTokenId: string | null;
   error: string | null;
   fcmErrorCode: string | null;
@@ -70,6 +77,7 @@ type DeviceTarget = {
   appId: string | null;
   bundleId: string | null;
   deviceId: string;
+  firebaseProjectId: string | null;
   id: string;
   fcmToken: string;
   locale: string | null;
@@ -477,7 +485,13 @@ async function sendFcm(input: {
   body: string;
   clientEmail: string | null;
   data: Record<string, string>;
+  deviceAppId?: string | null;
+  deviceAppIdentifier?: string | null;
+  deviceBundleId?: string | null;
+  deviceFirebaseProjectId?: string | null;
   deviceId?: string | null;
+  devicePackageName?: string | null;
+  deviceProductAppId?: string | null;
   deviceTokenId?: string | null;
   endpoint: string;
   imageUrl: string;
@@ -515,7 +529,14 @@ async function sendFcm(input: {
     const error = userFacingFcmError(code, formattedError);
     const invalidToken = isInvalidFcmTokenError({ body, formattedError, status: response.status });
     logSendFailure("FCM request failed", {
+      credentialProjectId: input.projectId,
+      deviceAppId: input.deviceAppId ?? null,
+      deviceAppIdentifier: input.deviceAppIdentifier ?? null,
+      deviceBundleId: input.deviceBundleId ?? null,
+      deviceFirebaseProjectId: input.deviceFirebaseProjectId ?? null,
       deviceId: input.deviceId ?? null,
+      devicePackageName: input.devicePackageName ?? null,
+      deviceProductAppId: input.deviceProductAppId ?? null,
       error,
       fcmErrorCode: code,
       fcmToken: input.targetType === "device" ? input.targetValue : null,
@@ -528,10 +549,18 @@ async function sendFcm(input: {
     });
 
     return {
+      credentialProjectId: input.projectId,
+      deviceAppId: input.deviceAppId ?? null,
+      deviceAppIdentifier: input.deviceAppIdentifier ?? null,
+      deviceBundleId: input.deviceBundleId ?? null,
+      deviceFirebaseProjectId: input.deviceFirebaseProjectId ?? null,
       deviceId: input.deviceId ?? null,
+      devicePackageName: input.devicePackageName ?? null,
+      deviceProductAppId: input.deviceProductAppId ?? null,
       deviceTokenId: input.deviceTokenId ?? null,
       error,
       fcmErrorCode: code,
+      fcmToken: input.targetType === "device" ? input.targetValue : null,
       invalidToken,
       ok: false,
       providerMessageId: null,
@@ -543,7 +572,14 @@ async function sendFcm(input: {
   }
 
   return {
+    credentialProjectId: input.projectId,
+    deviceAppId: input.deviceAppId ?? null,
+    deviceAppIdentifier: input.deviceAppIdentifier ?? null,
+    deviceBundleId: input.deviceBundleId ?? null,
+    deviceFirebaseProjectId: input.deviceFirebaseProjectId ?? null,
     deviceId: input.deviceId ?? null,
+    devicePackageName: input.devicePackageName ?? null,
+    deviceProductAppId: input.deviceProductAppId ?? null,
     deviceTokenId: input.deviceTokenId ?? null,
     error: null,
     fcmErrorCode: null,
@@ -581,7 +617,7 @@ async function getDeviceTargets(
 
   const query = supabase
     .from("device_tokens")
-    .select("id,app_id,app_identifier,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,status")
+    .select("id,app_id,app_identifier,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,firebase_project_id,status")
     .eq("platform", input.platform)
     .eq("status", "active")
     .in("device_id", input.deviceIds);
@@ -590,7 +626,7 @@ async function getDeviceTargets(
 
   if (error) throw error;
 
-  const appId = clean(input.appId);
+  const appId = normalizeAppId(input.appId);
   const appName = clean(input.appName);
   const packageName = clean(input.packageName);
   const bundleId = clean(input.bundleId);
@@ -611,6 +647,7 @@ async function getDeviceTargets(
       appId: stringValue(record.app_id),
       bundleId: stringValue(record.bundle_id),
       deviceId: clean(record.device_id),
+      firebaseProjectId: stringValue(record.firebase_project_id),
       id: clean(record.id),
       fcmToken: clean(record.fcm_token),
       locale: stringValue(record.locale),
@@ -619,11 +656,14 @@ async function getDeviceTargets(
     };
   }).filter((device) => {
     if (!device.id || !device.deviceId || !device.fcmToken) return false;
-    if (requestedAppIdentifier && device.appIdentifier === requestedAppIdentifier) return true;
-    const deviceAppKeys = [device.appId, device.productAppId].filter(Boolean);
+    const deviceAppKeys = [
+      normalizeAppId(device.appId),
+      normalizeAppId(device.productAppId),
+    ].filter(Boolean);
     if (requestedAppKeys.length && deviceAppKeys.length) {
       return deviceAppKeys.some((deviceKey) => requestedAppKeys.includes(deviceKey));
     }
+    if (requestedAppIdentifier && device.appIdentifier === requestedAppIdentifier) return true;
     if (packageName && device.packageName === packageName) return true;
     if (bundleId && device.bundleId === bundleId) return true;
     return !requestedAppKeys.length && !packageName && !bundleId;
@@ -694,8 +734,15 @@ async function writeEvents(
     event_type: result.ok ? "fcm_sent" : "fcm_failed",
     job_id: input.jobId,
     metadata: {
-      fcmErrorCode: result.fcmErrorCode,
+      credentialProjectId: result.credentialProjectId,
+      deviceAppId: result.deviceAppId,
+      deviceAppIdentifier: result.deviceAppIdentifier,
+      deviceBundleId: result.deviceBundleId,
+      deviceFirebaseProjectId: result.deviceFirebaseProjectId,
+      devicePackageName: result.devicePackageName,
+      deviceProductAppId: result.deviceProductAppId,
       deviceTokenId: result.deviceTokenId,
+      fcmErrorCode: result.fcmErrorCode,
       fcmToken: result.fcmToken,
       invalidToken: result.invalidToken,
       topicCode: result.topicCode,
@@ -785,7 +832,14 @@ async function updateJob(
 }
 
 function failedResult(input: {
+  credentialProjectId?: string | null;
+  deviceAppId?: string | null;
+  deviceAppIdentifier?: string | null;
+  deviceBundleId?: string | null;
+  deviceFirebaseProjectId?: string | null;
   deviceId?: string | null;
+  devicePackageName?: string | null;
+  deviceProductAppId?: string | null;
   deviceTokenId?: string | null;
   error: string;
   fcmErrorCode?: string | null;
@@ -796,7 +850,14 @@ function failedResult(input: {
   status?: number;
 }): SendResult {
   return {
+    credentialProjectId: input.credentialProjectId ?? null,
+    deviceAppId: input.deviceAppId ?? null,
+    deviceAppIdentifier: input.deviceAppIdentifier ?? null,
+    deviceBundleId: input.deviceBundleId ?? null,
+    deviceFirebaseProjectId: input.deviceFirebaseProjectId ?? null,
     deviceId: input.deviceId ?? null,
+    devicePackageName: input.devicePackageName ?? null,
+    deviceProductAppId: input.deviceProductAppId ?? null,
     deviceTokenId: input.deviceTokenId ?? null,
     error: input.error,
     fcmErrorCode: input.fcmErrorCode ?? null,
@@ -951,7 +1012,13 @@ export async function sendNotificationPayload(
             ...deliveryData,
             notificationLocale: locale.topicCode,
           },
+          deviceAppId: device.appId,
+          deviceAppIdentifier: device.appIdentifier,
+          deviceBundleId: device.bundleId,
+          deviceFirebaseProjectId: device.firebaseProjectId,
           deviceId,
+          devicePackageName: device.packageName,
+          deviceProductAppId: device.productAppId,
           deviceTokenId: device.id,
           endpoint,
           imageUrl,
@@ -975,7 +1042,14 @@ export async function sendNotificationPayload(
           .filter((result) => !result.ok)
           .slice(0, 20)
           .map((result) => ({
+            credentialProjectId: result.credentialProjectId,
+            deviceAppId: result.deviceAppId,
+            deviceAppIdentifier: result.deviceAppIdentifier,
+            deviceBundleId: result.deviceBundleId,
+            deviceFirebaseProjectId: result.deviceFirebaseProjectId,
             deviceId: result.deviceId,
+            devicePackageName: result.devicePackageName,
+            deviceProductAppId: result.deviceProductAppId,
             error: result.error,
             fcmErrorCode: result.fcmErrorCode,
             invalidToken: result.invalidToken,
@@ -984,6 +1058,8 @@ export async function sendNotificationPayload(
             targetValue: result.targetType === "device" ? result.deviceId ?? "fcm-token-redacted" : result.targetValue,
             topicCode: result.topicCode,
           })),
+        credentialProjectId: projectId,
+        credentialRef: config.firebaseAdmin.credential.credentialRef,
         jobId,
         platform,
         sentCount,

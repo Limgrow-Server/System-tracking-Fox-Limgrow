@@ -23,6 +23,7 @@ import {
   cleanText,
   parseCredentialPayload,
 } from "@/lib/server/services/credentials/credential.shared";
+import { assertCredentialSecretUnlocked } from "@/lib/server/services/credentials/credential-secret-otp.service";
 import type {
   CredentialPayload,
   CredentialPlatform,
@@ -48,7 +49,7 @@ function platformFromCredentialPayload(payload: CredentialPayload): CredentialPl
 
 export async function handleAdminCredentialsGet(request: Request) {
   try {
-    await requireAdminSession();
+    const admin = await requireAdminSession();
 
     const url = new URL(request.url);
     const platform = platformFromSearch(cleanText(url.searchParams.get("platform")));
@@ -62,6 +63,8 @@ export async function handleAdminCredentialsGet(request: Request) {
         id: cleanText(url.searchParams.get("id")),
         credentialRef: cleanText(url.searchParams.get("credentialRef")),
       };
+
+      await assertCredentialSecretUnlocked(admin);
 
       return okJson(platform === "android" ? await getAndroidCredentialSecret(input) : await getIosCredentialSecret(input));
     }

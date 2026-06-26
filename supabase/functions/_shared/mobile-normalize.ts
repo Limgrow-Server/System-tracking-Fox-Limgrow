@@ -3,7 +3,7 @@ export function cleanText(value: unknown) {
 }
 
 export function normalizeAppId(value: unknown) {
-  return cleanText(value).replace(/\s+/g, "").toUpperCase();
+  return cleanText(value).replace(/\s+/g, "").toLowerCase();
 }
 
 export function normalizePackageName(value: unknown) {
