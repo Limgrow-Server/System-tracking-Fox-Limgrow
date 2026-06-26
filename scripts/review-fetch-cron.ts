@@ -20,6 +20,28 @@ type CronLoop = {
   stop: () => void;
 };
 
+type NextCommand = "dev" | "start";
+
+function nextCommandFromLifecycle(value: string | undefined): NextCommand {
+  return value === "dev" ? "dev" : "start";
+}
+
+function resolveNextCommand(args: string[]) {
+  const [firstArg, ...restArgs] = args;
+
+  if (firstArg === "dev" || firstArg === "start") {
+    return {
+      command: firstArg,
+      forwardedArgs: restArgs,
+    };
+  }
+
+  return {
+    command: nextCommandFromLifecycle(process.env.npm_lifecycle_event),
+    forwardedArgs: args,
+  };
+}
+
 function portFromArgs(args: string[]) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -166,9 +188,9 @@ function startReviewFetchCronLoop(): CronLoop {
   };
 }
 
-const forwardedArgs = process.argv.slice(2);
+const { command, forwardedArgs } = resolveNextCommand(process.argv.slice(2));
 const port = portFromArgs(forwardedArgs);
-const nextArgs = ["dev", ...forwardedArgs];
+const nextArgs = [command, ...forwardedArgs];
 const nextEnv = {
   ...process.env,
   PORT: port,
@@ -176,7 +198,7 @@ const nextEnv = {
 
 process.env.PORT = port;
 
-console.log(`[dev] next ${nextArgs.join(" ")}`);
+console.log(`[${command}] next ${nextArgs.join(" ")}`);
 
 const nextProcess = spawn(process.execPath, [nextBin, ...nextArgs], {
   cwd: projectRoot,
@@ -215,7 +237,7 @@ nextProcess.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
   }
 
   if (signal) {
-    console.log(`[dev] next exited by ${signal}`);
+    console.log(`[${command}] next exited by ${signal}`);
     process.exit(1);
   }
 
@@ -225,6 +247,6 @@ nextProcess.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
 nextProcess.on("error", (error: Error) => {
   cronLoop?.stop();
   cronLoop = null;
-  console.error(`[dev] failed to start next: ${error.message}`);
+  console.error(`[${command}] failed to start next: ${error.message}`);
   process.exit(1);
 });
