@@ -178,12 +178,16 @@ export type ReviewFetchRunDto = {
   id: string;
   triggerType: string;
   status: string;
+  scheduledFor: string | null;
+  nextAttemptAt: string | null;
+  attemptCount: number;
+  maxAttempts: number;
   pagesFetched: number;
   reviewsFetched: number;
   reviewsUpserted: number;
   errorCode: string | null;
   errorMessage: string | null;
-  startedAt: string;
+  startedAt: string | null;
   finishedAt: string | null;
 };
 
@@ -194,12 +198,10 @@ export type ReviewFetchScheduleDto = {
   storeMappingId: string;
   timeOfDay: string;
   timezone: string;
-  lookbackDays: number;
-  maxResults: number;
-  maxPages: number;
   nextRunAt: string;
   lastRunAt: string | null;
   lastStatus: string | null;
+  lastErrorCode: string | null;
   lastErrorMessage: string | null;
   runCount: number;
   updatedAt: string;

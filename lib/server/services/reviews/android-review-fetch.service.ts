@@ -56,6 +56,18 @@ export type FetchAndroidReviewsPayload = {
   triggerType?: unknown;
 };
 
+export type ClaimedAndroidReviewFetchRun = {
+  attemptCount?: number;
+  id: string;
+  lockedBy: string | null;
+  maxResults: number;
+  scheduledFor: Date | null;
+  sourceScheduleId: string | null;
+  startedAt: Date | null;
+  storeMappingId: string;
+  triggerType: ReviewFetchTrigger;
+};
+
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
@@ -434,7 +446,10 @@ function resultStatus(value: ReviewFetchRunStatus) {
   return value.toLowerCase();
 }
 
-export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPayload) {
+async function executeAndroidStoreReviewFetch(
+  payload: FetchAndroidReviewsPayload,
+  run?: ClaimedAndroidReviewFetchRun,
+) {
   const normalized = normalizeFetchPayload(payload);
   const mapping = await getAndroidReviewMappingById(normalized.storeMappingId);
   if (!mapping) throw notFound("Android app mapping was not found.");
@@ -455,8 +470,8 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
     throw badRequest("Android service-account credential is invalid.");
   }
 
-  const startedAt = new Date();
-  const lockedBy = crypto.randomUUID();
+  const startedAt = run?.startedAt ?? new Date();
+  const lockedBy = run?.lockedBy ?? crypto.randomUUID();
   let context: FetchRunContext | null = null;
   let syncStarted = false;
   let pagesFetched = 0;
@@ -473,14 +488,18 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
     await markAndroidReviewSyncRunning(mapping.id, { lockedBy, startedAt });
     syncStarted = true;
 
-    const run = await createAndroidReviewFetchRun({
-      maxPages: normalized.fetchAllPages ? 0 : normalized.maxPages,
-      maxResults: normalized.maxResults,
-      startedAt,
-      storeMappingId: mapping.id,
-      triggerType: normalized.triggerType,
-    });
-    context = { runId: run.id, storeMappingId: mapping.id };
+    if (run) {
+      context = { runId: run.id, storeMappingId: mapping.id };
+    } else {
+      const createdRun = await createAndroidReviewFetchRun({
+        lockedBy,
+        maxResults: normalized.maxResults,
+        startedAt,
+        storeMappingId: mapping.id,
+        triggerType: normalized.triggerType,
+      });
+      context = { runId: createdRun.id, storeMappingId: mapping.id };
+    }
 
     const accessToken = await googleServiceAccountAccessToken(serviceAccount);
 
@@ -605,4 +624,23 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
 
     throw error;
   }
+}
+
+export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPayload) {
+  return executeAndroidStoreReviewFetch(payload);
+}
+
+export async function processClaimedAndroidReviewFetchRun(
+  run: ClaimedAndroidReviewFetchRun,
+  payload: Omit<FetchAndroidReviewsPayload, "storeMappingId" | "triggerType"> = {},
+) {
+  return executeAndroidStoreReviewFetch(
+    {
+      ...payload,
+      maxResults: payload.maxResults ?? run.maxResults,
+      storeMappingId: run.storeMappingId,
+      triggerType: resultTriggerType(run.triggerType),
+    },
+    run,
+  );
 }

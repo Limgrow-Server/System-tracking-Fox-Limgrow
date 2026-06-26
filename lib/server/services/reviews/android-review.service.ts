@@ -313,14 +313,18 @@ function syncStateDto(state: AndroidStoreReviewSyncState | null): ReviewSyncStat
 
 function fetchRunDto(run: AndroidStoreReviewFetchRun): ReviewFetchRunDto {
   return {
+    attemptCount: run.attemptCount,
     errorCode: run.errorCode,
     errorMessage: run.errorMessage,
     finishedAt: iso(run.finishedAt),
     id: run.id,
+    maxAttempts: run.maxAttempts,
+    nextAttemptAt: iso(run.nextAttemptAt),
     pagesFetched: run.pagesFetched,
     reviewsFetched: run.reviewsFetched,
     reviewsUpserted: run.reviewsUpserted,
-    startedAt: run.startedAt.toISOString(),
+    scheduledFor: iso(run.scheduledFor),
+    startedAt: iso(run.startedAt),
     status: enumText(run.status),
     triggerType: enumText(run.triggerType),
   };
