@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 export function PageLoadingState({
   className,
-  label = "Loading screen",
+  label = "Loading",
 }: {
   className?: string;
   label?: string;

@@ -33,7 +33,7 @@ import {
 import { PageHeader, TablePaginationFooter } from "@/components/tracking/primitives";
 import { cn } from "@/lib/utils";
 import type { IapAppCard, IapAppGridPageData } from "@/lib/tracking/page-data";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 const IAP_APP_SKELETON_COUNT = 12;
 
@@ -100,7 +100,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
       });
       if (payload.storeNames) setStoreNames(payload.storeNames);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Load IAP apps failed.");
+      void showToast("error", error instanceof Error ? error.message : "Load IAP apps failed.");
     } finally {
       setLoading(false);
       setLoadingPage(null);

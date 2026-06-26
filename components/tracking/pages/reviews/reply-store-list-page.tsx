@@ -27,7 +27,7 @@ import type {
   ReplyStoreListPageData,
   ReplyStoreSummary,
 } from "@/lib/tracking/page-data";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 function StoreCard({
   isPending,
@@ -161,7 +161,7 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
         totalPages: payload.totalPages ?? 1,
       });
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Reply stores could not be loaded.",
       );
     } finally {

@@ -74,7 +74,7 @@ import type {
   ReviewSyncStateDto,
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 const GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -870,7 +870,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       if (payload.replyTemplates) setReplyTemplates(payload.replyTemplates);
       if (payload.isMockData !== undefined) setIsMockData(payload.isMockData);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Comments could not be loaded.",
       );
     } finally {
@@ -913,13 +913,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       }
 
       const moreText = payload.result.hasMore ? " More pages are available." : "";
-      toast.success(
+      void showToast("success",
         `Fetched ${payload.result.reviewsFetched ?? 0} reviews, matched ${payload.result.reviewsMatched ?? 0}, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
       );
       await loadReviewPage(1);
       router.refresh();
     } catch (error) {
-      toast.error(fetchReviewErrorToast(error));
+      void showToast("error", fetchReviewErrorToast(error));
     } finally {
       setFetchingReviews(false);
     }
@@ -949,10 +949,10 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         throw new Error(payload.error ?? "Reply could not be sent.");
       }
 
-      toast.success(payload.message ?? "Reply sent.");
+      void showToast("success", payload.message ?? "Reply sent.");
       await loadReviewPage(reviewPagination.page);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Reply could not be sent.",
       );
     } finally {

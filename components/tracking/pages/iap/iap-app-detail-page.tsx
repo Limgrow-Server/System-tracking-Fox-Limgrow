@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   ArrowDownRight,
   ArrowLeft,
@@ -23,13 +24,6 @@ import {
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -42,7 +36,12 @@ import type {
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 import type { IosIapTransactionSummary } from "@/lib/tracking/types";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
+
+const IapReceiptDialog = dynamic(
+  () => import("./iap-receipt-dialog").then((mod) => mod.IapReceiptDialog),
+  { loading: () => null },
+);
 
 type IapTransactionListResponse = {
   success?: boolean;
@@ -372,7 +371,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         setTransactionStates(payload.transactionStates);
       }
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Load IAP transactions failed.",
@@ -844,36 +843,19 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                       ) : null}
                     </td>
                     <td className="px-4 py-3.5">
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1.5 px-2.5"
-                            onClick={() =>
-                              setSelectedReceipt(
-                                receiptDisplayPayload(transactionRawReceipt(tx)),
-                              )
-                            }
-                          >
-                            <FileJson size={13} />
-                            <span>JSON</span>
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="sm:max-w-4xl max-h-[80vh] flex flex-col p-6">
-                          <DialogHeader className="pb-2 border-b">
-                            <DialogTitle className="flex items-center gap-2">
-                              <FileJson size={18} className="text-primary" />
-                              <span>Decoded Receipt Details</span>
-                            </DialogTitle>
-                          </DialogHeader>
-                          <div className="flex-1 overflow-auto mt-4 p-4 rounded-lg bg-zinc-950 font-mono text-xs text-zinc-300 border border-zinc-800">
-                            <pre className="whitespace-pre-wrap">
-                              {JSON.stringify(selectedReceipt, null, 2)}
-                            </pre>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 px-2.5"
+                        onClick={() =>
+                          setSelectedReceipt(
+                            receiptDisplayPayload(transactionRawReceipt(tx)),
+                          )
+                        }
+                      >
+                        <FileJson size={13} />
+                        <span>JSON</span>
+                      </Button>
                     </td>
                   </tr>
                 );
@@ -901,6 +883,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           totalPages={transactionPagination.totalPages}
         />
       </div>
+      {selectedReceipt !== null ? (
+        <IapReceiptDialog
+          receipt={selectedReceipt}
+          onOpenChange={(open) => {
+            if (!open) setSelectedReceipt(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

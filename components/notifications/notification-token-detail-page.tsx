@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { ArrowLeft, Bell, Clock3, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import {
   EmptyPanel,
@@ -221,7 +221,7 @@ export function NotificationTokenDetailPage({
       });
       if (payload.summary) setTokenSummary(payload.summary);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "FCM tokens could not be loaded.",
       );
     } finally {
@@ -272,7 +272,7 @@ export function NotificationTokenDetailPage({
         throw new Error(payload.error ?? "FCM token could not be deleted.");
       }
 
-      toast.success("FCM token deleted.");
+      void showToast("success", "FCM token deleted.");
       setTokenToDelete(null);
       setSelectedToken((current) => current?.id === token.id ? null : current);
       setSelectedTokenIds((current) => current.filter((id) => id !== token.id));
@@ -281,7 +281,7 @@ export function NotificationTokenDetailPage({
         : tokenPagination.page;
       await loadTokenPage(nextPage);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "FCM token could not be deleted.",
       );
     } finally {
@@ -308,7 +308,7 @@ export function NotificationTokenDetailPage({
       }
 
       const deletedCount = payload.deletedCount ?? ids.length;
-      toast.success(`${numberLabel(deletedCount)} FCM token(s) deleted.`);
+      void showToast("success", `${numberLabel(deletedCount)} FCM token(s) deleted.`);
       setBulkDeleteOpen(false);
       setSelectedToken((current) => current && ids.includes(current.id) ? null : current);
       setSelectedTokenIds([]);
@@ -317,7 +317,7 @@ export function NotificationTokenDetailPage({
         : tokenPagination.page;
       await loadTokenPage(nextPage);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "FCM tokens could not be deleted.",
       );
     } finally {

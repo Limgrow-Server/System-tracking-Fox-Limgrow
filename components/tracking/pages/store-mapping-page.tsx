@@ -3,7 +3,7 @@
 import { FormEvent, type ReactNode, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Cable, Eye, Link2, Pencil, Plus, Power, PowerOff, Search, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import { PageHeader, StatusBadge, TableEmptyState, TablePaginationFooter } from "@/components/tracking/primitives";
 import { Button } from "@/components/ui/button";
@@ -279,7 +279,7 @@ export function StoreMappingPage({
         totalPages: payload.totalPages ?? 1,
       });
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Load app mappings failed.",
       );
     } finally {
@@ -308,12 +308,12 @@ export function StoreMappingPage({
         throw new Error(payload.error ?? "Store mapping operation failed.");
       }
 
-      toast.success(payload.message ?? "Store mapping saved.");
+      void showToast("success", payload.message ?? "Store mapping saved.");
       setDrawerOpen(false);
       await loadMappingsPage(editingId ? tablePagination.page : 1);
       router.refresh();
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Store mapping operation failed.",
@@ -355,9 +355,9 @@ export function StoreMappingPage({
 
     try {
       await saveMappingPatch(mapping, { status: nextStatus }, "Mapping status update failed.");
-      toast.success(`Mapping ${nextStatus === "active" ? "activated" : "deactivated"}.`);
+      void showToast("success", `Mapping ${nextStatus === "active" ? "activated" : "deactivated"}.`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Mapping status update failed.");
+      void showToast("error", error instanceof Error ? error.message : "Mapping status update failed.");
     } finally {
       setPendingRow(null);
     }
@@ -388,14 +388,14 @@ export function StoreMappingPage({
         throw new Error(payload.error ?? "Delete store mapping failed.");
       }
 
-      toast.success(payload.message ?? "Store mapping deleted.");
+      void showToast("success", payload.message ?? "Store mapping deleted.");
       setDeleteTarget(null);
       setDeleteConfirmationName("");
       await loadMappingsPage(mappings.length <= 1 && tablePagination.page > 1 ? tablePagination.page - 1 : tablePagination.page);
       router.refresh();
     } catch (error) {
       setMappings(previous);
-      toast.error(error instanceof Error ? error.message : "Delete store mapping failed.");
+      void showToast("error", error instanceof Error ? error.message : "Delete store mapping failed.");
     } finally {
       setPendingRow(null);
     }

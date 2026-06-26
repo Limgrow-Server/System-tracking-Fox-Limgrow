@@ -16,7 +16,7 @@
     "prisma:format": "prisma format --schema prisma",
     "prisma:validate": "prisma validate --schema prisma",
     "prisma:generate": "prisma generate --schema prisma",
-    "prisma:migrate:dev": "DOTENV_CONFIG_PATH=.env prisma migrate dev --schema prisma",
+    "prisma:migrate:dev": "echo \"Supabase Vault is not available in Prisma shadow DB; running migrate deploy with .env instead.\" && DOTENV_CONFIG_PATH=.env prisma migrate deploy --schema prisma",
     "prisma:migrate:deploy": "DOTENV_CONFIG_PATH=.env prisma migrate deploy --schema prisma",
     "prisma:migrate:deploy:production": "DOTENV_CONFIG_PATH=.env.production prisma migrate deploy --schema prisma",
     "prisma:migrate:status": "DOTENV_CONFIG_PATH=.env prisma migrate status --schema prisma",

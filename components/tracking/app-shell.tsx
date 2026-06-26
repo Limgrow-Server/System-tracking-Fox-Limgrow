@@ -34,13 +34,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { ConsoleSession } from "@/lib/auth/rbac";
+import { showToast } from "@/lib/client/toast";
 import { cn } from "@/lib/utils";
 import type { StaffRole } from "@/lib/tracking/types";
-
-async function showToast(type: "success" | "error", message: string) {
-  const { toast } = await import("sonner");
-  toast[type](message);
-}
 
 type NavItem = {
   title: string;

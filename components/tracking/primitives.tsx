@@ -167,6 +167,23 @@ export function EmptyPanel({
   description: string;
   className?: string;
 }) {
+  const isLoading = title.trim().toLowerCase().startsWith("loading");
+
+  if (isLoading) {
+    return (
+      <div
+        aria-busy="true"
+        aria-label={title}
+        className={cn("min-h-40 space-y-3 rounded-lg p-6", className)}
+      >
+        <div className="mx-auto size-10 animate-pulse rounded-lg bg-muted" />
+        <div className="mx-auto h-4 w-40 max-w-full animate-pulse rounded bg-muted" />
+        <div className="mx-auto h-3 w-64 max-w-full animate-pulse rounded bg-muted/70" />
+        <div className="mx-auto h-3 w-52 max-w-full animate-pulse rounded bg-muted/70" />
+      </div>
+    );
+  }
+
   return (
     <Empty className={cn("min-h-40 rounded-none border-0", className)}>
       <EmptyHeader>
@@ -191,6 +208,31 @@ export function TableEmptyState({
   title: string;
   description: string;
 }) {
+  const isLoading = title.trim().toLowerCase().startsWith("loading");
+
+  if (isLoading) {
+    return (
+      <>
+        {Array.from({ length: 5 }).map((_, index) => (
+          <TableRow key={`table-loading-skeleton-${index}`}>
+            <TableCell colSpan={colSpan} className="p-3">
+              <div className="grid animate-pulse gap-3 md:grid-cols-[minmax(12rem,1.6fr)_repeat(4,minmax(5rem,1fr))]">
+                <div className="space-y-2">
+                  <div className="h-4 w-48 max-w-full rounded bg-muted" />
+                  <div className="h-3 w-32 max-w-full rounded bg-muted/70" />
+                </div>
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+      </>
+    );
+  }
+
   return (
     <TableRow>
       <TableCell colSpan={colSpan} className="p-0">

@@ -43,7 +43,7 @@ import type {
   ReviewAppGridPageData,
 } from "@/lib/tracking/page-data";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 function ratingLabel(value: number | null) {
   return value ? value.toFixed(1) : "N/A";
@@ -118,7 +118,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
       });
       if (payload.storeOptions) setStoreOptions(payload.storeOptions);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Applications could not be loaded.",
       );
     } finally {
@@ -334,9 +334,32 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
             </li>
           );
         })}
-        {!apps.length ? (
+        {!apps.length && loadingApps
+          ? Array.from({ length: 8 }).map((_, index) => (
+              <li key={`review-app-loading-${index}`}>
+                <Card className="h-full rounded-lg">
+                  <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
+                    <div className="size-11 animate-pulse rounded-lg bg-muted" />
+                    <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="h-5 w-3/4 animate-pulse rounded bg-muted" />
+                      <div className="h-3 w-1/2 animate-pulse rounded bg-muted/70" />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="h-14 animate-pulse rounded-md bg-muted/70" />
+                      <div className="h-14 animate-pulse rounded-md bg-muted/70" />
+                      <div className="h-14 animate-pulse rounded-md bg-muted/70" />
+                    </div>
+                  </CardContent>
+                </Card>
+              </li>
+            ))
+          : null}
+        {!apps.length && !loadingApps ? (
           <div className="col-span-full py-12 text-center text-muted-foreground">
-            {loadingApps ? "Loading applications..." : "No applications found."}
+            No applications found.
           </div>
         ) : null}
       </ul>

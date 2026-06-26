@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Bell, ChevronRight, ListFilter, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import {
   PageHeader,
@@ -12,11 +12,13 @@ import {
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
 import type { DeviceToken, NotificationSchedule, StoreMapping } from "@/lib/tracking/types";
+import { cn } from "@/lib/utils";
 
 import {
   ALL_FILTER_VALUE,
@@ -67,6 +69,7 @@ export function NotificationOverviewPage({
   deferInitialLoad?: boolean;
 }) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
   const initialLoadStarted = useRef(false);
   const [storeMappings, setStoreMappings] = useState(data.storeMappings);
   const [deviceTokens, setDeviceTokens] = useState(data.deviceTokens);
@@ -89,6 +92,7 @@ export function NotificationOverviewPage({
   const [storeFilter, setStoreFilter] = useState(ALL_FILTER_VALUE);
   const [loadingApps, setLoadingApps] = useState(deferInitialLoad);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
+  const [pendingAppId, setPendingAppId] = useState<string | null>(null);
 
   const appRows = useMemo(() => {
     return storeMappings
@@ -155,7 +159,7 @@ export function NotificationOverviewPage({
       if (payload.storeOptions) setStoreOptions(payload.storeOptions);
       if (payload.summary) setSummary(payload.summary);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Notification apps could not be loaded.",
@@ -174,7 +178,10 @@ export function NotificationOverviewPage({
   }, [deferInitialLoad]);
 
   function selectApp(appId: string) {
-    router.push(`/notifications/overview/${encodeURIComponent(appId)}`);
+    setPendingAppId(appId);
+    startTransition(() => {
+      router.push(`/notifications/overview/${encodeURIComponent(appId)}`);
+    });
   }
 
   return (
@@ -331,10 +338,15 @@ export function NotificationOverviewPage({
               ) : appRows.length ? (
                 appRows.map((row) => {
                   const detailAppId = row.app.app_id ?? row.app.id;
+                  const isPending = pendingAppId === detailAppId;
                   return (
                     <TableRow
                       key={row.app.id}
-                      className="cursor-pointer transition-colors hover:bg-muted/45"
+                      aria-busy={isPending}
+                      className={cn(
+                        "cursor-pointer transition-colors hover:bg-muted/45",
+                        isPending && "pointer-events-none bg-muted/35",
+                      )}
                       onClick={() => selectApp(detailAppId)}
                     >
                       <TableCell className="max-w-80">
@@ -368,7 +380,11 @@ export function NotificationOverviewPage({
                         <StatusBadge status={statusValue(row.app.status)} />
                       </TableCell>
                       <TableCell>
-                        <ChevronRight size={16} className="text-muted-foreground" />
+                        {isPending ? (
+                          <Spinner className="size-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight size={16} className="text-muted-foreground" />
+                        )}
                       </TableCell>
                     </TableRow>
                   );
