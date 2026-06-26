@@ -101,50 +101,60 @@ model AndroidStoreReviewSyncState {
 }
 
 model AndroidStoreReviewFetchRun {
-  id              String               @id @default(uuid()) @db.Uuid
-  storeMappingId  String               @map("store_mapping_id") @db.Uuid
-  triggerType     ReviewFetchTrigger   @default(SCHEDULED) @map("trigger_type")
-  status          ReviewFetchRunStatus @default(RUNNING)
-  maxResults      Int                  @default(100) @map("max_results")
-  maxPages        Int                  @default(2) @map("max_pages")
-  pagesFetched    Int                  @default(0) @map("pages_fetched")
-  reviewsFetched  Int                  @default(0) @map("reviews_fetched")
-  reviewsUpserted Int                  @default(0) @map("reviews_upserted")
-  errorCode       String?              @map("error_code")
-  errorMessage    String?              @map("error_message") @db.Text
-  startedAt       DateTime             @default(now()) @map("started_at") @db.Timestamptz(6)
-  finishedAt      DateTime?            @map("finished_at") @db.Timestamptz(6)
-  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
-  storeMapping    AndroidStoreMapping  @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  id               String                           @id @default(uuid()) @db.Uuid
+  storeMappingId   String                           @map("store_mapping_id") @db.Uuid
+  sourceScheduleId String?                          @map("source_schedule_id") @db.Uuid
+  triggerType      ReviewFetchTrigger               @default(SCHEDULED) @map("trigger_type")
+  status           ReviewFetchRunStatus             @default(PENDING)
+  scheduledFor     DateTime?                        @map("scheduled_for") @db.Timestamptz(6)
+  nextAttemptAt    DateTime?                        @map("next_attempt_at") @db.Timestamptz(6)
+  attemptCount     Int                              @default(0) @map("attempt_count")
+  maxAttempts      Int                              @default(3) @map("max_attempts")
+  lockedAt         DateTime?                        @map("locked_at") @db.Timestamptz(6)
+  lockedBy         String?                          @map("locked_by")
+  maxResults       Int                              @default(100) @map("max_results")
+  pagesFetched     Int                              @default(0) @map("pages_fetched")
+  reviewsFetched   Int                              @default(0) @map("reviews_fetched")
+  reviewsUpserted  Int                              @default(0) @map("reviews_upserted")
+  errorCode        String?                          @map("error_code")
+  errorMessage     String?                          @map("error_message") @db.Text
+  startedAt        DateTime?                        @map("started_at") @db.Timestamptz(6)
+  finishedAt       DateTime?                        @map("finished_at") @db.Timestamptz(6)
+  createdAt        DateTime                         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeMapping     AndroidStoreMapping              @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  sourceSchedule   AndroidStoreReviewFetchSchedule? @relation(fields: [sourceScheduleId], references: [id], onDelete: SetNull)
 
-  @@index([storeMappingId, startedAt], map: "android_store_review_fetch_runs_mapping_started_idx")
-  @@index([status, startedAt], map: "android_store_review_fetch_runs_status_started_idx")
+  @@unique([storeMappingId, triggerType, scheduledFor], map: "android_store_review_fetch_runs_mapping_trigger_scheduled_key")
+  @@index([status, nextAttemptAt], map: "android_store_review_fetch_runs_status_next_attempt_idx")
+  @@index([status, lockedAt], map: "android_store_review_fetch_runs_status_locked_idx")
+  @@index([storeMappingId, createdAt], map: "android_store_review_fetch_runs_mapping_created_idx")
+  @@index([sourceScheduleId, scheduledFor], map: "android_store_review_fetch_runs_schedule_for_idx")
+  @@index([createdAt], map: "android_store_review_fetch_runs_created_idx")
   @@map("android_store_review_fetch_runs")
 }
 
 model AndroidStoreReviewFetchSchedule {
-  id               String                    @id @default(uuid()) @db.Uuid
-  storeMappingId   String                    @unique @map("store_mapping_id") @db.Uuid
-  status           ReviewFetchScheduleStatus @default(ACTIVE)
-  scheduleType     String                    @default("daily") @map("schedule_type")
-  timeOfDay        String                    @default("09:00") @map("time_of_day")
-  timezone         String                    @default("Asia/Ho_Chi_Minh")
-  lookbackDays     Int                       @default(7) @map("lookback_days")
-  maxResults       Int                       @default(100) @map("max_results")
-  maxPages         Int                       @default(2) @map("max_pages")
-  nextRunAt        DateTime                  @map("next_run_at") @db.Timestamptz(6)
-  lastRunAt        DateTime?                 @map("last_run_at") @db.Timestamptz(6)
-  lastStatus       ReviewFetchRunStatus?     @map("last_status")
-  lastErrorMessage String?                   @map("last_error_message") @db.Text
-  lockedAt         DateTime?                 @map("locked_at") @db.Timestamptz(6)
-  lockedBy         String?                   @map("locked_by")
-  runCount         Int                       @default(0) @map("run_count")
-  createdBy        String?                   @map("created_by")
-  updatedBy        String?                   @map("updated_by")
-  createdAt        DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
-  storeMapping     AndroidStoreMapping       @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  id               String                       @id @default(uuid()) @db.Uuid
+  storeMappingId   String                       @unique @map("store_mapping_id") @db.Uuid
+  status           ReviewFetchScheduleStatus    @default(ACTIVE)
+  scheduleType     String                       @default("daily") @map("schedule_type")
+  timeOfDay        String                       @default("09:00") @map("time_of_day")
+  timezone         String                       @default("Asia/Ho_Chi_Minh")
+  nextRunAt        DateTime                     @map("next_run_at") @db.Timestamptz(6)
+  lastRunAt        DateTime?                    @map("last_run_at") @db.Timestamptz(6)
+  lastStatus       ReviewFetchRunStatus?        @map("last_status")
+  lastErrorCode    String?                      @map("last_error_code")
+  lastErrorMessage String?                      @map("last_error_message") @db.Text
+  lockedAt         DateTime?                    @map("locked_at") @db.Timestamptz(6)
+  lockedBy         String?                      @map("locked_by")
+  runCount         Int                          @default(0) @map("run_count")
+  createdBy        String?                      @map("created_by")
+  updatedBy        String?                      @map("updated_by")
+  createdAt        DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeMapping     AndroidStoreMapping          @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  fetchRuns        AndroidStoreReviewFetchRun[]
 
   @@index([status, nextRunAt], map: "android_store_review_fetch_schedules_status_next_idx")
   @@index([lockedAt], map: "android_store_review_fetch_schedules_locked_idx")

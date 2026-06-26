@@ -15,7 +15,7 @@ import {
   Smartphone,
   Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -233,7 +233,7 @@ export function ReviewFetchSchedulePage({
       if (payload.summary) setSummary(payload.summary);
       if (payload.storeOptions) setStoreOptions(payload.storeOptions);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Schedule apps could not be loaded.",
@@ -285,10 +285,10 @@ export function ReviewFetchSchedulePage({
 
       applySchedulesToState(payload.schedules);
       await loadScheduleAppsPage(appPagination.page);
-      toast.success(payload.message ?? "Schedules saved.");
+      void showToast("success", payload.message ?? "Schedules saved.");
       router.refresh();
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Schedules could not be saved.",
       );
     } finally {
@@ -318,10 +318,10 @@ export function ReviewFetchSchedulePage({
 
       applySchedulesToState(payload.schedules);
       await loadScheduleAppsPage(appPagination.page);
-      toast.success(payload.message ?? "Schedules updated.");
+      void showToast("success", payload.message ?? "Schedules updated.");
       router.refresh();
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Schedules could not be updated.",
@@ -353,10 +353,10 @@ export function ReviewFetchSchedulePage({
       );
       await loadScheduleAppsPage(appPagination.page);
       setDeleteDialogOpen(false);
-      toast.success(payload.message ?? "Schedules deleted.");
+      void showToast("success", payload.message ?? "Schedules deleted.");
       router.refresh();
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Schedules could not be deleted.",

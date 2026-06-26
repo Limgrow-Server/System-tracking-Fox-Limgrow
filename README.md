@@ -140,7 +140,7 @@ Các script Prisma có sẵn:
 npm run prisma:format
 npm run prisma:validate
 npm run prisma:generate
-npm run prisma:migrate:dev                 # dùng .env
+npm run prisma:migrate:dev                 # dùng .env, alias an toàn sang migrate deploy
 npm run prisma:migrate:deploy              # dùng .env
 npm run prisma:migrate:deploy:production   # dùng .env.production
 npm run prisma:migrate:status              # dùng .env
@@ -172,10 +172,10 @@ npm run prisma:studio
 
 ### Khi phát triển migration mới
 
-Dùng `migrate dev` khi đang phát triển schema:
+Repo này có migration phụ thuộc Supabase Vault (`vault.decrypted_secrets`), nên không dùng trực tiếp `prisma migrate dev`. Lệnh đó tạo shadow database trắng và sẽ fail vì shadow DB không có Supabase Vault. Script `prisma:migrate:dev` trong repo được giữ lại như alias an toàn sang `migrate deploy`.
 
 ```powershell
-npm run prisma:migrate:dev -- --name ten_migration_mo_ta
+npm run prisma:migrate:deploy
 npm run prisma:generate
 ```
 
@@ -212,15 +212,15 @@ npm install
 npm run prisma:migrate:status
 ```
 
-Trước khi đổi schema, kiểm tra `.env` đang trỏ tới Supabase project development/local, không phải production. Sau đó sửa model Prisma và tạo migration:
+Trước khi đổi schema, kiểm tra `.env` đang trỏ tới Supabase project development/local, không phải production. Sau đó sửa model Prisma, thêm migration SQL trong `prisma/migrations/<timestamp>_<name>/migration.sql`, rồi apply bằng:
 
 ```bash
-npm run prisma:migrate:dev -- --name ten_migration_mo_ta
+npm run prisma:migrate:deploy
 npm run prisma:generate
 npm run prisma:migrate:status
 ```
 
-Review file SQL vừa sinh trong `prisma/migrations/.../migration.sql` trước khi commit. Nếu migration chạm tới bảng trong schema exposed như `public`, cần kiểm tra RLS, policy, grant, function privilege và dữ liệu backfill. Với thay đổi destructive như drop column/table hoặc đổi kiểu dữ liệu, cần có plan backfill/rollback rõ ràng trước khi merge.
+Review file SQL trong `prisma/migrations/.../migration.sql` trước khi commit. Nếu migration chạm tới bảng trong schema exposed như `public`, cần kiểm tra RLS, policy, grant, function privilege và dữ liệu backfill. Với thay đổi destructive như drop column/table hoặc đổi kiểu dữ liệu, cần có plan backfill/rollback rõ ràng trước khi merge.
 
 Commit những file liên quan:
 

@@ -33,9 +33,6 @@ export type AndroidReviewUpsertInput = {
 
 type AndroidReviewFetchScheduleUpsertInput = {
   createdBy: string;
-  lookbackDays: number;
-  maxPages: number;
-  maxResults: number;
   nextRunAt: Date;
   status: ReviewFetchScheduleStatus;
   storeMappingId: string;
@@ -176,7 +173,7 @@ export function getLatestAndroidReviewForMapping(mappingId: string) {
 export function getAndroidReviewFetchRuns(mappingId: string, take = 10) {
   return prisma.androidStoreReviewFetchRun.findMany({
     where: { storeMappingId: mappingId },
-    orderBy: { startedAt: "desc" },
+    orderBy: [{ createdAt: "desc" }],
     take,
   });
 }
@@ -203,9 +200,6 @@ function upsertAndroidReviewFetchScheduleQuery(
     where: { storeMappingId: input.storeMappingId },
     create: {
       createdBy: input.createdBy,
-      lookbackDays: input.lookbackDays,
-      maxPages: input.maxPages,
-      maxResults: input.maxResults,
       nextRunAt: input.nextRunAt,
       status: input.status,
       storeMappingId: input.storeMappingId,
@@ -214,12 +208,10 @@ function upsertAndroidReviewFetchScheduleQuery(
       updatedBy: input.updatedBy,
     },
     update: {
+      lastErrorCode: null,
       lastErrorMessage: null,
       lockedAt: null,
       lockedBy: null,
-      lookbackDays: input.lookbackDays,
-      maxPages: input.maxPages,
-      maxResults: input.maxResults,
       nextRunAt: input.nextRunAt,
       status: input.status,
       timeOfDay: input.timeOfDay,
@@ -352,18 +344,69 @@ export async function claimDueAndroidReviewFetchSchedules(input: {
   });
 }
 
+export function enqueueScheduledAndroidReviewFetchRuns(
+  inputs: Array<{
+    maxAttempts: number;
+    maxResults: number;
+    nextAttemptAt: Date;
+    scheduledFor: Date;
+    sourceScheduleId: string;
+    storeMappingId: string;
+  }>,
+) {
+  if (!inputs.length) return Promise.resolve({ count: 0 });
+
+  return prisma.androidStoreReviewFetchRun.createMany({
+    data: inputs.map((input) => ({
+      maxAttempts: input.maxAttempts,
+      maxResults: input.maxResults,
+      nextAttemptAt: input.nextAttemptAt,
+      scheduledFor: input.scheduledFor,
+      sourceScheduleId: input.sourceScheduleId,
+      status: "PENDING",
+      storeMappingId: input.storeMappingId,
+      triggerType: "SCHEDULED",
+    })),
+    skipDuplicates: true,
+  });
+}
+
+export function markAndroidReviewFetchSchedulesMaterialized(
+  inputs: Array<{
+    nextRunAt: Date;
+    scheduleId: string;
+  }>,
+) {
+  if (!inputs.length) return Promise.resolve([]);
+
+  return prisma.$transaction(
+    inputs.map((input) =>
+      prisma.androidStoreReviewFetchSchedule.update({
+        where: { id: input.scheduleId },
+        data: {
+          lockedAt: null,
+          lockedBy: null,
+          nextRunAt: input.nextRunAt,
+        },
+      }),
+    ),
+  );
+}
+
 export function finishAndroidReviewFetchScheduleRun(
   scheduleId: string,
   input: {
+    errorCode?: string | null;
     errorMessage?: string | null;
     lastRunAt: Date;
     lastStatus: ReviewFetchRunStatus;
-    nextRunAt: Date;
+    nextRunAt?: Date;
   },
 ) {
   return prisma.androidStoreReviewFetchSchedule.update({
     where: { id: scheduleId },
     data: {
+      lastErrorCode: input.errorCode ?? null,
       lastErrorMessage: input.errorMessage ?? null,
       lastRunAt: input.lastRunAt,
       lastStatus: input.lastStatus,
@@ -371,6 +414,190 @@ export function finishAndroidReviewFetchScheduleRun(
       lockedBy: null,
       nextRunAt: input.nextRunAt,
       runCount: { increment: 1 },
+    },
+  });
+}
+
+export async function claimPendingAndroidReviewFetchRuns(input: {
+  limit: number;
+  lockedBy: string;
+  now: Date;
+}) {
+  return prisma.$transaction(async (tx) => {
+    const candidates = await tx.androidStoreReviewFetchRun.findMany({
+      where: {
+        status: "PENDING",
+        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: input.now } }],
+      },
+      orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
+      select: { id: true },
+      take: input.limit,
+    });
+    const ids = candidates.map((candidate) => candidate.id);
+    if (!ids.length) return [];
+
+    await tx.androidStoreReviewFetchRun.updateMany({
+      where: {
+        id: { in: ids },
+        status: "PENDING",
+        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: input.now } }],
+      },
+      data: {
+        attemptCount: { increment: 1 },
+        errorCode: null,
+        errorMessage: null,
+        finishedAt: null,
+        lockedAt: input.now,
+        lockedBy: input.lockedBy,
+        startedAt: input.now,
+        status: "RUNNING",
+      },
+    });
+
+    return tx.androidStoreReviewFetchRun.findMany({
+      where: {
+        id: { in: ids },
+        lockedBy: input.lockedBy,
+        status: "RUNNING",
+      },
+      include: {
+        sourceSchedule: true,
+        storeMapping: true,
+      },
+      orderBy: [{ startedAt: "asc" }],
+    });
+  });
+}
+
+export function retryAndroidReviewFetchRun(
+  runId: string,
+  input: {
+    errorCode: string;
+    errorMessage: string;
+    nextAttemptAt: Date;
+  },
+) {
+  return prisma.androidStoreReviewFetchRun.update({
+    where: { id: runId },
+    data: {
+      errorCode: input.errorCode,
+      errorMessage: input.errorMessage,
+      finishedAt: null,
+      lockedAt: null,
+      lockedBy: null,
+      nextAttemptAt: input.nextAttemptAt,
+      status: "PENDING",
+    },
+  });
+}
+
+export async function recoverStaleAndroidReviewFetchRuns(input: {
+  errorCode: string;
+  errorMessage: string;
+  nextAttemptAt: Date;
+  staleBefore: Date;
+}) {
+  const staleRuns = await prisma.androidStoreReviewFetchRun.findMany({
+    where: {
+      lockedAt: { lt: input.staleBefore },
+      status: "RUNNING",
+    },
+    select: {
+      attemptCount: true,
+      id: true,
+      maxAttempts: true,
+      storeMappingId: true,
+    },
+  });
+  if (!staleRuns.length) {
+    return { failed: 0, retried: 0 };
+  }
+
+  const retryIds = staleRuns
+    .filter((run) => run.attemptCount < run.maxAttempts)
+    .map((run) => run.id);
+  const failedRuns = staleRuns.filter((run) => run.attemptCount >= run.maxAttempts);
+  const failedIds = failedRuns.map((run) => run.id);
+  const failedStoreMappingIds = failedRuns.map((run) => run.storeMappingId);
+
+  await prisma.$transaction([
+    ...(retryIds.length
+      ? [
+          prisma.androidStoreReviewFetchRun.updateMany({
+            where: { id: { in: retryIds } },
+            data: {
+              errorCode: input.errorCode,
+              errorMessage: input.errorMessage,
+              finishedAt: null,
+              lockedAt: null,
+              lockedBy: null,
+              nextAttemptAt: input.nextAttemptAt,
+              status: "PENDING",
+            },
+          }),
+        ]
+      : []),
+    ...(failedIds.length
+      ? [
+          prisma.androidStoreReviewFetchRun.updateMany({
+            where: { id: { in: failedIds } },
+            data: {
+              errorCode: input.errorCode,
+              errorMessage: input.errorMessage,
+              finishedAt: input.nextAttemptAt,
+              lockedAt: null,
+              lockedBy: null,
+              status: "FAILED",
+            },
+          }),
+          prisma.androidStoreReviewSyncState.updateMany({
+            where: { storeMappingId: { in: failedStoreMappingIds } },
+            data: {
+              lastErrorCode: input.errorCode,
+              lastErrorMessage: input.errorMessage,
+              lastFetchFinishedAt: input.nextAttemptAt,
+              lockedAt: null,
+              lockedBy: null,
+              status: "FAILED",
+            },
+          }),
+        ]
+      : []),
+  ]);
+
+  return {
+    failed: failedIds.length,
+    retried: retryIds.length,
+  };
+}
+
+export function recoverStaleAndroidReviewSyncStates(input: {
+  errorCode: string;
+  errorMessage: string;
+  finishedAt: Date;
+  staleBefore: Date;
+}) {
+  return prisma.androidStoreReviewSyncState.updateMany({
+    where: {
+      lockedAt: { lt: input.staleBefore },
+      status: "RUNNING",
+    },
+    data: {
+      lastErrorCode: input.errorCode,
+      lastErrorMessage: input.errorMessage,
+      lastFetchFinishedAt: input.finishedAt,
+      lockedAt: null,
+      lockedBy: null,
+      status: "FAILED",
+    },
+  });
+}
+
+export function deleteOldAndroidReviewFetchRuns(input: { before: Date }) {
+  return prisma.androidStoreReviewFetchRun.deleteMany({
+    where: {
+      createdAt: { lt: input.before },
+      status: { in: ["SUCCEEDED", "FAILED", "PARTIAL"] },
     },
   });
 }
@@ -415,16 +642,22 @@ export function markAndroidReviewSyncRunning(
 }
 
 export function createAndroidReviewFetchRun(input: {
-  maxPages: number;
   maxResults: number;
   startedAt: Date;
   storeMappingId: string;
   triggerType: ReviewFetchTrigger;
+  lockedBy?: string | null;
+  sourceScheduleId?: string | null;
+  scheduledFor?: Date | null;
 }) {
   return prisma.androidStoreReviewFetchRun.create({
     data: {
-      maxPages: input.maxPages,
+      attemptCount: 1,
+      lockedAt: input.lockedBy ? input.startedAt : null,
+      lockedBy: input.lockedBy ?? null,
       maxResults: input.maxResults,
+      scheduledFor: input.scheduledFor ?? null,
+      sourceScheduleId: input.sourceScheduleId ?? null,
       startedAt: input.startedAt,
       status: "RUNNING",
       storeMappingId: input.storeMappingId,
@@ -455,6 +688,8 @@ export function finishAndroidReviewFetchRun(
       pagesFetched: input.pagesFetched,
       reviewsFetched: input.reviewsFetched,
       reviewsUpserted: input.reviewsUpserted,
+      lockedAt: null,
+      lockedBy: null,
       status: input.status,
     },
   });

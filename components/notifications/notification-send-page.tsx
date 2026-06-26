@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Activity, Bell, ChevronRight, Clock3, Languages, Send, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import { PageHeader, StatusBadge } from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
@@ -209,9 +209,9 @@ export function NotificationSendPage({
         })
       );
       setShowLocalizedRows(true);
-      toast.success(`Generated and translated ${payload.notifications.length} language row(s).`);
+      void showToast("success", `Generated and translated ${payload.notifications.length} language row(s).`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Generate failed.");
+      void showToast("error", error instanceof Error ? error.message : "Generate failed.");
     } finally {
       setPendingAction(null);
     }
@@ -219,7 +219,7 @@ export function NotificationSendPage({
 
   async function translateLocalizedCopy() {
     if (!baseTitle.trim() || !baseMessage.trim()) {
-      toast.error("Enter title and content before translating.");
+      void showToast("error", "Enter title and content before translating.");
       return;
     }
 
@@ -258,9 +258,9 @@ export function NotificationSendPage({
         })
       );
       setShowLocalizedRows(true);
-      toast.success(`Translated ${payload.notifications.length} language row(s).`);
+      void showToast("success", `Translated ${payload.notifications.length} language row(s).`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Translate failed.");
+      void showToast("error", error instanceof Error ? error.message : "Translate failed.");
     } finally {
       setPendingAction(null);
     }
@@ -268,14 +268,14 @@ export function NotificationSendPage({
 
   async function sendNow() {
     if (!selectedApps.length) {
-      toast.error("Select at least one app first.");
+      void showToast("error", "Select at least one app first.");
       return;
     }
 
     try {
       validateMessageRows(rowsForDelivery());
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Notification title and content are required.");
+      void showToast("error", error instanceof Error ? error.message : "Notification title and content are required.");
       return;
     }
 
@@ -375,9 +375,9 @@ export function NotificationSendPage({
       const totalCount = summaries.reduce((total, summary) => total + summary.totalCount, 0);
       const failedApps = summaries.filter((summary) => summary.errorCount > 0).length;
       if (failedApps) {
-        toast.error(`Send finished with issues: ${sentCount}/${totalCount} token(s) sent, ${errorCount} failed.`);
+        void showToast("error", `Send finished with issues: ${sentCount}/${totalCount} token(s) sent, ${errorCount} failed.`);
       } else {
-        toast.success(`Send finished: ${sentCount}/${totalCount} token(s) sent.`);
+        void showToast("success", `Send finished: ${sentCount}/${totalCount} token(s) sent.`);
       }
       router.refresh();
     } finally {
@@ -392,14 +392,14 @@ export function NotificationSendPage({
     }
 
     if (!selectedApps.length) {
-      toast.error("Select at least one app first.");
+      void showToast("error", "Select at least one app first.");
       return;
     }
 
     try {
       validateMessageRows(rowsForDelivery());
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Notification title and content are required.");
+      void showToast("error", error instanceof Error ? error.message : "Notification title and content are required.");
       return;
     }
 
@@ -451,13 +451,13 @@ export function NotificationSendPage({
       }
 
       if (errors.length) {
-        toast.error(`${savedSchedules.length} schedule(s) saved, ${errors.length} failed.`);
+        void showToast("error", `${savedSchedules.length} schedule(s) saved, ${errors.length} failed.`);
       } else {
-        toast.success(`${savedSchedules.length} schedule(s) saved.`);
+        void showToast("success", `${savedSchedules.length} schedule(s) saved.`);
       }
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Save schedule failed.");
+      void showToast("error", error instanceof Error ? error.message : "Save schedule failed.");
     } finally {
       setPendingAction(null);
     }

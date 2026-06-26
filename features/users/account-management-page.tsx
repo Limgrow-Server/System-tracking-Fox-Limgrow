@@ -1,12 +1,14 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { Search } from "lucide-react";
-import { toast } from "sonner";
+import dynamic from "next/dynamic";
+import { Plus, Search } from "lucide-react";
+import { showToast } from "@/lib/client/toast";
 
 import { PageHeader } from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -18,9 +20,6 @@ import {
 import type { UsersPageData } from "@/lib/tracking/page-data";
 import type { StaffRole, TeamMember } from "@/lib/tracking/types";
 import { AccountTableFooter } from "./components/account-table-footer";
-import { CreateAccountDialog } from "./components/create-account-dialog";
-import { DeleteAccountDialog } from "./components/delete-account-dialog";
-import { EditAccountDrawer } from "./components/edit-account-drawer";
 import { UserTable } from "./components/user-table";
 import { accountPageSize, roleOptions } from "./constants";
 import type { ManagedAccount } from "./types";
@@ -29,6 +28,19 @@ import {
   isInactiveUser,
   managedAppsForAccount,
 } from "./utils";
+
+const CreateAccountDialog = dynamic(
+  () => import("./components/create-account-dialog").then((mod) => mod.CreateAccountDialog),
+  { loading: () => null },
+);
+const EditAccountDrawer = dynamic(
+  () => import("./components/edit-account-drawer").then((mod) => mod.EditAccountDrawer),
+  { loading: () => null },
+);
+const DeleteAccountDialog = dynamic(
+  () => import("./components/delete-account-dialog").then((mod) => mod.DeleteAccountDialog),
+  { loading: () => null },
+);
 
 type AccountManagementPageProps = {
   data: UsersPageData;
@@ -129,7 +141,7 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
         totalPages: payload.totalPages ?? 1,
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Load users failed.");
+      void showToast("error", error instanceof Error ? error.message : "Load users failed.");
     } finally {
       setLoadingUsers(false);
     }
@@ -168,17 +180,17 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
     const cleanName = name.trim();
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanName || !cleanEmail || !password) {
-      toast.error("Account name, email and password are required.");
+      void showToast("error", "Account name, email and password are required.");
       return;
     }
 
     if (password.length < 6) {
-      toast.error("Password must contain at least 6 characters.");
+      void showToast("error", "Password must contain at least 6 characters.");
       return;
     }
 
     if (role !== "Admin" && !appScope.length) {
-      toast.error("Select at least one app for this user.");
+      void showToast("error", "Select at least one app for this user.");
       return;
     }
 
@@ -199,9 +211,9 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
       resetCreateForm();
       await loadUsersPage(1);
       setDialogOpen(false);
-      toast.success(payload.message ?? "Account created.");
+      void showToast("success", payload.message ?? "Account created.");
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Account could not be created.",
       );
     } finally {
@@ -227,12 +239,12 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
 
     const cleanName = editName.trim();
     if (!cleanName) {
-      toast.error("Account name is required.");
+      void showToast("error", "Account name is required.");
       return;
     }
 
     if (editRole !== "Admin" && !editAppScope.length) {
-      toast.error("Select at least one app for this user.");
+      void showToast("error", "Select at least one app for this user.");
       return;
     }
 
@@ -257,9 +269,9 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
         ),
       );
       setEditAccount(null);
-      toast.success(payload.message ?? "Account updated.");
+      void showToast("success", payload.message ?? "Account updated.");
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Account could not be updated.",
       );
     } finally {
@@ -284,7 +296,7 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
       deleteConfirmEmail.trim().toLowerCase() !==
       deleteAccount.email.toLowerCase()
     ) {
-      toast.error("Email confirmation does not match.");
+      void showToast("error", "Email confirmation does not match.");
       return;
     }
 
@@ -297,9 +309,9 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
           : usersPagination.page,
       );
       closeDeleteAccount();
-      toast.success(payload.message ?? "Account deleted.");
+      void showToast("success", payload.message ?? "Account deleted.");
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Account could not be deleted.",
       );
     } finally {
@@ -330,11 +342,11 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
           item.id === payload.user!.id ? accountFromTeamMember(payload.user!) : item,
         ),
       );
-      toast.success(
+      void showToast("success",
         inactive ? "Account activated." : "Account deactivated.",
       );
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Account status could not be changed.",
       );
     } finally {
@@ -349,29 +361,10 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
         title="User Management"
         description="Manage console access and assign app ownership."
         action={
-          <CreateAccountDialog
-            appOptions={appOptions}
-            appScope={appScope}
-            creating={creating}
-            email={email}
-            name={name}
-            password={password}
-            onAppScopeChange={setAppScope}
-            onEmailChange={setEmail}
-            onNameChange={setName}
-            onOpenChange={(open) => {
-              setDialogOpen(open);
-              if (!open && !creating) resetCreateForm();
-            }}
-            onPasswordChange={setPassword}
-            onRoleChange={(value) => {
-              setRole(value);
-              if (value === "Admin") setAppScope([]);
-            }}
-            onSubmit={submitCreateAccount}
-            open={dialogOpen}
-            role={role}
-          />
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus size={15} />
+            Create account
+          </Button>
         }
       />
 
@@ -463,36 +456,66 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
         </CardContent>
       </Card>
 
-      <EditAccountDrawer
-        account={editAccount}
-        appOptions={appOptions}
-        appScope={editAppScope}
-        email={editEmail}
-        name={editName}
-        onAppScopeChange={setEditAppScope}
-        onNameChange={setEditName}
-        onOpenChange={(open) => {
-          if (!open) setEditAccount(null);
-        }}
-        onRoleChange={(value) => {
-          setEditRole(value);
-          if (value === "Admin") setEditAppScope([]);
-        }}
-        onSubmit={saveEditAccount}
-        role={editRole}
-        saving={savingEdit}
-      />
+      {dialogOpen ? (
+        <CreateAccountDialog
+          appOptions={appOptions}
+          appScope={appScope}
+          creating={creating}
+          email={email}
+          name={name}
+          password={password}
+          onAppScopeChange={setAppScope}
+          onEmailChange={setEmail}
+          onNameChange={setName}
+          onOpenChange={(open) => {
+            setDialogOpen(open);
+            if (!open && !creating) resetCreateForm();
+          }}
+          onPasswordChange={setPassword}
+          onRoleChange={(value) => {
+            setRole(value);
+            if (value === "Admin") setAppScope([]);
+          }}
+          onSubmit={submitCreateAccount}
+          open={dialogOpen}
+          role={role}
+        />
+      ) : null}
 
-      <DeleteAccountDialog
-        account={deleteAccount}
-        confirmEmail={deleteConfirmEmail}
-        deleting={deleting}
-        onConfirm={confirmDeleteAccount}
-        onConfirmEmailChange={setDeleteConfirmEmail}
-        onOpenChange={(open) => {
-          if (!open) closeDeleteAccount();
-        }}
-      />
+      {editAccount ? (
+        <EditAccountDrawer
+          account={editAccount}
+          appOptions={appOptions}
+          appScope={editAppScope}
+          email={editEmail}
+          name={editName}
+          onAppScopeChange={setEditAppScope}
+          onNameChange={setEditName}
+          onOpenChange={(open) => {
+            if (!open) setEditAccount(null);
+          }}
+          onRoleChange={(value) => {
+            setEditRole(value);
+            if (value === "Admin") setEditAppScope([]);
+          }}
+          onSubmit={saveEditAccount}
+          role={editRole}
+          saving={savingEdit}
+        />
+      ) : null}
+
+      {deleteAccount ? (
+        <DeleteAccountDialog
+          account={deleteAccount}
+          confirmEmail={deleteConfirmEmail}
+          deleting={deleting}
+          onConfirm={confirmDeleteAccount}
+          onConfirmEmailChange={setDeleteConfirmEmail}
+          onOpenChange={(open) => {
+            if (!open) closeDeleteAccount();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

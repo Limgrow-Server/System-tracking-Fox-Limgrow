@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
+import dynamic from "next/dynamic";
 import {
   ArrowDownRight,
   ArrowLeft,
@@ -18,17 +18,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import {
   TableEmptyState,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -42,7 +36,12 @@ import type {
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 import type { IosIapTransactionSummary } from "@/lib/tracking/types";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
+
+const IapReceiptDialog = dynamic(
+  () => import("./iap-receipt-dialog").then((mod) => mod.IapReceiptDialog),
+  { loading: () => null },
+);
 
 type IapTransactionListResponse = {
   success?: boolean;
@@ -145,6 +144,73 @@ function transactionRawReceipt(transaction: IapAppTransaction) {
   return isIosTransaction(transaction)
     ? transaction.raw_receipt
     : transaction.rawReceipt;
+}
+
+type JsonRecord = Record<string, unknown>;
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function decodeBase64UrlJson(value: string): unknown {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const json = new TextDecoder().decode(bytes);
+
+  return JSON.parse(json) as unknown;
+}
+
+function decodeJws(jws: string) {
+  const [header, payload] = jws.split(".");
+  if (!header || !payload) return null;
+
+  try {
+    return {
+      header: decodeBase64UrlJson(header),
+      payload: decodeBase64UrlJson(payload),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function signedTransactionInfoFromReceipt(receipt: unknown) {
+  if (!isJsonRecord(receipt)) return null;
+
+  const direct = receipt.signedTransactionInfo;
+  if (typeof direct === "string") return direct;
+
+  const transactionInfoResponse = receipt.transactionInfoResponse;
+  if (isJsonRecord(transactionInfoResponse)) {
+    const nested = transactionInfoResponse.signedTransactionInfo;
+    if (typeof nested === "string") return nested;
+  }
+
+  return null;
+}
+
+function receiptDisplayPayload(receipt: unknown) {
+  if (!isJsonRecord(receipt)) return receipt;
+
+  const existingDecoded =
+    isJsonRecord(receipt.decodedTransactionInfo) ||
+    Array.isArray(receipt.decodedTransactionInfo)
+      ? receipt.decodedTransactionInfo
+      : null;
+  const signedTransactionInfo = signedTransactionInfoFromReceipt(receipt);
+  const decoded = signedTransactionInfo ? decodeJws(signedTransactionInfo) : null;
+  const decodedTransactionInfo = existingDecoded ?? decoded?.payload ?? null;
+
+  if (!decodedTransactionInfo) return receipt;
+
+  return {
+    receiptType: "app_store_server_api_transaction",
+    decodedTransactionInfo,
+    jwsHeader: decoded?.header ?? receipt.jwsHeader ?? null,
+    source: receipt.source ?? "app_store_server_api.get_transaction_info",
+  };
 }
 
 function transactionRevenueValue(transaction: IapAppTransaction) {
@@ -305,7 +371,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         setTransactionStates(payload.transactionStates);
       }
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Load IAP transactions failed.",
@@ -451,13 +517,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     <div className="flex flex-col h-full overflow-hidden bg-muted/10 p-4 sm:p-6 gap-6">
       {/* Breadcrumb */}
       <nav className="flex items-center space-x-2 text-sm text-muted-foreground font-medium shrink-0">
-        <Link
+        <PendingNavigationLink
           href="/iap"
           className="hover:text-foreground transition-colors flex items-center"
         >
           <ArrowLeft className="mr-1.5 h-4 w-4" />
           Apps
-        </Link>
+        </PendingNavigationLink>
         <ChevronRight className="h-4 w-4" />
         <div className="flex items-center gap-2 text-foreground bg-background px-2 py-1 rounded-md border shadow-sm">
           {isIos ? (
@@ -777,34 +843,19 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                       ) : null}
                     </td>
                     <td className="px-4 py-3.5">
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1.5 px-2.5"
-                            onClick={() =>
-                              setSelectedReceipt(transactionRawReceipt(tx))
-                            }
-                          >
-                            <FileJson size={13} />
-                            <span>JSON</span>
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="sm:max-w-4xl max-h-[80vh] flex flex-col p-6">
-                          <DialogHeader className="pb-2 border-b">
-                            <DialogTitle className="flex items-center gap-2">
-                              <FileJson size={18} className="text-primary" />
-                              <span>Receipt Details</span>
-                            </DialogTitle>
-                          </DialogHeader>
-                          <div className="flex-1 overflow-auto mt-4 p-4 rounded-lg bg-zinc-950 font-mono text-xs text-zinc-300 border border-zinc-800">
-                            <pre className="whitespace-pre-wrap">
-                              {JSON.stringify(selectedReceipt, null, 2)}
-                            </pre>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 px-2.5"
+                        onClick={() =>
+                          setSelectedReceipt(
+                            receiptDisplayPayload(transactionRawReceipt(tx)),
+                          )
+                        }
+                      >
+                        <FileJson size={13} />
+                        <span>JSON</span>
+                      </Button>
                     </td>
                   </tr>
                 );
@@ -832,6 +883,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           totalPages={transactionPagination.totalPages}
         />
       </div>
+      {selectedReceipt !== null ? (
+        <IapReceiptDialog
+          receipt={selectedReceipt}
+          onOpenChange={(open) => {
+            if (!open) setSelectedReceipt(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

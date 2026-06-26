@@ -9,7 +9,7 @@ import {
   Mail,
   ShieldCheck,
 } from "lucide-react";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,11 +40,11 @@ export function LoginPage() {
         throw new Error(payload.error ?? "Login failed.");
       }
 
-      toast.success(payload.message ?? "Signed in.");
+      void showToast("success", payload.message ?? "Signed in.");
       router.replace("/dashboard");
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Login failed.");
+      void showToast("error", error instanceof Error ? error.message : "Login failed.");
     } finally {
       setPending(false);
     }

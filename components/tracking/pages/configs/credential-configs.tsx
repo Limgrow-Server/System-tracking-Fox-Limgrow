@@ -26,7 +26,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import {
   PageHeader,
@@ -553,7 +553,7 @@ function SecretContentViewer({
         if (unlockedAfterRetry) await fetchVaultSecret();
       }
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Could not load Vault secret.",
       );
     } finally {
@@ -566,9 +566,9 @@ function SecretContentViewer({
 
     try {
       await navigator.clipboard.writeText(secretText);
-      toast.success("Key copied to clipboard.");
+      void showToast("success", "Key copied to clipboard.");
     } catch {
-      toast.error("Could not copy key.");
+      void showToast("error", "Could not copy key.");
     }
   }
 
@@ -1185,7 +1185,7 @@ export function CredentialConfigs({
         totalPages: payload.totalPages ?? 1,
       });
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Load credential configs failed.",
@@ -1231,7 +1231,7 @@ export function CredentialConfigs({
 
       setSecretOtpEmail(payload.email ?? "");
       setSecretOtpExpiresAt(payload.otpExpiresAt ?? null);
-      toast.success("OTP sent to your email.");
+      void showToast("success", "OTP sent to your email.");
     } catch (error) {
       const message =
         error instanceof Error
@@ -1320,7 +1320,7 @@ export function CredentialConfigs({
       setSecretUnlockExpiresAt(payload.expiresAt ?? null);
       setSecretOtpOpen(false);
       setSecretOtpCode("");
-      toast.success("Credential keys unlocked for 1 hour.");
+      void showToast("success", "Credential keys unlocked for 1 hour.");
       resolveSecretOtpWaiter(true);
     } catch (error) {
       setSecretOtpError(
@@ -1490,14 +1490,14 @@ export function CredentialConfigs({
 
     try {
       await patchCredentialStatus(credential, "android", nextStatus);
-      toast.success(
+      void showToast("success",
         `Android credential has been set to ${credentialStatusLabel(nextStatus)}.`,
       );
       await loadCredentialPage(credentialPagination.page);
       router.refresh();
       setStatusConfirmTarget(null);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Credential status update failed.",
@@ -1519,14 +1519,14 @@ export function CredentialConfigs({
         ),
       );
 
-      toast.success(
+      void showToast("success",
         `iOS credential group has been set to ${credentialStatusLabel(nextStatus)}.`,
       );
       await loadCredentialPage(credentialPagination.page);
       router.refresh();
       setStatusConfirmTarget(null);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Credential status update failed.",
@@ -1585,7 +1585,7 @@ export function CredentialConfigs({
       setHardDeleteTarget(null);
       setHardDeleteConfirmationName("");
       setVaultSecretCache({});
-      toast.success(payload.message ?? "Credential config hard deleted.");
+      void showToast("success", payload.message ?? "Credential config hard deleted.");
       await loadCredentialPage(
         credentialSecrets.length <= ids.length && credentialPagination.page > 1
           ? credentialPagination.page - 1
@@ -1593,7 +1593,7 @@ export function CredentialConfigs({
       );
       router.refresh();
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Credential hard delete failed.",
@@ -1641,7 +1641,7 @@ export function CredentialConfigs({
       !lowerName.endsWith(".json") &&
       file.type !== "application/json"
     ) {
-      toast.error("Google Service Account must be a JSON file.");
+      void showToast("error", "Google Service Account must be a JSON file.");
       return;
     }
 
@@ -1661,13 +1661,13 @@ export function CredentialConfigs({
     } else if (lowerName.endsWith(".p8")) {
       setSecretFormat("p8");
     } else {
-      toast.error(
+      void showToast("error",
         "Credential file must be a JSON service account or Apple .p8 key.",
       );
       return;
     }
 
-    toast.info(`${file.name} selected for secure upload.`);
+    void showToast("info", `${file.name} selected for secure upload.`);
   }
 
   function selectIosSecretFile(
@@ -1677,7 +1677,7 @@ export function CredentialConfigs({
     const lowerName = file.name.toLowerCase();
 
     if ((kind === "review" || kind === "iap") && !lowerName.endsWith(".p8")) {
-      toast.error("Apple keys must be .p8 files.");
+      void showToast("error", "Apple keys must be .p8 files.");
       return;
     }
 
@@ -1686,7 +1686,7 @@ export function CredentialConfigs({
       !lowerName.endsWith(".json") &&
       file.type !== "application/json"
     ) {
-      toast.error("Key firebase-admin must be a JSON file.");
+      void showToast("error", "Key firebase-admin must be a JSON file.");
       return;
     }
 
@@ -1701,7 +1701,7 @@ export function CredentialConfigs({
       if (keyId) setIosIapKeyId(keyId);
     }
     if (kind === "firebase") setIosFirebaseFile(file);
-    toast.info(`${file.name} selected for secure upload.`);
+    void showToast("info", `${file.name} selected for secure upload.`);
   }
 
   async function patchCredentialMetadata(
@@ -1851,7 +1851,7 @@ export function CredentialConfigs({
     setSheetOpen(false);
     resetIosCredentialForm();
     setVaultSecretCache({});
-    toast.success("iOS credential vault has been saved.");
+    void showToast("success", "iOS credential vault has been saved.");
     await loadCredentialPage(credentialPagination.page);
     router.refresh();
   }
@@ -1907,7 +1907,7 @@ export function CredentialConfigs({
         setSecretFile(null);
         setSelectedFileName("");
         setSheetOpen(false);
-        toast.success(payload.message ?? "Credential metadata updated.");
+        void showToast("success", payload.message ?? "Credential metadata updated.");
         await loadCredentialPage(credentialPagination.page);
         router.refresh();
         return;
@@ -1971,11 +1971,11 @@ export function CredentialConfigs({
       setSelectedFileName("");
       setVaultSecretCache({});
       setSheetOpen(false);
-      toast.success(payload.message ?? "Credential operation completed.");
+      void showToast("success", payload.message ?? "Credential operation completed.");
       await loadCredentialPage(selectedCredentialId === "new" ? 1 : credentialPagination.page);
       router.refresh();
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Credential operation failed.",
       );
     } finally {

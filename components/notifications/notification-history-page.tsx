@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
 import { ArrowLeft, BarChart3, ChevronRight, Eye, History, MessageSquareText, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import {
   PageHeader,
@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
@@ -43,10 +44,10 @@ import {
   primaryLocaleRow,
   rateLabel,
 } from "./shared";
-import type { HistoryJobBarChartProps } from "./history-job-bar-chart";
+import type { HistoryJobBarChartProps } from "./notification-charts";
 
 const HistoryJobBarChart = dynamic<HistoryJobBarChartProps>(
-  () => import("./history-job-bar-chart").then((mod) => mod.HistoryJobBarChart),
+  () => import("./notification-charts").then((mod) => mod.HistoryJobBarChart),
   {
     loading: () => <div className="h-full w-full animate-pulse rounded-md bg-muted" />,
     ssr: false,
@@ -368,6 +369,7 @@ export function NotificationHistoryPage({
   initialAppId?: string;
 }) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
   const initialLoadStarted = useRef(false);
   const [storeMappings, setStoreMappings] = useState(data.storeMappings);
   const platformApps = useMemo(() => storeMappings, [storeMappings]);
@@ -408,6 +410,7 @@ export function NotificationHistoryPage({
   const [recordAppFilter, setRecordAppFilter] = useState(resolvedInitialAppId || ALL_FILTER_VALUE);
   const [recordStoreFilter, setRecordStoreFilter] = useState(ALL_FILTER_VALUE);
   const [selectedDeliveryEventId, setSelectedDeliveryEventId] = useState<string | null>(null);
+  const [pendingHistoryJobId, setPendingHistoryJobId] = useState<string | null>(null);
 
   const historyListJobs = notificationJobs;
 
@@ -529,7 +532,7 @@ export function NotificationHistoryPage({
       });
       if (payload.storeOptions) setStoreFilterOptions(payload.storeOptions);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Notification history could not be loaded.",
@@ -570,7 +573,7 @@ export function NotificationHistoryPage({
         totalPages: payload.totalPages ?? 1,
       });
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Delivery events could not be loaded.",
       );
     } finally {
@@ -670,12 +673,22 @@ export function NotificationHistoryPage({
                     const openEvents = notificationOpenEventCount(jobEvents);
                     const impressions = notificationUniqueImpressionCount(jobEvents);
                     const impressionEvents = notificationImpressionEventCount(jobEvents);
+                    const isPending = pendingHistoryJobId === job.id;
 
                     return (
                       <TableRow
                         key={job.id}
-                        className="cursor-pointer transition-colors hover:bg-muted/45"
-                        onClick={() => router.push(`/notifications/history/${job.id}`)}
+                        aria-busy={isPending}
+                        className={cn(
+                          "cursor-pointer transition-colors hover:bg-muted/45",
+                          isPending && "pointer-events-none bg-muted/35",
+                        )}
+                        onClick={() => {
+                          setPendingHistoryJobId(job.id);
+                          startTransition(() => {
+                            router.push(`/notifications/history/${job.id}`);
+                          });
+                        }}
                       >
                         <TableCell className="max-w-96">
                           <div className="flex min-w-0 items-center gap-2">
@@ -714,7 +727,11 @@ export function NotificationHistoryPage({
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{dateTime(job.sent_at ?? job.created_at)}</TableCell>
                         <TableCell>
-                          <ChevronRight size={16} className="text-muted-foreground" />
+                          {isPending ? (
+                            <Spinner className="size-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronRight size={16} className="text-muted-foreground" />
+                          )}
                         </TableCell>
                       </TableRow>
                     );

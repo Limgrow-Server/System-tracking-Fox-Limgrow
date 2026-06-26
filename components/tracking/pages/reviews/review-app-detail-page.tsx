@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -61,6 +60,7 @@ import {
   StatusBadge,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
+import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
 import type {
   AndroidDeviceMetadataDto,
@@ -74,7 +74,7 @@ import type {
   ReviewSyncStateDto,
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 const GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -209,6 +209,98 @@ function fetchDateRangeError(fromDate: string, toDate: string) {
   }
 
   return "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parseEmbeddedJson(value: string) {
+  const jsonStart = value.indexOf("{");
+  if (jsonStart === -1) return null;
+
+  try {
+    return JSON.parse(value.slice(jsonStart)) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function stringValue(value: unknown) {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number") return String(value);
+  return "";
+}
+
+function syncErrorCode(message: string, fallbackCode?: string | null) {
+  const parsed = parseEmbeddedJson(message);
+  const googleError = isRecord(parsed) && isRecord(parsed.error)
+    ? parsed.error
+    : isRecord(parsed)
+      ? parsed
+      : null;
+  const status = stringValue(googleError?.status);
+  const code = stringValue(googleError?.code);
+
+  if (code && status) return `${code} ${status}`;
+  if (status) return status;
+  if (code) return code;
+  if (fallbackCode) return fallbackCode;
+
+  return "FETCH_FAILED";
+}
+
+function formattedRawError(message: string) {
+  const parsed = parseEmbeddedJson(message);
+  return parsed ? JSON.stringify(parsed, null, 2) : message;
+}
+
+function fetchReviewErrorToast(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Reviews could not be fetched.";
+  const code = syncErrorCode(message);
+
+  return code === "FETCH_FAILED"
+    ? "Reviews could not be fetched."
+    : `Reviews could not be fetched: ${code}`;
+}
+
+function RawSyncErrorDialog({ message }: { message: string }) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 border-rose-200 bg-background text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+        >
+          <FileJson size={14} />
+          View raw error
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[80vh] overflow-hidden sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Raw sync error</DialogTitle>
+          <DialogDescription>
+            Full provider error returned by the latest review fetch attempt.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[56vh] overflow-auto rounded-lg border bg-zinc-950 p-4 font-mono text-xs text-zinc-300">
+          <pre className="whitespace-pre-wrap break-words">
+            {formattedRawError(message)}
+          </pre>
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="outline">
+              Close
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function FetchDatePicker({
@@ -368,8 +460,24 @@ function SyncPanel({
         </div>
 
         {data.syncState?.lastErrorMessage ? (
-          <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
-            {data.syncState.lastErrorMessage}
+          <div className="rounded-md border border-rose-200 bg-rose-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="grid gap-1.5">
+                <div className="text-xs font-medium text-rose-700">
+                  Last error
+                </div>
+                <Badge
+                  variant="outline"
+                  className="w-fit border-rose-200 bg-background text-rose-700"
+                >
+                  {syncErrorCode(
+                    data.syncState.lastErrorMessage,
+                    data.syncState.lastErrorCode,
+                  )}
+                </Badge>
+              </div>
+              <RawSyncErrorDialog message={data.syncState.lastErrorMessage} />
+            </div>
           </div>
         ) : null}
 
@@ -762,7 +870,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       if (payload.replyTemplates) setReplyTemplates(payload.replyTemplates);
       if (payload.isMockData !== undefined) setIsMockData(payload.isMockData);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Comments could not be loaded.",
       );
     } finally {
@@ -805,15 +913,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       }
 
       const moreText = payload.result.hasMore ? " More pages are available." : "";
-      toast.success(
+      void showToast("success",
         `Fetched ${payload.result.reviewsFetched ?? 0} reviews, matched ${payload.result.reviewsMatched ?? 0}, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
       );
       await loadReviewPage(1);
       router.refresh();
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Reviews could not be fetched.",
-      );
+      void showToast("error", fetchReviewErrorToast(error));
     } finally {
       setFetchingReviews(false);
     }
@@ -843,10 +949,10 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         throw new Error(payload.error ?? "Reply could not be sent.");
       }
 
-      toast.success(payload.message ?? "Reply sent.");
+      void showToast("success", payload.message ?? "Reply sent.");
       await loadReviewPage(reviewPagination.page);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Reply could not be sent.",
       );
     } finally {
@@ -857,13 +963,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <nav className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        <Link
+        <PendingNavigationLink
           href="/comments"
           className="flex items-center gap-1 transition-colors hover:text-foreground"
         >
           <ArrowLeft size={15} />
           List Apps
-        </Link>
+        </PendingNavigationLink>
         <ChevronRight size={15} />
         <span className="truncate text-foreground">{data.app.appName}</span>
       </nav>

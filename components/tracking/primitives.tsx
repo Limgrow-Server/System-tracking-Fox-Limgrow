@@ -115,7 +115,7 @@ export function StatusBadge({ status }: { status: string | null | undefined }) {
   const tone =
     ["active", "passed", "sent", "delivered", "healthy", "purchased", "renewed", "served", "published", "approved", "fresh", "succeeded"].includes(normalized)
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-      : ["pending", "received", "sending", "grace_period", "warning", "draft", "pending_approval", "paused", "stale", "partial_failed", "sent_with_issues"].includes(normalized)
+      : ["pending", "received", "sending", "grace_period", "warning", "draft", "pending_approval", "paused", "stale", "partial", "retrying", "partial_failed", "sent_with_issues"].includes(normalized)
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : ["failed", "invalid", "expired", "refunded", "revoked", "critical", "blocked", "not_found", "unregistered"].includes(normalized)
           ? "border-rose-200 bg-rose-50 text-rose-700"
@@ -167,6 +167,23 @@ export function EmptyPanel({
   description: string;
   className?: string;
 }) {
+  const isLoading = title.trim().toLowerCase().startsWith("loading");
+
+  if (isLoading) {
+    return (
+      <div
+        aria-busy="true"
+        aria-label={title}
+        className={cn("min-h-40 space-y-3 rounded-lg p-6", className)}
+      >
+        <div className="mx-auto size-10 animate-pulse rounded-lg bg-muted" />
+        <div className="mx-auto h-4 w-40 max-w-full animate-pulse rounded bg-muted" />
+        <div className="mx-auto h-3 w-64 max-w-full animate-pulse rounded bg-muted/70" />
+        <div className="mx-auto h-3 w-52 max-w-full animate-pulse rounded bg-muted/70" />
+      </div>
+    );
+  }
+
   return (
     <Empty className={cn("min-h-40 rounded-none border-0", className)}>
       <EmptyHeader>
@@ -191,6 +208,31 @@ export function TableEmptyState({
   title: string;
   description: string;
 }) {
+  const isLoading = title.trim().toLowerCase().startsWith("loading");
+
+  if (isLoading) {
+    return (
+      <>
+        {Array.from({ length: 5 }).map((_, index) => (
+          <TableRow key={`table-loading-skeleton-${index}`}>
+            <TableCell colSpan={colSpan} className="p-3">
+              <div className="grid animate-pulse gap-3 md:grid-cols-[minmax(12rem,1.6fr)_repeat(4,minmax(5rem,1fr))]">
+                <div className="space-y-2">
+                  <div className="h-4 w-48 max-w-full rounded bg-muted" />
+                  <div className="h-3 w-32 max-w-full rounded bg-muted/70" />
+                </div>
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+      </>
+    );
+  }
+
   return (
     <TableRow>
       <TableCell colSpan={colSpan} className="p-0">

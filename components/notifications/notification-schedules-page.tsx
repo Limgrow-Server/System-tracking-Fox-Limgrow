@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarClock, CheckCircle2, Pause, PencilLine, Play, RefreshCw, Sparkles, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import {
   PageHeader,
@@ -172,7 +172,7 @@ export function NotificationSchedulesPage({
       });
       if (payload.storeOptions) setStoreFilterOptions(payload.storeOptions);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Notification schedules could not be loaded.",
@@ -237,7 +237,7 @@ export function NotificationSchedulesPage({
     try {
       validateMessageRows(enabledEditingRows);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Schedule title and content are required.");
+      void showToast("error", error instanceof Error ? error.message : "Schedule title and content are required.");
       return;
     }
 
@@ -266,9 +266,9 @@ export function NotificationSchedulesPage({
       setSchedules((current) => current.map((schedule) => (schedule.id === payload.schedule!.id ? payload.schedule! : schedule)));
       await loadSchedulesPage(schedulePagination.page);
       setEditingSchedule(null);
-      toast.success("Schedule updated.");
+      void showToast("success", "Schedule updated.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Update schedule content failed.");
+      void showToast("error", error instanceof Error ? error.message : "Update schedule content failed.");
     } finally {
       setPendingAction(null);
     }
@@ -286,10 +286,10 @@ export function NotificationSchedulesPage({
       });
       const payload = (await response.json()) as { ok?: boolean; error?: string; result?: { total?: number } };
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Dispatch failed.");
-      toast.success(`Dispatcher processed ${payload.result?.total ?? 0} schedule(s).`);
+      void showToast("success", `Dispatcher processed ${payload.result?.total ?? 0} schedule(s).`);
       await loadSchedulesPage(schedulePagination.page);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Dispatch failed.");
+      void showToast("error", error instanceof Error ? error.message : "Dispatch failed.");
     } finally {
       setPendingAction(null);
     }
@@ -309,9 +309,9 @@ export function NotificationSchedulesPage({
       if (!response.ok || !payload.ok || !payload.schedule) throw new Error(payload.error ?? "Update schedule failed.");
       setSchedules((current) => current.map((item) => (item.id === payload.schedule!.id ? payload.schedule! : item)));
       await loadSchedulesPage(schedulePagination.page);
-      toast.success(payload.message ?? "Schedule updated.");
+      void showToast("success", payload.message ?? "Schedule updated.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Update schedule failed.");
+      void showToast("error", error instanceof Error ? error.message : "Update schedule failed.");
     } finally {
       setPendingAction(null);
     }
@@ -336,10 +336,10 @@ export function NotificationSchedulesPage({
           ? schedulePagination.page - 1
           : schedulePagination.page,
       );
-      toast.success("Schedule deleted.");
+      void showToast("success", "Schedule deleted.");
     } catch (error) {
       setSchedules(previous);
-      toast.error(error instanceof Error ? error.message : "Delete schedule failed.");
+      void showToast("error", error instanceof Error ? error.message : "Delete schedule failed.");
     } finally {
       setPendingAction(null);
     }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import {
   ArrowLeft,
   Globe,
@@ -14,7 +13,7 @@ import {
   Smartphone,
   Star,
 } from "lucide-react";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +30,7 @@ import {
   StatusBadge,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
+import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
 import type {
   PaginationMeta,
@@ -365,7 +365,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
       setDrafts(draftsForApps(payload.data, nextTemplates));
       setSelectedAppId(payload.data[0]?.mappingId ?? "");
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Reply apps could not be loaded.",
       );
     } finally {
@@ -401,7 +401,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         templatesByMappingId[selectedApp.mappingId] ??
         defaultTemplates(selectedApp.mappingId),
     }));
-    toast.success("Reply templates reset.");
+    void showToast("success", "Reply templates reset.");
   }
 
   async function saveStoreInfo() {
@@ -431,9 +431,9 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         supportPhone: payload.store.supportPhone ?? "",
         websiteUrl: payload.store.websiteUrl ?? "",
       });
-      toast.success(payload.message ?? "Store info saved.");
+      void showToast("success", payload.message ?? "Store info saved.");
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Store info could not be saved.",
       );
     } finally {
@@ -448,7 +448,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
       (template) => template.isActive && !template.replyText.trim(),
     );
     if (invalidTemplate) {
-      toast.error(`${ratingLabel(invalidTemplate.rating)} template needs text.`);
+      void showToast("error", `${ratingLabel(invalidTemplate.rating)} template needs text.`);
       return;
     }
 
@@ -481,9 +481,9 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         ...current,
         [selectedApp.mappingId]: payload.templates!,
       }));
-      toast.success(payload.message ?? "Reply templates saved.");
+      void showToast("success", payload.message ?? "Reply templates saved.");
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Reply templates could not be saved.",
@@ -514,13 +514,13 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <nav className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        <Link
+        <PendingNavigationLink
           href="/reply"
           className="flex items-center gap-1 transition-colors hover:text-foreground"
         >
           <ArrowLeft size={15} />
           Stores
-        </Link>
+        </PendingNavigationLink>
         <span className="text-muted-foreground">/</span>
         <span className="truncate text-foreground">
           {data.store.storeAccountName}

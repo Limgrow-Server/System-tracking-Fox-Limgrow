@@ -34,10 +34,10 @@ import type {
   StoreMapping,
 } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
-import type { DeliveryLineChartProps } from "./delivery-line-chart";
+import type { DeliveryLineChartProps } from "./notification-charts";
 
 const DeliveryLineChart = dynamic<DeliveryLineChartProps>(
-  () => import("./delivery-line-chart").then((mod) => mod.DeliveryLineChart),
+  () => import("./notification-charts").then((mod) => mod.DeliveryLineChart),
   {
     loading: () => <div className="h-full w-full animate-pulse rounded-md bg-muted" />,
     ssr: false,
