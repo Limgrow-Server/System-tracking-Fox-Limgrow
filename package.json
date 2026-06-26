@@ -7,7 +7,7 @@
     "dev:debug": "next dev --inspect",
     "prebuild": "prisma generate --schema prisma",
     "build": "next build",
-    "start": "next start",
+    "start": "next start && tsx scripts/review-fetch-cron.ts",
     "lint": "eslint",
     "check": "npm run lint --if-present && npm run typecheck --if-present && npm run test --if-present && npm run build",
     "prepare": "husky",
