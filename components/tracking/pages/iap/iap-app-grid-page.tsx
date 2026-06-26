@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   Apple,
@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Command,
   CommandEmpty,
@@ -49,6 +50,7 @@ type IapAppListResponse = {
 
 export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
   const [apps, setApps] = useState(data.apps);
   const [pagination, setPagination] = useState(data.appPagination);
   const [searchQuery, setSearchQuery] = useState(data.filters.search);
@@ -59,6 +61,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
   const [loading, setLoading] = useState(false);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [openStoreCombobox, setOpenStoreCombobox] = useState(false);
+  const [pendingMappingId, setPendingMappingId] = useState<string | null>(null);
 
   async function loadAppsPage(
     page: number,
@@ -113,6 +116,13 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
     setSelectedStore(nextValue);
     setOpenStoreCombobox(false);
     void loadAppsPage(1, { selectedStore: nextValue });
+  }
+
+  function openAppDetail(app: IapAppCard) {
+    setPendingMappingId(app.mappingId);
+    startTransition(() => {
+      router.push(`/iap/${app.mappingId}?platform=${app.platform}`);
+    });
   }
 
   const tableStartIndex = (pagination.page - 1) * pagination.pageSize;
@@ -211,80 +221,96 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
               </Card>
             </li>
           ))
-        ) : apps.map((app) => (
-            <li key={app.mappingId}>
-              <Card
-                className="hover:bg-muted/50 transition-colors h-full cursor-pointer"
-                onClick={() =>
-                  router.push(`/iap/${app.mappingId}?platform=${app.platform}`)
-                }
-              >
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <Avatar className="h-10 w-10 border rounded-lg">
-                    {app.appIconUrl ? (
-                      <AvatarImage
-                        src={app.appIconUrl}
-                        alt={app.appName}
-                        className="rounded-lg"
-                      />
-                    ) : null}
-                    <AvatarFallback className="text-xs rounded-lg">
-                      {app.appName.substring(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div>
-                    {app.platform === "ios" ? (
-                      <Badge
-                        variant="outline"
-                        className="border-zinc-200 bg-zinc-50 text-zinc-700 gap-1.5 text-sm px-2.5 py-1"
-                      >
-                        <Apple size={16} />
-                        iOS
-                      </Badge>
-                    ) : (
-                      <Badge
-                        variant="outline"
-                        className="border-emerald-200 bg-emerald-50 text-emerald-700 gap-1.5 text-sm px-2.5 py-1"
-                      >
-                        <Smartphone size={16} />
-                        Android
-                      </Badge>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-center gap-2">
-                    <CardTitle
-                      className="text-lg line-clamp-1 flex-1"
-                      title={app.appName}
-                    >
-                      {app.appName}
-                    </CardTitle>
-                    {app.appLink && (
-                      <a
-                        href={app.appLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={app.appLink}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <Button
+        ) : (
+          apps.map((app) => {
+            const isPending = pendingMappingId === app.mappingId;
+
+            return (
+              <li key={app.mappingId}>
+                <Card
+                  aria-busy={isPending}
+                  className={cn(
+                    "relative h-full cursor-pointer transition-colors hover:bg-muted/50",
+                    isPending &&
+                      "pointer-events-none border-primary/50 bg-muted/30",
+                  )}
+                  onClick={() => openAppDetail(app)}
+                >
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <Avatar className="h-10 w-10 border rounded-lg">
+                      {app.appIconUrl ? (
+                        <AvatarImage
+                          src={app.appIconUrl}
+                          alt={app.appName}
+                          className="rounded-lg"
+                        />
+                      ) : null}
+                      <AvatarFallback className="text-xs rounded-lg">
+                        {app.appName.substring(0, 2).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      {app.platform === "ios" ? (
+                        <Badge
                           variant="outline"
-                          size="icon"
-                          className="h-8 w-8 shrink-0"
-                          asChild
+                          className="border-zinc-200 bg-zinc-50 text-zinc-700 gap-1.5 text-sm px-2.5 py-1"
                         >
-                          <span>
-                            <Link2 size={16} />
-                          </span>
-                        </Button>
-                      </a>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </li>
-          ))}
+                          <Apple size={16} />
+                          iOS
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className="border-emerald-200 bg-emerald-50 text-emerald-700 gap-1.5 text-sm px-2.5 py-1"
+                        >
+                          <Smartphone size={16} />
+                          Android
+                        </Badge>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center gap-2">
+                      <CardTitle
+                        className="text-lg line-clamp-1 flex-1"
+                        title={app.appName}
+                      >
+                        {app.appName}
+                      </CardTitle>
+                      {app.appLink && (
+                        <a
+                          href={app.appLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={app.appLink}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            asChild
+                          >
+                            <span>
+                              <Link2 size={16} />
+                            </span>
+                          </Button>
+                        </a>
+                      )}
+                    </div>
+                  </CardContent>
+                  {isPending ? (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-[1px]">
+                      <div className="flex size-10 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm">
+                        <Spinner />
+                      </div>
+                    </div>
+                  ) : null}
+                </Card>
+              </li>
+            );
+          })
+        )}
         {!loading && apps.length === 0 && (
           <div className="col-span-full py-12 text-center text-muted-foreground">
             No applications found matching your criteria.

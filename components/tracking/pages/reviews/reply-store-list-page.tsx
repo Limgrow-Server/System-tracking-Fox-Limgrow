@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronRight,
@@ -14,12 +14,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import {
   EmptyPanel,
   PageHeader,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { compactNumber } from "@/lib/tracking/format";
+import { cn } from "@/lib/utils";
 import type {
   PaginationMeta,
   ReplyStoreListPageData,
@@ -27,13 +29,23 @@ import type {
 } from "@/lib/tracking/page-data";
 import { toast } from "sonner";
 
-function StoreCard({ store }: { store: ReplyStoreSummary }) {
-  const router = useRouter();
-
+function StoreCard({
+  isPending,
+  onOpen,
+  store,
+}: {
+  isPending: boolean;
+  onOpen: () => void;
+  store: ReplyStoreSummary;
+}) {
   return (
     <Card
-      className="h-full cursor-pointer gap-0 rounded-lg py-0 transition hover:bg-muted/40"
-      onClick={() => router.push(`/reply/${store.storeProfileId}`)}
+      aria-busy={isPending}
+      className={cn(
+        "relative h-full cursor-pointer gap-0 rounded-lg py-0 transition hover:bg-muted/40",
+        isPending && "pointer-events-none border-primary/50 bg-muted/30",
+      )}
+      onClick={onOpen}
     >
       <CardHeader className="flex items-center justify-between gap-4 p-4">
         <div className="flex min-w-0 items-center gap-3">
@@ -90,6 +102,13 @@ function StoreCard({ store }: { store: ReplyStoreSummary }) {
           </div>
         </div>
       </CardHeader>
+      {isPending ? (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-[1px]">
+          <div className="flex size-10 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm">
+            <Spinner />
+          </div>
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -105,11 +124,16 @@ type ReplyStoresResponse = {
 };
 
 export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
   const [stores, setStores] = useState(data.stores);
   const [storePagination, setStorePagination] =
     useState<PaginationMeta>(data.storePagination);
   const [search, setSearch] = useState(data.filters.search);
   const [loadingStores, setLoadingStores] = useState(false);
+  const [pendingStoreProfileId, setPendingStoreProfileId] = useState<
+    string | null
+  >(null);
 
   async function loadStoresPage(page: number, nextSearch = search) {
     const params = new URLSearchParams({
@@ -143,6 +167,13 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
     } finally {
       setLoadingStores(false);
     }
+  }
+
+  function openStoreConfig(store: ReplyStoreSummary) {
+    setPendingStoreProfileId(store.storeProfileId);
+    startTransition(() => {
+      router.push(`/reply/${store.storeProfileId}`);
+    });
   }
 
   return (
@@ -183,7 +214,12 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
       {stores.length ? (
         <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
           {stores.map((store) => (
-            <StoreCard key={store.storeProfileId} store={store} />
+            <StoreCard
+              key={store.storeProfileId}
+              isPending={pendingStoreProfileId === store.storeProfileId}
+              onOpen={() => openStoreConfig(store)}
+              store={store}
+            />
           ))}
         </div>
       ) : (

@@ -38,6 +38,7 @@ enum ReviewSyncStatus {
 }
 
 enum ReviewFetchRunStatus {
+  PENDING   @map("pending")
   RUNNING   @map("running")
   SUCCEEDED @map("succeeded")
   FAILED    @map("failed")

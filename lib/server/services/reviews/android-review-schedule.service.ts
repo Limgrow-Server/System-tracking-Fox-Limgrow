@@ -11,28 +11,40 @@ import type {
 import { badRequest, notFound } from "@/lib/server/api/errors";
 import {
   claimDueAndroidReviewFetchSchedules,
+  claimPendingAndroidReviewFetchRuns,
   deleteAndroidReviewFetchSchedule,
   deleteAndroidReviewFetchSchedules,
+  deleteOldAndroidReviewFetchRuns,
+  enqueueScheduledAndroidReviewFetchRuns,
   finishAndroidReviewFetchScheduleRun,
   getActiveAndroidReviewMappings,
   getAndroidReviewFetchSchedule,
   getAndroidReviewFetchSchedules,
   getAndroidReviewMappingById,
+  markAndroidReviewFetchSchedulesMaterialized,
+  recoverStaleAndroidReviewFetchRuns,
+  recoverStaleAndroidReviewSyncStates,
+  retryAndroidReviewFetchRun,
   updateAndroidReviewFetchScheduleStatuses,
   updateAndroidReviewFetchScheduleStatus,
   upsertAndroidReviewFetchSchedule,
   upsertAndroidReviewFetchSchedules,
 } from "@/lib/server/repositories/reviews/android-review.repository";
 import { cleanText } from "@/lib/server/services/credentials/credential.shared";
-import { fetchAndroidStoreReviews } from "@/lib/server/services/reviews/android-review-fetch.service";
+import { processClaimedAndroidReviewFetchRun } from "@/lib/server/services/reviews/android-review-fetch.service";
 import type { ReviewFetchScheduleDto } from "@/lib/tracking/page-data";
 
 const DEFAULT_REVIEW_FETCH_TIME = "09:00";
 const DEFAULT_REVIEW_FETCH_TIMEZONE = "Asia/Ho_Chi_Minh";
 const SCHEDULED_REVIEW_FETCH_LOOKBACK_DAYS = 2;
-const SCHEDULED_REVIEW_FETCH_MAX_PAGES = 0;
 const SCHEDULED_REVIEW_FETCH_MAX_RESULTS = 100;
+const SCHEDULED_REVIEW_FETCH_MAX_ATTEMPTS = 3;
 const SCHEDULE_LOCK_TTL_MS = 15 * 60 * 1000;
+const RUN_LOCK_TTL_MS = 15 * 60 * 1000;
+const FETCH_RUN_RETENTION_DAYS = 7;
+const REVIEW_FETCH_WORKER_CONCURRENCY = 5;
+const REVIEW_FETCH_WORKER_MAX_BATCHES = 10;
+const RETRY_DELAY_MS = 5 * 60 * 1000;
 
 type TimeZoneDateParts = {
   day: number;
@@ -246,12 +258,10 @@ export function reviewFetchScheduleDto(
 
   return {
     id: schedule.id,
+    lastErrorCode: schedule.lastErrorCode,
     lastErrorMessage: schedule.lastErrorMessage,
     lastRunAt: iso(schedule.lastRunAt),
     lastStatus: schedule.lastStatus ? schedule.lastStatus.toLowerCase() : null,
-    lookbackDays: schedule.lookbackDays,
-    maxPages: schedule.maxPages,
-    maxResults: schedule.maxResults,
     nextRunAt: schedule.nextRunAt.toISOString(),
     runCount: schedule.runCount,
     scheduleType: schedule.scheduleType,
@@ -269,9 +279,6 @@ function normalizeScheduleSettings(payload: SaveReviewFetchSchedulePayload) {
   const timezone = normalizeTimezone(payload.timezone);
 
   return {
-    lookbackDays: SCHEDULED_REVIEW_FETCH_LOOKBACK_DAYS,
-    maxPages: SCHEDULED_REVIEW_FETCH_MAX_PAGES,
-    maxResults: SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
     status: normalizeScheduleStatus(payload.status),
     timeOfDay,
     timezone,
@@ -313,9 +320,6 @@ export async function saveReviewFetchSchedule(
 
   const schedule = await upsertAndroidReviewFetchSchedule({
     createdBy: authEmail,
-    lookbackDays: normalized.lookbackDays,
-    maxPages: normalized.maxPages,
-    maxResults: normalized.maxResults,
     nextRunAt: nextDailyReviewFetchRunAt(
       normalized.timeOfDay,
       normalized.timezone,
@@ -348,9 +352,6 @@ export async function saveAllReviewFetchSchedules(
   const schedules = await upsertAndroidReviewFetchSchedules(
     mappings.map((mapping) => ({
       createdBy: authEmail,
-      lookbackDays: normalized.lookbackDays,
-      maxPages: normalized.maxPages,
-      maxResults: normalized.maxResults,
       nextRunAt,
       status: normalized.status,
       storeMappingId: mapping.id,
@@ -451,81 +452,229 @@ function resultStatus(value: string): ReviewFetchRunStatus {
   return "FAILED";
 }
 
-export async function runDueReviewFetchSchedules() {
-  const now = new Date();
-  const lockedBy = `review-fetch-cron-${randomUUID()}`;
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function retryableReviewFetchError(error: unknown) {
+  const message = errorMessage(error, "").toLowerCase();
+  if (
+    message.includes("permission_denied") ||
+    message.includes("service_disabled") ||
+    message.includes("invalid") ||
+    message.includes("not found")
+  ) {
+    return false;
+  }
+
+  return (
+    message.includes("429") ||
+    message.includes("rate") ||
+    message.includes("timeout") ||
+    message.includes("timed out") ||
+    message.includes("temporarily") ||
+    message.includes("unavailable") ||
+    message.includes("500") ||
+    message.includes("502") ||
+    message.includes("503") ||
+    message.includes("504")
+  );
+}
+
+async function materializeDueReviewFetchSchedules(now: Date) {
+  const lockedBy = `review-fetch-scheduler-${randomUUID()}`;
   const schedules = await claimDueAndroidReviewFetchSchedules({
     lockedBy,
     lockStaleBefore: new Date(now.getTime() - SCHEDULE_LOCK_TTL_MS),
     now,
   });
-  const processed = [];
+  if (!schedules.length) {
+    return {
+      claimed: 0,
+      enqueued: 0,
+      schedules: [],
+    };
+  }
 
-  for (const schedule of schedules) {
-    const startedAt = new Date();
-    const nextRunAt = nextDailyReviewFetchRunAt(
-      schedule.timeOfDay,
-      schedule.timezone,
-      startedAt,
-    );
+  const jobs = schedules.map((schedule) => ({
+    maxAttempts: SCHEDULED_REVIEW_FETCH_MAX_ATTEMPTS,
+    maxResults: SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
+    nextAttemptAt: now,
+    scheduledFor: schedule.nextRunAt,
+    sourceScheduleId: schedule.id,
+    storeMappingId: schedule.storeMappingId,
+  }));
+  const enqueueResult = await enqueueScheduledAndroidReviewFetchRuns(jobs);
 
-    try {
-      const dateWindow = reviewFetchDateWindow({
-        lookbackDays: SCHEDULED_REVIEW_FETCH_LOOKBACK_DAYS,
-        now: startedAt,
-        timeZone: schedule.timezone,
-      });
-      const result = await fetchAndroidStoreReviews({
-        fetchAllPages: true,
-        fromDate: dateWindow.fromDate,
-        maxResults: SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
-        storeMappingId: schedule.storeMappingId,
-        timezoneOffsetMinutes: dateWindow.timezoneOffsetMinutes,
-        toDate: dateWindow.toDate,
-        triggerType: "scheduled",
-      });
-      const lastStatus = resultStatus(result.status);
+  await markAndroidReviewFetchSchedulesMaterialized(
+    schedules.map((schedule) => ({
+      nextRunAt: nextDailyReviewFetchRunAt(
+        schedule.timeOfDay,
+        schedule.timezone,
+        now,
+      ),
+      scheduleId: schedule.id,
+    })),
+  );
 
-      await finishAndroidReviewFetchScheduleRun(schedule.id, {
+  return {
+    claimed: schedules.length,
+    enqueued: enqueueResult.count,
+    schedules: schedules.map((schedule) => ({
+      appName: schedule.storeMapping.appName,
+      nextRunAt: nextDailyReviewFetchRunAt(
+        schedule.timeOfDay,
+        schedule.timezone,
+        now,
+      ).toISOString(),
+      packageName: schedule.storeMapping.packageName,
+      scheduleId: schedule.id,
+      scheduledFor: schedule.nextRunAt.toISOString(),
+      storeMappingId: schedule.storeMappingId,
+    })),
+  };
+}
+
+async function processReviewFetchJob(
+  run: Awaited<ReturnType<typeof claimPendingAndroidReviewFetchRuns>>[number],
+) {
+  const startedAt = run.startedAt ?? new Date();
+  const schedule = run.sourceSchedule;
+  const timeZone = schedule?.timezone ?? DEFAULT_REVIEW_FETCH_TIMEZONE;
+  const dateWindow = reviewFetchDateWindow({
+    lookbackDays: SCHEDULED_REVIEW_FETCH_LOOKBACK_DAYS,
+    now: startedAt,
+    timeZone,
+  });
+
+  try {
+    const result = await processClaimedAndroidReviewFetchRun(run, {
+      fetchAllPages: true,
+      fromDate: dateWindow.fromDate,
+      maxResults: run.maxResults || SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
+      timezoneOffsetMinutes: dateWindow.timezoneOffsetMinutes,
+      toDate: dateWindow.toDate,
+    });
+    const lastStatus = resultStatus(result.status);
+
+    if (run.sourceScheduleId) {
+      await finishAndroidReviewFetchScheduleRun(run.sourceScheduleId, {
         lastRunAt: startedAt,
         lastStatus,
-        nextRunAt,
+      });
+    }
+
+    return {
+      appName: run.storeMapping.appName,
+      dateWindow,
+      packageName: run.storeMapping.packageName,
+      result,
+      runId: run.id,
+      scheduleId: run.sourceScheduleId,
+      status: lastStatus.toLowerCase(),
+      storeMappingId: run.storeMappingId,
+    };
+  } catch (error) {
+    const message = errorMessage(error, "Scheduled review fetch failed.");
+    const canRetry =
+      retryableReviewFetchError(error) && run.attemptCount < run.maxAttempts;
+
+    if (canRetry) {
+      const nextAttemptAt = new Date(Date.now() + RETRY_DELAY_MS);
+      await retryAndroidReviewFetchRun(run.id, {
+        errorCode: "fetch_google_play_reviews_retry",
+        errorMessage: message,
+        nextAttemptAt,
       });
 
-      processed.push({
-        appName: schedule.storeMapping.appName,
-        dateWindow,
-        packageName: schedule.storeMapping.packageName,
-        result,
-        scheduleId: schedule.id,
-        status: lastStatus.toLowerCase(),
-        storeMappingId: schedule.storeMappingId,
-      });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Scheduled review fetch failed.";
+      return {
+        appName: run.storeMapping.appName,
+        error: message,
+        nextAttemptAt: nextAttemptAt.toISOString(),
+        packageName: run.storeMapping.packageName,
+        runId: run.id,
+        scheduleId: run.sourceScheduleId,
+        status: "retrying",
+        storeMappingId: run.storeMappingId,
+      };
+    }
 
-      await finishAndroidReviewFetchScheduleRun(schedule.id, {
+    if (run.sourceScheduleId) {
+      await finishAndroidReviewFetchScheduleRun(run.sourceScheduleId, {
+        errorCode: "fetch_google_play_reviews_failed",
         errorMessage: message,
         lastRunAt: startedAt,
         lastStatus: "FAILED",
-        nextRunAt,
-      });
-
-      processed.push({
-        appName: schedule.storeMapping.appName,
-        error: message,
-        packageName: schedule.storeMapping.packageName,
-        scheduleId: schedule.id,
-        status: "failed",
-        storeMappingId: schedule.storeMappingId,
       });
     }
+
+    return {
+      appName: run.storeMapping.appName,
+      error: message,
+      packageName: run.storeMapping.packageName,
+      runId: run.id,
+      scheduleId: run.sourceScheduleId,
+      status: "failed",
+      storeMappingId: run.storeMappingId,
+    };
+  }
+}
+
+async function runPendingReviewFetchJobs() {
+  const processed = [];
+  let claimed = 0;
+
+  for (let batch = 0; batch < REVIEW_FETCH_WORKER_MAX_BATCHES; batch += 1) {
+    const now = new Date();
+    const lockedBy = `review-fetch-worker-${randomUUID()}`;
+    const jobs = await claimPendingAndroidReviewFetchRuns({
+      limit: REVIEW_FETCH_WORKER_CONCURRENCY,
+      lockedBy,
+      now,
+    });
+    if (!jobs.length) break;
+
+    claimed += jobs.length;
+    processed.push(...(await Promise.all(jobs.map(processReviewFetchJob))));
   }
 
   return {
-    checkedAt: now.toISOString(),
-    claimed: schedules.length,
+    claimed,
     processed,
+  };
+}
+
+export async function runDueReviewFetchSchedules() {
+  const now = new Date();
+  const staleRuns = await recoverStaleAndroidReviewFetchRuns({
+    errorCode: "stale_review_fetch_lock",
+    errorMessage: "Review fetch worker lock expired before the job finished.",
+    nextAttemptAt: now,
+    staleBefore: new Date(now.getTime() - RUN_LOCK_TTL_MS),
+  });
+  const staleSyncStates = await recoverStaleAndroidReviewSyncStates({
+    errorCode: "stale_review_fetch_sync_state",
+    errorMessage: "Review fetch sync state lock expired before cleanup finished.",
+    finishedAt: now,
+    staleBefore: new Date(now.getTime() - RUN_LOCK_TTL_MS),
+  });
+  const materialized = await materializeDueReviewFetchSchedules(now);
+  const worker = await runPendingReviewFetchJobs();
+  const retention = await deleteOldAndroidReviewFetchRuns({
+    before: new Date(now.getTime() - FETCH_RUN_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+  });
+
+  return {
+    checkedAt: now.toISOString(),
+    materialized,
+    retention: {
+      deleted: retention.count,
+      days: FETCH_RUN_RETENTION_DAYS,
+    },
+    stale: {
+      runs: staleRuns,
+      syncStates: staleSyncStates.count,
+    },
+    worker,
   };
 }
