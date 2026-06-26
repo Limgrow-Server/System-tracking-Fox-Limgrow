@@ -1,6 +1,3 @@
--- Add queue-ready status for scheduled review fetch jobs.
-ALTER TYPE "review_fetch_run_status" ADD VALUE IF NOT EXISTS 'pending' BEFORE 'running';
-
 -- Convert review fetch runs from a pure execution log into a queue + log table.
 ALTER TABLE "android_store_review_fetch_runs"
 ADD COLUMN IF NOT EXISTS "source_schedule_id" UUID,
