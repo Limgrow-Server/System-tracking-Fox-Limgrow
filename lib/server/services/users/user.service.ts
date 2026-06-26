@@ -21,6 +21,7 @@ import {
 } from "@/lib/server/repositories/auth/team-member.repository";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { normalizeScopeKey, normalizeScopeList } from "@/lib/tracking/identity";
 import type { StaffRole, TeamMember } from "@/lib/tracking/types";
 
 export type UserPayload = {
@@ -39,7 +40,7 @@ const roles = new Set<StaffRole>(["Admin", "Dev", "Marketing"]);
 const statuses = new Set<TeamMember["status"]>(["active", "invited", "suspended", "disabled"]);
 
 function arrayScope(value: unknown) {
-  return Array.isArray(value) ? value.map(cleanText).filter(Boolean) : [];
+  return normalizeScopeList(value);
 }
 
 function accessForRole(role: StaffRole, payload: UserPayload) {
@@ -132,11 +133,11 @@ export async function getConsoleUsersPage(
   },
 ) {
   const [users, total] = await getTeamMembersPage({
-    appScopeKey: options.appScopeKey,
+    appScopeKey: normalizeScopeKey(options.appScopeKey),
     role: options.role ? staffRoleToPrismaRole[options.role] : undefined,
     search: options.search,
     skip: options.skip,
-    storeScopeKey: options.storeScopeKey,
+    storeScopeKey: normalizeScopeKey(options.storeScopeKey),
     take: options.take,
   });
 

@@ -22,6 +22,7 @@ import {
   deviceTokenToTracking,
   notificationScheduleToTracking,
 } from "@/lib/tracking/mappers/notification";
+import { firstAppId } from "@/lib/tracking/identity";
 
 const LANGUAGES = [
   { topicCode: "zh", label: "Chinese" },
@@ -76,7 +77,7 @@ function errorForLog(error: unknown) {
 
 function notificationRequestContext(body: Record<string, unknown>) {
   return {
-    appId: clean(body.appId) || clean(body.productAppId) || null,
+    appId: firstAppId(body.appId, body.productAppId),
     appName: clean(body.appName) || null,
     bundleId: clean(body.bundleId) || null,
     deviceIdsCount: stringArray(body.deviceIds || body.targetValues).length,
@@ -299,12 +300,21 @@ async function callEdgeFunction(functionName: string, body: Record<string, unkno
     const results = Array.isArray(result?.results) ? result.results as Array<Record<string, unknown>> : [];
     logNotificationFailure("Edge Function completed with failed notification targets", {
       context,
+      credentialProjectId: clean(result?.projectId) || null,
+      credentialRef: clean(result?.credentialRef) || null,
       errorCount,
       failedTargets: results
         .filter((item) => item && item.ok === false)
         .slice(0, 20)
         .map((item) => ({
+          credentialProjectId: clean(item.credentialProjectId) || null,
+          deviceAppId: clean(item.deviceAppId) || null,
+          deviceAppIdentifier: clean(item.deviceAppIdentifier) || null,
+          deviceBundleId: clean(item.deviceBundleId) || null,
+          deviceFirebaseProjectId: clean(item.deviceFirebaseProjectId) || null,
           deviceId: clean(item.deviceId) || null,
+          devicePackageName: clean(item.devicePackageName) || null,
+          deviceProductAppId: clean(item.deviceProductAppId) || null,
           error: clean(item.error) || null,
           fcmErrorCode: clean(item.fcmErrorCode) || null,
           status: Number(item.status ?? 0) || null,
@@ -635,9 +645,10 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
     }
 
     const firstNotification = primaryNotification(notifications);
+    const appId = firstAppId(payload.appId, payload.productAppId, payload.appName);
     const schedule = await prisma.notificationSchedule.create({
       data: {
-        appId: clean(payload.appId) || clean(payload.productAppId) || clean(payload.appName) || null,
+        appId,
         appName: clean(payload.appName) || clean(payload.productAppId) || "unknown_app",
         bundleId: clean(payload.bundleId) || null,
         credentialRef: clean(payload.credentialRef) || null,
@@ -793,7 +804,8 @@ export async function handleAdminNotificationTestDevicePost(request: Request) {
     await assertNotificationAccess(session, payload);
     const platform = clean(payload.platform) || "android";
     const deviceId = clean(payload.deviceId) || `test-device-${Date.now().toString(36)}`;
-    const appId = clean(payload.appId) || clean(payload.appName) || clean(payload.productAppId) || "test-app";
+    const appId = firstAppId(payload.appId, payload.appName, payload.productAppId) || "test-app";
+    const productAppId = firstAppId(payload.productAppId, appId) || appId;
     const fakeToken = `test-fcm-token-${deviceId}`;
     const tokenHash = createHash("sha256").update(fakeToken).digest("hex");
 
@@ -807,7 +819,7 @@ export async function handleAdminNotificationTestDevicePost(request: Request) {
         locale: "en",
         packageName: platform === "android" ? clean(payload.packageName) || null : null,
         platform,
-        productAppId: clean(payload.productAppId) || appId,
+        productAppId,
         status: "active",
         storeAccountName: clean(payload.storeAccountName) || null,
         storePlatform: clean(payload.storePlatform) || null,
@@ -819,7 +831,7 @@ export async function handleAdminNotificationTestDevicePost(request: Request) {
         bundleId: platform === "ios" ? clean(payload.bundleId) || null : null,
         locale: "en",
         packageName: platform === "android" ? clean(payload.packageName) || null : null,
-        productAppId: clean(payload.productAppId) || appId,
+        productAppId,
         status: "active",
         storeAccountName: clean(payload.storeAccountName) || null,
         storePlatform: clean(payload.storePlatform) || null,

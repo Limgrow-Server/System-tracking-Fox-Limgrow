@@ -16,6 +16,7 @@ import { paginatedResult, type PaginationQuery } from "@/lib/server/api/paginati
 import { getAndroidStoreProfileById } from "@/lib/server/repositories/android/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
 import { androidStoreMappingToTracking } from "@/lib/tracking/mappers/android";
+import { nullableAppId } from "@/lib/tracking/identity";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
 
 function cleanText(value: unknown) {
@@ -35,7 +36,7 @@ const mappingStatusMap: Record<string, MappingStatus> = {
 
 function normalizeAndroidMappingPayload(payload: StoreMappingPayload) {
   return {
-    appId: nullableText(payload.appId),
+    appId: nullableAppId(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
