@@ -293,7 +293,30 @@ async function findMobileApp(
 
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
-  return data ? normalizeApp(data as Record<string, unknown>, platform) : null;
+  if (data) return normalizeApp(data as Record<string, unknown>, platform);
+
+  if (appId && identifier) {
+    let fallbackQuery = supabase
+      .from(table)
+      .select(select)
+      .eq("status", "active")
+      .eq(platform === "android" ? "package_name" : "bundle_id", identifier)
+      .limit(1);
+
+    if (clean(input.storeProfileId)) {
+      fallbackQuery = fallbackQuery.eq("store_profile_id", clean(input.storeProfileId));
+    } else if (clean(input.storeAccountName)) {
+      fallbackQuery = fallbackQuery.eq("store_account_name", clean(input.storeAccountName));
+    }
+
+    const { data: fallbackData, error: fallbackError } = await fallbackQuery.maybeSingle();
+    if (fallbackError) throw fallbackError;
+    if (fallbackData) {
+      return normalizeApp(fallbackData as Record<string, unknown>, platform);
+    }
+  }
+
+  return null;
 }
 
 async function findStoreProfile(

@@ -224,7 +224,9 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         return json({ ok: false, error: "fcm_token_required" }, 400);
       }
 
-      const productAppId = normalizeAppId(payload.productAppId) || normalizeAppId(integration?.product_app_id) || appId;
+      const integrationAppId = normalizeAppId(integration?.product_app_id);
+      const resolvedAppId = integrationAppId || appId;
+      const productAppId = integrationAppId || normalizeAppId(payload.productAppId) || resolvedAppId;
       const integrationStorePlatform = clean(integration?.store_platform) as StorePlatform;
       const storePlatform = payload.storePlatform ?? (integrationStorePlatform || inferredStorePlatform(expectedPlatform));
       const packageName = expectedPlatform === "android" ? normalizePackageName(payload.packageName) || normalizePackageName(integration?.package_name) || null : null;
@@ -237,11 +239,11 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         productAppId,
       }) || null;
       const deviceType = normalizeDeviceType(payload.deviceType) || normalizeDeviceType(payload.device_type) || null;
-      const userId = `app:${appId}:device:${deviceId || tokenHash.slice(0, 12)}`;
+      const userId = `app:${resolvedAppId}:device:${deviceId || tokenHash.slice(0, 12)}`;
 
       const row = {
         user_id: userId,
-        app_id: appId,
+        app_id: resolvedAppId,
         device_id: deviceId,
         platform: expectedPlatform,
         firebase_app_id: clean(payload.firebaseAppId) || clean(integration?.firebase_app_id) || null,

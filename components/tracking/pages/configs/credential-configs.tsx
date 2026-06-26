@@ -290,6 +290,34 @@ function InlineStoreLink({
   );
 }
 
+function InputField({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="font-mono text-xs"
+      />
+    </div>
+  );
+}
+
 function SensitiveInput({
   id,
   label,
@@ -2005,7 +2033,7 @@ export function CredentialConfigs({
                         <legend className="px-1 text-sm font-medium">
                           Key Review
                         </legend>
-                        <SensitiveInput
+                        <InputField
                           id="iosReviewKeyId"
                           label="Key Review ID (optional)"
                           value={iosReviewKeyId}
@@ -2036,7 +2064,7 @@ export function CredentialConfigs({
                         <legend className="px-1 text-sm font-medium">
                           Key IAP
                         </legend>
-                        <SensitiveInput
+                        <InputField
                           id="iosIapKeyId"
                           label="Key IAP ID (optional)"
                           value={iosIapKeyId}

@@ -626,7 +626,7 @@ async function getDeviceTargets(
 
   if (error) throw error;
 
-  const appId = clean(input.appId);
+  const appId = normalizeAppId(input.appId);
   const appName = clean(input.appName);
   const packageName = clean(input.packageName);
   const bundleId = clean(input.bundleId);
@@ -656,11 +656,14 @@ async function getDeviceTargets(
     };
   }).filter((device) => {
     if (!device.id || !device.deviceId || !device.fcmToken) return false;
-    if (requestedAppIdentifier && device.appIdentifier === requestedAppIdentifier) return true;
-    const deviceAppKeys = [device.appId, device.productAppId].filter(Boolean);
+    const deviceAppKeys = [
+      normalizeAppId(device.appId),
+      normalizeAppId(device.productAppId),
+    ].filter(Boolean);
     if (requestedAppKeys.length && deviceAppKeys.length) {
       return deviceAppKeys.some((deviceKey) => requestedAppKeys.includes(deviceKey));
     }
+    if (requestedAppIdentifier && device.appIdentifier === requestedAppIdentifier) return true;
     if (packageName && device.packageName === packageName) return true;
     if (bundleId && device.bundleId === bundleId) return true;
     return !requestedAppKeys.length && !packageName && !bundleId;
