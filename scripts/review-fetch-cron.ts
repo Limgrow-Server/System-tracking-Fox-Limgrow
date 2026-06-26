@@ -1,31 +1,49 @@
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_INTERVAL_MS = 3 * 60_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const INITIAL_CRON_DELAY_MS = 15_000;
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(dirname, "..");
+const nextBin = path.join(
+  projectRoot,
+  "node_modules",
+  "next",
+  "dist",
+  "bin",
+  "next",
+);
 
-type CronLogger = Pick<Console, "error" | "log">;
-
-export type ReviewFetchCronOptions = {
-  initialDelayMs?: number;
-  logger?: CronLogger;
-  signal?: AbortSignal;
-  url?: string;
-};
-
-export type ReviewFetchCronLoop = {
-  done: Promise<void>;
+type CronLoop = {
   stop: () => void;
 };
+
+function portFromArgs(args: string[]) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if ((arg === "-p" || arg === "--port") && args[index + 1]) {
+      return args[index + 1];
+    }
+
+    if (arg.startsWith("--port=")) {
+      return arg.slice("--port=".length);
+    }
+  }
+
+  return process.env.PORT || "3000";
+}
 
 function normalizeUrl(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-export function resolveReviewFetchCronUrl(env: NodeJS.ProcessEnv = process.env) {
-  const appUrl = `http://127.0.0.1:${env.PORT || "3000"}`;
-
-  return `${normalizeUrl(appUrl)}/api/cron/review-fetch`;
+function resolveReviewFetchCronUrl() {
+  return `${normalizeUrl(
+    `http://127.0.0.1:${process.env.PORT || "3000"}`,
+  )}/api/cron/review-fetch`;
 }
 
 function sleep(ms: number, signal?: AbortSignal) {
@@ -52,7 +70,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function summarizeResult(payload: unknown) {
+function summarizeCronResult(payload: unknown) {
   const result = isRecord(payload) ? payload.result : null;
 
   if (!isRecord(result)) {
@@ -62,9 +80,9 @@ function summarizeResult(payload: unknown) {
   return JSON.stringify({
     checkedAt: result.checkedAt,
     materialized: result.materialized,
-    worker: result.worker,
-    stale: result.stale,
     retention: result.retention,
+    stale: result.stale,
+    worker: result.worker,
   });
 }
 
@@ -73,26 +91,25 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
-export async function runReviewFetchCronOnce(options: ReviewFetchCronOptions = {}) {
-  const url = options.url || resolveReviewFetchCronUrl();
+async function runReviewFetchCronOnce(url: string, signal: AbortSignal) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   const abortFromParent = () => controller.abort();
 
-  if (options.signal?.aborted) {
+  if (signal.aborted) {
     controller.abort();
   } else {
-    options.signal?.addEventListener("abort", abortFromParent, { once: true });
+    signal.addEventListener("abort", abortFromParent, { once: true });
   }
 
   try {
     const response = await fetch(url, {
-      method: "POST",
       headers: {
         accept: "application/json",
         "content-type": "application/json",
         "user-agent": "limgrow-review-fetch-cron/1.0",
       },
+      method: "POST",
       signal: controller.signal,
     });
     const text = await response.text();
@@ -104,48 +121,34 @@ export async function runReviewFetchCronOnce(options: ReviewFetchCronOptions = {
       throw new Error(text || `Cron endpoint returned HTTP ${response.status}`);
     }
 
-    options.logger?.log(
-      `[review-fetch-cron] ${new Date().toISOString()} ok ${summarizeResult(
+    console.log(
+      `[review-fetch-cron] ${new Date().toISOString()} ok ${summarizeCronResult(
         payload,
       )}`,
     );
-
-    return payload;
   } finally {
-    options.signal?.removeEventListener("abort", abortFromParent);
+    signal.removeEventListener("abort", abortFromParent);
     clearTimeout(timeout);
   }
 }
 
-export function startReviewFetchCronLoop(
-  options: ReviewFetchCronOptions = {},
-): ReviewFetchCronLoop {
-  const logger = options.logger || console;
+function startReviewFetchCronLoop(): CronLoop {
   const controller = new AbortController();
   const signal = controller.signal;
-  const abortFromParent = () => controller.abort();
+  const url = resolveReviewFetchCronUrl();
 
-  if (options.signal?.aborted) {
-    controller.abort();
-  } else {
-    options.signal?.addEventListener("abort", abortFromParent, { once: true });
-  }
-
-  const url = options.url || resolveReviewFetchCronUrl();
-  logger.log(
+  console.log(
     `[review-fetch-cron] running every ${DEFAULT_INTERVAL_MS}ms against ${url}`,
   );
 
-  const done = (async () => {
-    if (options.initialDelayMs) {
-      await sleep(options.initialDelayMs, signal);
-    }
+  void (async () => {
+    await sleep(INITIAL_CRON_DELAY_MS, signal);
 
     while (!signal.aborted) {
       try {
-        await runReviewFetchCronOnce({ logger, signal, url });
+        await runReviewFetchCronOnce(url, signal);
       } catch (error) {
-        logger.error(
+        console.error(
           `[review-fetch-cron] ${new Date().toISOString()} failed: ${errorMessage(
             error,
           )}`,
@@ -157,25 +160,71 @@ export function startReviewFetchCronLoop(
   })();
 
   return {
-    done,
     stop() {
-      options.signal?.removeEventListener("abort", abortFromParent);
       controller.abort();
     },
   };
 }
 
-const isMainModule =
-  process.argv[1] &&
-  path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
+const forwardedArgs = process.argv.slice(2);
+const port = portFromArgs(forwardedArgs);
+const nextArgs = ["dev", ...forwardedArgs];
+const nextEnv = {
+  ...process.env,
+  PORT: port,
+};
 
-if (isMainModule) {
-  const loop = startReviewFetchCronLoop();
+process.env.PORT = port;
 
-  const shutdown = () => {
-    loop.stop();
-  };
+console.log(`[dev] next ${nextArgs.join(" ")}`);
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+const nextProcess = spawn(process.execPath, [nextBin, ...nextArgs], {
+  cwd: projectRoot,
+  env: nextEnv,
+  stdio: "inherit",
+});
+
+let cronLoop: CronLoop | null = startReviewFetchCronLoop();
+let shuttingDown = false;
+
+function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  cronLoop?.stop();
+  cronLoop = null;
+
+  if (nextProcess.exitCode === null && !nextProcess.killed) {
+    nextProcess.kill(signal);
+  }
+
+  setTimeout(() => {
+    process.exit(0);
+  }, 10_000).unref();
 }
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+nextProcess.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+  cronLoop?.stop();
+  cronLoop = null;
+
+  if (shuttingDown) {
+    process.exit(0);
+  }
+
+  if (signal) {
+    console.log(`[dev] next exited by ${signal}`);
+    process.exit(1);
+  }
+
+  process.exit(code ?? 0);
+});
+
+nextProcess.on("error", (error: Error) => {
+  cronLoop?.stop();
+  cronLoop = null;
+  console.error(`[dev] failed to start next: ${error.message}`);
+  process.exit(1);
+});
