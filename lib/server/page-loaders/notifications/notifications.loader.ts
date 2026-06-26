@@ -28,6 +28,7 @@ import type {
   PaginationMeta,
 } from "@/lib/tracking/page-data";
 import { sortMappings } from "@/lib/tracking/mappers/shared";
+import { normalizeScopeKey } from "@/lib/tracking/identity";
 import type {
   DeviceToken,
   NotificationEvent,
@@ -192,7 +193,7 @@ function valuesMatchSearch(values: Array<string | null | undefined>, search?: st
 
 function uniqueClean(values: Array<string | null | undefined>) {
   return Array.from(
-    new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))),
+    new Set(values.map(normalizeScopeKey).filter(Boolean)),
   );
 }
 

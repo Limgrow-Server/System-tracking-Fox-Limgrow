@@ -27,11 +27,15 @@ function Avatar({
 
 function AvatarImage({
   className,
+  loading = "lazy",
+  decoding = "async",
   ...props
 }: React.ComponentProps<typeof AvatarPrimitive.Image>) {
   return (
     <AvatarPrimitive.Image
       data-slot="avatar-image"
+      decoding={decoding}
+      loading={loading}
       className={cn(
         "aspect-square size-full rounded-full object-cover",
         className

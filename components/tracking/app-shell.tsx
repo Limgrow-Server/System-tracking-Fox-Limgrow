@@ -29,15 +29,18 @@ import {
   X,
 } from "lucide-react";
 import { ReactNode, useState } from "react";
-import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import { cn } from "@/lib/utils";
 import type { StaffRole } from "@/lib/tracking/types";
+
+async function showToast(type: "success" | "error", message: string) {
+  const { toast } = await import("sonner");
+  toast[type](message);
+}
 
 type NavItem = {
   title: string;
@@ -535,11 +538,11 @@ export function AppShell({
   async function logout() {
     const response = await fetch("/api/auth/logout", { method: "POST" });
     if (!response.ok) {
-      toast.error("Sign out failed.");
+      await showToast("error", "Sign out failed.");
       return;
     }
 
-    toast.success("Signed out.");
+    await showToast("success", "Signed out.");
     router.replace("/login");
     router.refresh();
   }
@@ -566,30 +569,48 @@ export function AppShell({
         <div className="flex h-svh min-w-0 flex-col overflow-y-auto overscroll-contain">
           <header className="sticky top-0 z-40 h-16 shrink-0 border-b bg-background/90 backdrop-blur">
             <div className="flex h-full items-center gap-3 px-4">
-              <Sheet open={open} onOpenChange={setOpen}>
-                <SheetTrigger asChild>
-                  <Button variant="outline" size="icon" className="lg:hidden">
-                    <Menu size={16} />
-                  </Button>
-                </SheetTrigger>
-                <SheetContent side="left" className="w-72 p-0">
-                  <div className="absolute right-3 top-3 z-10">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => setOpen(false)}
-                    >
-                      <X size={15} />
-                    </Button>
-                  </div>
-                  <SidebarContent
-                    role={role}
-                    session={session}
-                    onLogout={logout}
-                    onNavigate={() => setOpen(false)}
+              <Button
+                variant="outline"
+                size="icon"
+                className="lg:hidden"
+                aria-label="Open navigation"
+                onClick={() => setOpen(true)}
+              >
+                <Menu size={16} />
+              </Button>
+              {open ? (
+                <div className="fixed inset-0 z-50 lg:hidden">
+                  <button
+                    type="button"
+                    aria-label="Close navigation"
+                    className="absolute inset-0 bg-black/10"
+                    onClick={() => setOpen(false)}
                   />
-                </SheetContent>
-              </Sheet>
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Navigation"
+                    className="absolute inset-y-0 left-0 flex w-72 flex-col border-r bg-sidebar shadow-lg"
+                  >
+                    <div className="absolute right-3 top-3 z-10">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setOpen(false)}
+                        aria-label="Close navigation"
+                      >
+                        <X size={15} />
+                      </Button>
+                    </div>
+                    <SidebarContent
+                      role={role}
+                      session={session}
+                      onLogout={logout}
+                      onNavigate={() => setOpen(false)}
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               <Button
                 type="button"

@@ -40,7 +40,7 @@ export function formatAccountDate(value: string | null) {
 }
 
 function clean(value: string | null | undefined) {
-  return value?.trim() ?? "";
+  return value?.trim().toLowerCase() ?? "";
 }
 
 function appOptionKeys(app: ManagedAppOption) {

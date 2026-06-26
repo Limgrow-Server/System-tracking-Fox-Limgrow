@@ -14,6 +14,7 @@ import {
   getNotificationSchedulesPageData,
   getNotificationTokenDetailPageData,
 } from "@/lib/server/page-loaders/notifications/notifications.loader";
+import { normalizeAppId } from "@/lib/tracking/identity";
 
 const notificationRoles = ["Admin", "Dev", "Marketing"] as const;
 const notificationManageRoles = ["Admin"] as const;
@@ -76,7 +77,7 @@ export async function handleAdminNotificationTokensGet(request: Request) {
   try {
     const session = await requireConsoleApiSession([...notificationRoles]);
     const url = new URL(request.url);
-    const appId = clean(url.searchParams.get("appId"));
+    const appId = normalizeAppId(url.searchParams.get("appId"));
     if (!appId) throw badRequest("Notification app id is required.");
 
     const data = await getNotificationTokenDetailPageData(session, appId, {
@@ -140,7 +141,7 @@ export async function handleAdminNotificationHistoryJobsGet(request: Request) {
     const url = new URL(request.url);
     const data = await getNotificationHistoryPageData(session, {
       ...pagination(url, 10),
-      appId: clean(url.searchParams.get("appId")) || undefined,
+      appId: normalizeAppId(url.searchParams.get("appId")) || undefined,
       search: clean(url.searchParams.get("search")) || undefined,
       store: clean(url.searchParams.get("store")) || undefined,
     });
@@ -201,7 +202,7 @@ export async function handleAdminNotificationSchedulesGet(request: Request) {
     const url = new URL(request.url);
     const data = await getNotificationSchedulesPageData(session, {
       ...pagination(url, 10),
-      appId: clean(url.searchParams.get("appId")) || undefined,
+      appId: normalizeAppId(url.searchParams.get("appId")) || undefined,
       search: clean(url.searchParams.get("search")) || undefined,
       store: clean(url.searchParams.get("store")) || undefined,
     });

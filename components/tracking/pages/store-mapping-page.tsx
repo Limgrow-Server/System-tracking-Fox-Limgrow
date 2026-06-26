@@ -64,6 +64,8 @@ function AppIcon({ src, name }: { src: string | null | undefined; name: string |
         src={cleanedSrc}
         alt={name ? `${name} icon` : "App icon"}
         className="size-10 rounded-md border object-cover"
+        decoding="async"
+        loading="lazy"
       />
     );
   }

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Manrope } from "next/font/google";
-import { Toaster } from "@/components/ui/sonner";
+import { LazyToaster } from "@/components/ui/lazy-toaster";
 import "./globals.css";
 
 const inter = Inter({
@@ -33,7 +33,7 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         {children}
-        <Toaster richColors closeButton />
+        <LazyToaster />
       </body>
     </html>
   );

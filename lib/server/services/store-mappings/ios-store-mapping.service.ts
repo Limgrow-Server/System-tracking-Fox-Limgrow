@@ -16,6 +16,7 @@ import { paginatedResult, type PaginationQuery } from "@/lib/server/api/paginati
 import { getIosStoreProfileById } from "@/lib/server/repositories/ios/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
+import { nullableAppId } from "@/lib/tracking/identity";
 import { iosStoreMappingToTracking } from "@/lib/tracking/mappers/ios";
 
 function cleanText(value: unknown) {
@@ -35,7 +36,7 @@ const mappingStatusMap: Record<string, MappingStatus> = {
 
 function normalizeIosMappingPayload(payload: StoreMappingPayload) {
   return {
-    appId: nullableText(payload.appId),
+    appId: nullableAppId(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
