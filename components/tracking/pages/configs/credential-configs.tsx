@@ -6,6 +6,7 @@ import {
   type FormEvent,
   type ReactNode,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useRouter } from "next/navigation";
@@ -87,6 +88,7 @@ import type { CredentialSecretMetadata } from "@/lib/tracking/types";
 
 type CredentialAction = "upsert" | "delete";
 type SecretFormat = "json" | "p8";
+type SecretAccessOptions = { forceSend?: boolean };
 type WebkitTextSecurityStyle = CSSProperties & {
   WebkitTextSecurity?: "disc" | "none";
 };
@@ -101,6 +103,14 @@ type CredentialListResponse = {
   pageSize?: number;
   total?: number;
   totalPages?: number;
+};
+type CredentialSecretOtpResponse = {
+  ok?: boolean;
+  unlocked?: boolean;
+  expiresAt?: string | null;
+  email?: string;
+  otpExpiresAt?: string;
+  error?: string;
 };
 
 const CONFIG_PAGE_SIZE = 10;
@@ -457,12 +467,14 @@ function SecretContentViewer({
   label,
   secretText,
   onSecretLoaded,
+  onEnsureSecretAccess,
 }: {
   credential: CredentialSecretMetadata;
   platform: MobilePlatform;
   label: string;
   secretText: string | undefined;
   onSecretLoaded: (credentialId: string, secretText: string) => void;
+  onEnsureSecretAccess: (options?: SecretAccessOptions) => Promise<boolean>;
 }) {
   const [pending, setPending] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -476,6 +488,33 @@ function SecretContentViewer({
       : "Show key"
     : "Load key from Vault";
 
+  async function fetchVaultSecret() {
+    const params = new URLSearchParams({
+      reveal: "secret",
+      id: credential.id,
+      platform,
+    });
+    const response = await fetch(
+      `/api/admin/credentials?${params.toString()}`,
+    );
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      secretText?: string;
+      error?: string;
+    };
+
+    if (
+      !response.ok ||
+      !payload.ok ||
+      typeof payload.secretText !== "string"
+    ) {
+      throw new Error(payload.error ?? "Could not load Vault secret.");
+    }
+
+    onSecretLoaded(credential.id, payload.secretText);
+    setRevealed(true);
+  }
+
   async function loadSecret() {
     if (secretText) {
       setRevealed((current) => !current);
@@ -485,30 +524,24 @@ function SecretContentViewer({
     setPending(true);
 
     try {
-      const params = new URLSearchParams({
-        reveal: "secret",
-        id: credential.id,
-        platform,
-      });
-      const response = await fetch(
-        `/api/admin/credentials?${params.toString()}`,
-      );
-      const payload = (await response.json()) as {
-        ok?: boolean;
-        secretText?: string;
-        error?: string;
-      };
+      const unlocked = await onEnsureSecretAccess();
+      if (!unlocked) return;
 
-      if (
-        !response.ok ||
-        !payload.ok ||
-        typeof payload.secretText !== "string"
-      ) {
-        throw new Error(payload.error ?? "Could not load Vault secret.");
+      try {
+        await fetchVaultSecret();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Could not load Vault secret.";
+
+        if (!message.toLowerCase().includes("otp")) {
+          throw error;
+        }
+
+        const unlockedAfterRetry = await onEnsureSecretAccess({
+          forceSend: true,
+        });
+        if (unlockedAfterRetry) await fetchVaultSecret();
       }
-
-      onSecretLoaded(credential.id, payload.secretText);
-      setRevealed(true);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Could not load Vault secret.",
@@ -602,6 +635,7 @@ function IosCredentialKeyViewSection({
   secretLabel,
   secretCache,
   onSecretLoaded,
+  onEnsureSecretAccess,
 }: {
   title: string;
   credential: CredentialSecretMetadata | null;
@@ -610,6 +644,7 @@ function IosCredentialKeyViewSection({
   secretLabel: string;
   secretCache: Record<string, string>;
   onSecretLoaded: (credentialId: string, secretText: string) => void;
+  onEnsureSecretAccess: (options?: SecretAccessOptions) => Promise<boolean>;
 }) {
   return (
     <fieldset className="space-y-3 rounded-lg border p-3">
@@ -628,6 +663,7 @@ function IosCredentialKeyViewSection({
           label={secretLabel}
           secretText={secretCache[credential.id]}
           onSecretLoaded={onSecretLoaded}
+          onEnsureSecretAccess={onEnsureSecretAccess}
         />
       ) : (
         <ReadOnlyInputField label={secretLabel} value={null} />
@@ -640,10 +676,12 @@ function ConfigViewContent({
   target,
   secretCache,
   onSecretLoaded,
+  onEnsureSecretAccess,
 }: {
   target: ConfigViewTarget;
   secretCache: Record<string, string>;
   onSecretLoaded: (credentialId: string, secretText: string) => void;
+  onEnsureSecretAccess: (options?: SecretAccessOptions) => Promise<boolean>;
 }) {
   if (target.platform === "android") {
     const credential = target.credential;
@@ -680,6 +718,7 @@ function ConfigViewContent({
           label="Google Service Account JSON"
           secretText={secretCache[credential.id]}
           onSecretLoaded={onSecretLoaded}
+          onEnsureSecretAccess={onEnsureSecretAccess}
         />
       </div>
     );
@@ -717,6 +756,7 @@ function ConfigViewContent({
         secretLabel="Key Review (optional)"
         secretCache={secretCache}
         onSecretLoaded={onSecretLoaded}
+        onEnsureSecretAccess={onEnsureSecretAccess}
       />
       <IosCredentialKeyViewSection
         title="Key IAP"
@@ -726,6 +766,7 @@ function ConfigViewContent({
         secretLabel="Key IAP (optional)"
         secretCache={secretCache}
         onSecretLoaded={onSecretLoaded}
+        onEnsureSecretAccess={onEnsureSecretAccess}
       />
       <IosCredentialKeyViewSection
         title="Key Firebase"
@@ -733,6 +774,7 @@ function ConfigViewContent({
         secretLabel="Key firebase-admin (optional)"
         secretCache={secretCache}
         onSecretLoaded={onSecretLoaded}
+        onEnsureSecretAccess={onEnsureSecretAccess}
       />
     </div>
   );
@@ -1033,6 +1075,21 @@ export function CredentialConfigs({
   const [vaultSecretCache, setVaultSecretCache] = useState<
     Record<string, string>
   >({});
+  const [secretOtpOpen, setSecretOtpOpen] = useState(false);
+  const [secretOtpCode, setSecretOtpCode] = useState("");
+  const [secretOtpEmail, setSecretOtpEmail] = useState("");
+  const [secretOtpExpiresAt, setSecretOtpExpiresAt] = useState<string | null>(
+    null,
+  );
+  const [secretUnlockExpiresAt, setSecretUnlockExpiresAt] = useState<
+    string | null
+  >(null);
+  const [secretOtpSending, setSecretOtpSending] = useState(false);
+  const [secretOtpVerifying, setSecretOtpVerifying] = useState(false);
+  const [secretOtpError, setSecretOtpError] = useState<string | null>(null);
+  const secretOtpResolveRef = useRef<((unlocked: boolean) => void) | null>(
+    null,
+  );
 
   const isAndroidConfigCredentialView = platformFilter === "android";
   const isIosConfigCredentialView = platformFilter === "ios";
@@ -1132,6 +1189,144 @@ export function CredentialConfigs({
         ? current
         : { ...current, [credentialId]: secretText },
     );
+  }
+
+  function resolveSecretOtpWaiter(unlocked: boolean) {
+    const resolve = secretOtpResolveRef.current;
+    secretOtpResolveRef.current = null;
+    resolve?.(unlocked);
+  }
+
+  function credentialOtpError(payload: CredentialSecretOtpResponse) {
+    return payload.error ?? "Credential OTP operation failed.";
+  }
+
+  async function requestCredentialSecretOtp() {
+    setSecretOtpSending(true);
+    setSecretOtpError(null);
+
+    try {
+      const response = await fetch("/api/admin/credentials/otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "send" }),
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      setSecretOtpEmail(payload.email ?? "");
+      setSecretOtpExpiresAt(payload.otpExpiresAt ?? null);
+      toast.success("OTP sent to your email.");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not send credential OTP.";
+      setSecretOtpError(message);
+      throw error;
+    } finally {
+      setSecretOtpSending(false);
+    }
+  }
+
+  async function ensureCredentialSecretAccess(
+    options?: SecretAccessOptions,
+  ) {
+    if (!options?.forceSend) {
+      const response = await fetch("/api/admin/credentials/otp", {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      if (payload.unlocked) {
+        setSecretUnlockExpiresAt(payload.expiresAt ?? null);
+        return true;
+      }
+    }
+
+    if (secretOtpResolveRef.current) {
+      setSecretOtpOpen(true);
+      return new Promise<boolean>((resolve) => {
+        const previousResolve = secretOtpResolveRef.current;
+        secretOtpResolveRef.current = (unlocked) => {
+          previousResolve?.(unlocked);
+          resolve(unlocked);
+        };
+      });
+    }
+
+    const waitForOtp = new Promise<boolean>((resolve) => {
+      secretOtpResolveRef.current = resolve;
+    });
+
+    setSecretOtpCode("");
+    setSecretOtpError(null);
+    setSecretOtpOpen(true);
+
+    try {
+      await requestCredentialSecretOtp();
+    } catch (error) {
+      setSecretOtpOpen(false);
+      resolveSecretOtpWaiter(false);
+      throw error instanceof Error
+        ? error
+        : new Error("Could not send credential OTP.");
+    }
+
+    return waitForOtp;
+  }
+
+  async function verifyCredentialSecretAccessOtp() {
+    const code = secretOtpCode.replace(/\D/g, "");
+    if (!/^\d{6}$/.test(code)) {
+      setSecretOtpError("OTP code must contain 6 digits.");
+      return;
+    }
+
+    setSecretOtpVerifying(true);
+    setSecretOtpError(null);
+
+    try {
+      const response = await fetch("/api/admin/credentials/otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "verify", code }),
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok || !payload.unlocked) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      setSecretUnlockExpiresAt(payload.expiresAt ?? null);
+      setSecretOtpOpen(false);
+      setSecretOtpCode("");
+      toast.success("Credential keys unlocked for 1 hour.");
+      resolveSecretOtpWaiter(true);
+    } catch (error) {
+      setSecretOtpError(
+        error instanceof Error
+          ? error.message
+          : "Could not verify credential OTP.",
+      );
+    } finally {
+      setSecretOtpVerifying(false);
+    }
+  }
+
+  function closeSecretOtpDialog() {
+    if (secretOtpSending || secretOtpVerifying) return;
+    setSecretOtpOpen(false);
+    setSecretOtpCode("");
+    setSecretOtpError(null);
+    resolveSecretOtpWaiter(false);
   }
 
   function resetAndroidCredentialForm() {
@@ -1805,6 +2000,9 @@ export function CredentialConfigs({
     !hardDeleteTargetIsInactive(hardDeleteTarget) ||
     pendingActionId === hardDeleteTargetId ||
     hardDeleteConfirmationName.trim() !== hardDeleteExpectedName;
+  const secretOtpCodeDigits = secretOtpCode.replace(/\D/g, "");
+  const secretOtpSubmitDisabled =
+    secretOtpSending || secretOtpVerifying || secretOtpCodeDigits.length !== 6;
 
   return (
     <div className="space-y-5">
@@ -2056,6 +2254,9 @@ export function CredentialConfigs({
                               vaultSecretCache[iosEditingGroup.keyReview.id]
                             }
                             onSecretLoaded={cacheVaultSecret}
+                            onEnsureSecretAccess={
+                              ensureCredentialSecretAccess
+                            }
                           />
                         ) : null}
                       </fieldset>
@@ -2087,6 +2288,9 @@ export function CredentialConfigs({
                               vaultSecretCache[iosEditingGroup.keyIap.id]
                             }
                             onSecretLoaded={cacheVaultSecret}
+                            onEnsureSecretAccess={
+                              ensureCredentialSecretAccess
+                            }
                           />
                         ) : null}
                       </fieldset>
@@ -2113,6 +2317,9 @@ export function CredentialConfigs({
                               vaultSecretCache[iosEditingGroup.keyFirebase.id]
                             }
                             onSecretLoaded={cacheVaultSecret}
+                            onEnsureSecretAccess={
+                              ensureCredentialSecretAccess
+                            }
                           />
                         ) : null}
                       </fieldset>
@@ -2144,6 +2351,7 @@ export function CredentialConfigs({
                             vaultSecretCache[selectedAndroidCredential.id]
                           }
                           onSecretLoaded={cacheVaultSecret}
+                          onEnsureSecretAccess={ensureCredentialSecretAccess}
                         />
                       ) : null}
                     </>
@@ -2200,11 +2408,95 @@ export function CredentialConfigs({
                 target={viewTarget}
                 secretCache={vaultSecretCache}
                 onSecretLoaded={cacheVaultSecret}
+                onEnsureSecretAccess={ensureCredentialSecretAccess}
               />
             ) : null}
           </div>
         </SheetContent>
       </Sheet>
+
+      <Dialog
+        open={secretOtpOpen}
+        onOpenChange={(open) => {
+          if (!open) closeSecretOtpDialog();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Verify credential access</DialogTitle>
+            <DialogDescription>
+              Enter the OTP sent to{" "}
+              {secretOtpEmail || "the configured security email"} to view
+              hidden credential keys for 1 hour.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid gap-2">
+              <Label htmlFor="credentialSecretOtp">OTP code</Label>
+              <Input
+                id="credentialSecretOtp"
+                inputMode="numeric"
+                maxLength={6}
+                value={secretOtpCode}
+                onChange={(event) =>
+                  setSecretOtpCode(
+                    event.target.value.replace(/\D/g, "").slice(0, 6),
+                  )
+                }
+                placeholder="123456"
+                autoComplete="one-time-code"
+              />
+            </div>
+            {secretOtpExpiresAt ? (
+              <p className="text-xs text-muted-foreground">
+                OTP expires at {dateTime(secretOtpExpiresAt)}.
+              </p>
+            ) : null}
+            {secretUnlockExpiresAt ? (
+              <p className="text-xs text-muted-foreground">
+                Current unlock expires at {dateTime(secretUnlockExpiresAt)}.
+              </p>
+            ) : null}
+            {secretOtpError ? (
+              <Alert variant="destructive">
+                <AlertTitle>OTP failed</AlertTitle>
+                <AlertDescription>{secretOtpError}</AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={secretOtpSending || secretOtpVerifying}
+              onClick={() =>
+                void requestCredentialSecretOtp().catch(() => undefined)
+              }
+            >
+              {secretOtpSending ? <Spinner /> : <RotateCcw size={15} />}
+              Resend OTP
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={secretOtpSending || secretOtpVerifying}
+                onClick={closeSecretOtpDialog}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={secretOtpSubmitDisabled}
+                onClick={() => void verifyCredentialSecretAccessOtp()}
+              >
+                {secretOtpVerifying ? <Spinner /> : <KeyRound size={15} />}
+                Verify
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={Boolean(statusConfirmTarget)}
