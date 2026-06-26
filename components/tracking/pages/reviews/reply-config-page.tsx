@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import {
   ArrowLeft,
   Globe,
@@ -31,6 +30,7 @@ import {
   StatusBadge,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
+import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
 import type {
   PaginationMeta,
@@ -514,13 +514,13 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <nav className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        <Link
+        <PendingNavigationLink
           href="/reply"
           className="flex items-center gap-1 transition-colors hover:text-foreground"
         >
           <ArrowLeft size={15} />
           Stores
-        </Link>
+        </PendingNavigationLink>
         <span className="text-muted-foreground">/</span>
         <span className="truncate text-foreground">
           {data.store.storeAccountName}

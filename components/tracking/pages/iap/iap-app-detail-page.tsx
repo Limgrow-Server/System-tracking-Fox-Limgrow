@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import {
   ArrowDownRight,
   ArrowLeft,
@@ -18,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import {
   TableEmptyState,
   TablePaginationFooter,
@@ -518,13 +518,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     <div className="flex flex-col h-full overflow-hidden bg-muted/10 p-4 sm:p-6 gap-6">
       {/* Breadcrumb */}
       <nav className="flex items-center space-x-2 text-sm text-muted-foreground font-medium shrink-0">
-        <Link
+        <PendingNavigationLink
           href="/iap"
           className="hover:text-foreground transition-colors flex items-center"
         >
           <ArrowLeft className="mr-1.5 h-4 w-4" />
           Apps
-        </Link>
+        </PendingNavigationLink>
         <ChevronRight className="h-4 w-4" />
         <div className="flex items-center gap-2 text-foreground bg-background px-2 py-1 rounded-md border shadow-sm">
           {isIos ? (
