@@ -216,6 +216,16 @@ function credentialStatusLabel(status: string | null | undefined) {
   return notAvailable(normalized);
 }
 
+function appleKeyIdFromFileName(fileName: string) {
+  const baseName = fileName.split(/[\\/]/).pop() ?? fileName;
+  const withoutExtension = baseName.replace(/\.[^.]+$/, "");
+  const underscoreIndex = withoutExtension.lastIndexOf("_");
+
+  return underscoreIndex >= 0
+    ? withoutExtension.slice(underscoreIndex + 1).trim()
+    : "";
+}
+
 function keyPresence(credential: CredentialSecretMetadata | null) {
   if (!credential)
     return <span className="text-sm text-muted-foreground">N/A</span>;
@@ -650,11 +660,13 @@ function IosCredentialKeyViewSection({
     <fieldset className="space-y-3 rounded-lg border p-3">
       <legend className="px-1 text-sm font-medium">{title}</legend>
       {keyIdLabel ? (
-        <ReadOnlySensitiveInputField
-          id={`${title.replace(/\s+/g, "-").toLowerCase()}-key-id`}
-          label={keyIdLabel}
-          value={keyId}
-        />
+        <ReadOnlyInputField label={keyIdLabel} value={keyId}>
+          <Input
+            readOnly
+            value={notAvailable(keyId)}
+            className="bg-muted/30 font-mono text-xs"
+          />
+        </ReadOnlyInputField>
       ) : null}
       {credential ? (
         <SecretContentViewer
@@ -1678,8 +1690,16 @@ export function CredentialConfigs({
       return;
     }
 
-    if (kind === "review") setIosReviewFile(file);
-    if (kind === "iap") setIosIapFile(file);
+    if (kind === "review") {
+      setIosReviewFile(file);
+      const keyId = appleKeyIdFromFileName(file.name);
+      if (keyId) setIosReviewKeyId(keyId);
+    }
+    if (kind === "iap") {
+      setIosIapFile(file);
+      const keyId = appleKeyIdFromFileName(file.name);
+      if (keyId) setIosIapKeyId(keyId);
+    }
     if (kind === "firebase") setIosFirebaseFile(file);
     toast.info(`${file.name} selected for secure upload.`);
   }
