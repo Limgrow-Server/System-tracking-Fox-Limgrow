@@ -7,7 +7,7 @@ import {
   getReviewAppCards,
   paginateReviewAppCards,
   reviewStoreOptions,
-} from "@/lib/server/services/reviews/android-review.service";
+} from "@/lib/server/services/reviews/review.service";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
 import type { ReviewAppGridPageData } from "@/lib/tracking/page-data";
 

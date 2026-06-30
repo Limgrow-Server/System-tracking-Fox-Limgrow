@@ -89,6 +89,16 @@ type ReplyStoreAppsResponse = {
   totalPages?: number;
 };
 
+function platformBadgeClass(platform: ReviewAppCard["platform"]) {
+  return platform === "ios"
+    ? "border-sky-200 bg-sky-50 text-sky-700"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function platformLabel(platform: ReviewAppCard["platform"]) {
+  return platform === "ios" ? "iOS" : "Android";
+}
+
 function defaultTemplates(storeMappingId: string): ReviewReplyTemplateDto[] {
   return RATINGS.map((rating) => ({
     id: null,
@@ -168,10 +178,13 @@ function AppListItem({
           <div className="truncate text-sm font-medium">{app.appName}</div>
           <Badge
             variant="outline"
-            className="shrink-0 gap-1 border-emerald-200 bg-emerald-50 px-1.5 text-[11px] text-emerald-700"
+            className={cn(
+              "shrink-0 gap-1 px-1.5 text-[11px]",
+              platformBadgeClass(app.platform),
+            )}
           >
             <Smartphone size={11} />
-            Android
+            {platformLabel(app.platform)}
           </Badge>
         </div>
         <div className="mt-1 truncate text-xs text-muted-foreground">
@@ -572,6 +585,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contactEmail: storeInfo.contactEmail,
+          platform: data.store.platform,
           storeProfileId: data.store.storeProfileId,
           supportPhone: storeInfo.supportPhone,
           websiteUrl: storeInfo.websiteUrl,
@@ -616,6 +630,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          platform: selectedApp.platform,
           storeMappingId: selectedApp.mappingId,
           templates: selectedTemplates.map((template) => ({
             isActive: template.isActive,
@@ -654,14 +669,14 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6">
         <PageHeader
-          eyebrow="Google Play"
+          eyebrow="App Stores"
           title={data.store.storeAccountName}
           description="Review reply templates are configured per store."
         />
         <EmptyPanel
           icon={MessageSquareReply}
-          title="No Android apps"
-          description="Create an active Android App Mapping before configuring review replies."
+          title="No apps"
+          description="Create an active App Mapping before configuring review replies."
           className="rounded-lg border"
         />
       </div>
@@ -799,7 +814,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
                   description={
                     loadingApps
                       ? "The current page is being loaded."
-                      : "No mapped Android app matches the current search."
+                      : "No mapped app matches the current search."
                   }
                   className="rounded-lg border"
                 />
@@ -868,7 +883,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
               <EmptyPanel
                 icon={MessageSquareReply}
                 title="No app selected"
-                description="Select an Android app to configure reply templates."
+                description="Select an app to configure reply templates."
                 className="rounded-lg border"
               />
             )}

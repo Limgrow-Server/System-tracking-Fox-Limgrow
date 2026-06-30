@@ -67,8 +67,8 @@ import {
   renderReviewReplyTemplate,
 } from "@/lib/tracking/reply-template";
 import type {
-  AndroidDeviceMetadataDto,
-  AndroidStoreReviewDto,
+  ReviewDeviceMetadataDto,
+  StoreReviewDto,
   PaginationMeta,
   ReviewAppCard,
   ReviewAppDetailPageData,
@@ -203,7 +203,7 @@ function fetchDateRangeError(fromDate: string, toDate: string) {
     return "From date must be before or equal to To date.";
   }
   if (from.getTime() < windowStart.getTime()) {
-    return "Google Play only exposes reviews from the last 7 days.";
+    return "Manual review fetch currently supports the last 7 days.";
   }
   if (to.getTime() > windowEnd.getTime()) {
     return "To date cannot be in the future.";
@@ -215,6 +215,16 @@ function fetchDateRangeError(fromDate: string, toDate: string) {
   }
 
   return "";
+}
+
+function storeBadgeClass(platform: ReviewAppCard["platform"]) {
+  return platform === "ios"
+    ? "border-sky-200 bg-sky-50 text-sky-700"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function storeBadgeLabel(platform: ReviewAppCard["platform"]) {
+  return platform === "ios" ? "App Store" : "Google Play";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -531,7 +541,7 @@ function SyncPanel({
   );
 }
 
-function CommentAuthorCell({ review }: { review: AndroidStoreReviewDto }) {
+function CommentAuthorCell({ review }: { review: StoreReviewDto }) {
   return (
     <div className="min-w-[11rem] whitespace-normal">
       <div className="font-medium text-foreground">
@@ -546,7 +556,7 @@ function CommentAuthorCell({ review }: { review: AndroidStoreReviewDto }) {
   );
 }
 
-function CommentContentCell({ review }: { review: AndroidStoreReviewDto }) {
+function CommentContentCell({ review }: { review: StoreReviewDto }) {
   const commentText = review.reviewText || review.originalText || "No comment text.";
 
   return (
@@ -576,7 +586,7 @@ function CommentReplyCell({
 }: {
   app: ReviewAppCard;
   onSend: () => void;
-  review: AndroidStoreReviewDto;
+  review: StoreReviewDto;
   replyTemplate: ReviewReplyTemplatePreviewDto | null;
   sending: boolean;
 }) {
@@ -626,7 +636,7 @@ function CommentReplyCell({
           <DialogHeader>
             <DialogTitle>Send reply?</DialogTitle>
             <DialogDescription>
-              Review the mapped template before sending it to Google Play.
+              Review the mapped template before sending it to the store.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -715,7 +725,7 @@ function CommentReplyCell({
 }
 
 function deviceName(
-  metadata: AndroidDeviceMetadataDto | null,
+  metadata: ReviewDeviceMetadataDto | null,
   deviceCode: string | null,
 ) {
   const name = [metadata?.manufacturer, metadata?.productName]
@@ -725,7 +735,7 @@ function deviceName(
   return name || metadata?.productName || deviceCode || "Unknown device";
 }
 
-function deviceSpecs(metadata: AndroidDeviceMetadataDto | null) {
+function deviceSpecs(metadata: ReviewDeviceMetadataDto | null) {
   if (!metadata) return "";
 
   const screen =
@@ -737,7 +747,7 @@ function deviceSpecs(metadata: AndroidDeviceMetadataDto | null) {
   return [metadata.deviceClass, screen, ram].filter(Boolean).join(" / ");
 }
 
-function VersionDeviceCell({ review }: { review: AndroidStoreReviewDto }) {
+function VersionDeviceCell({ review }: { review: StoreReviewDto }) {
   const version = review.appVersionName
     ? `${review.appVersionName}${review.appVersionCode ? ` (${review.appVersionCode})` : ""}`
     : review.appVersionCode
@@ -745,7 +755,7 @@ function VersionDeviceCell({ review }: { review: AndroidStoreReviewDto }) {
       : "Unknown version";
   const device = [
     deviceName(review.deviceMetadata, review.device),
-    review.androidOsVersion ? `Android ${review.androidOsVersion}` : null,
+    review.osVersionLabel,
   ]
     .filter(Boolean)
     .join(" / ");
@@ -764,7 +774,7 @@ function VersionDeviceCell({ review }: { review: AndroidStoreReviewDto }) {
   );
 }
 
-function VotesCell({ review }: { review: AndroidStoreReviewDto }) {
+function VotesCell({ review }: { review: StoreReviewDto }) {
   return (
     <div className="flex min-w-[5.5rem] items-center gap-3 text-xs text-muted-foreground">
       <span className="flex items-center gap-1">
@@ -779,7 +789,7 @@ function VotesCell({ review }: { review: AndroidStoreReviewDto }) {
   );
 }
 
-function CommentJsonDialog({ review }: { review: AndroidStoreReviewDto }) {
+function CommentJsonDialog({ review }: { review: StoreReviewDto }) {
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -803,7 +813,7 @@ function CommentJsonDialog({ review }: { review: AndroidStoreReviewDto }) {
 }
 
 type ReviewCommentsResponse = {
-  data?: AndroidStoreReviewDto[];
+  data?: StoreReviewDto[];
   error?: string;
   fetchRuns?: ReviewFetchRunDto[];
   fetchSchedule?: ReviewFetchScheduleDto | null;
@@ -920,6 +930,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           fromDate: fetchFromDate || undefined,
+          platform: data.app.platform,
           storeMappingId: data.app.mappingId,
           timezoneOffsetMinutes: new Date().getTimezoneOffset(),
           toDate: fetchToDate || undefined,
@@ -959,7 +970,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     }
   }
 
-  async function sendReply(review: AndroidStoreReviewDto) {
+  async function sendReply(review: StoreReviewDto) {
     if (replyingReviewId) return;
 
     setReplyingReviewId(review.reviewId);
@@ -969,6 +980,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          platform: data.app.platform,
           reviewId: review.reviewId,
           storeMappingId: data.app.mappingId,
         }),
@@ -1024,10 +1036,10 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
             ) : null}
             <Badge
               variant="outline"
-              className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+              className={cn("gap-1", storeBadgeClass(data.app.platform))}
             >
               <Smartphone size={12} />
-              Google Play
+              {storeBadgeLabel(data.app.platform)}
             </Badge>
           </div>
         }
@@ -1044,7 +1056,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         <StatCard
           label="Average Rating"
           value={formatRating(stats.averageRating)}
-          detail="Google Play review score"
+          detail={`${storeBadgeLabel(data.app.platform)} review score`}
           icon={Star}
           trend="flat"
         />
@@ -1202,7 +1214,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                         description={
                           loadingComments
                             ? "The current page is being loaded."
-                            : "Fetch Google Play comments or adjust the current filters."
+                            : "Fetch store comments or adjust the current filters."
                         }
                         className="border-0 shadow-none"
                       />
@@ -1224,3 +1236,4 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     </div>
   );
 }
+

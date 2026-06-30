@@ -78,7 +78,12 @@ type ScheduleAction = "delete" | "pause" | "resume" | "save";
 
 type FullScanTarget =
   | { scope: "all" }
-  | { appName: string; scope: "app"; storeMappingId: string };
+  | {
+      appName: string;
+      platform: ReviewFetchScheduleApp["platform"];
+      scope: "app";
+      storeMappingId: string;
+    };
 
 type BulkScheduleResponse = {
   appliedCount?: number;
@@ -347,6 +352,7 @@ export function ReviewFetchSchedulePage({
           fullScanTarget.scope === "all"
             ? { scanMode: "full", scope: "all", triggerType: "manual" }
             : {
+                platform: fullScanTarget.platform,
                 scanMode: "full",
                 storeMappingId: fullScanTarget.storeMappingId,
                 triggerType: "manual",
@@ -376,9 +382,9 @@ export function ReviewFetchSchedulePage({
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <PageHeader
-        eyebrow="Google Play"
+        eyebrow="App Stores"
         title="Schedule"
-        description="Fetch Google Play comments repeatedly for all active Android apps."
+        description="Fetch store comments repeatedly for all active review apps."
       />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -489,7 +495,7 @@ export function ReviewFetchSchedulePage({
                     <DialogTitle>Delete schedule?</DialogTitle>
                     <DialogDescription>
                       This removes the comment fetch schedule from every
-                      active Android app.
+                      active review app.
                     </DialogDescription>
                   </DialogHeader>
                   <DialogFooter>
@@ -688,6 +694,7 @@ export function ReviewFetchSchedulePage({
                         onClick={() =>
                           setFullScanTarget({
                             appName: app.appName,
+                            platform: app.platform,
                             scope: "app",
                             storeMappingId: app.mappingId,
                           })
@@ -743,16 +750,16 @@ export function ReviewFetchSchedulePage({
             </DialogTitle>
             <DialogDescription>
               {fullScanTarget?.scope === "all"
-                ? "This will queue a full Google Play review scan for every active Android app. It can consume many Google API requests."
-                : `This will queue a full Google Play review scan for ${fullScanTarget?.appName ?? "this app"}.`}
+                ? "This will queue a full review scan for every active Android and iOS app. It can consume many store API requests."
+                : `This will queue a full review scan for ${fullScanTarget?.appName ?? "this app"}.`}
             </DialogDescription>
           </DialogHeader>
           <div className="flex gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             <div>
               Schedule jobs still use incremental early-stop. Full scan should
-              be used when you need to backfill or re-check all reviews Google
-              still returns.
+              be used when you need to backfill or re-check all reviews the
+              store API still returns.
             </div>
           </div>
           <DialogFooter>

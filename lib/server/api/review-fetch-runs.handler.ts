@@ -6,11 +6,17 @@ import { forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import { getActiveAndroidReviewMappings } from "@/lib/server/repositories/reviews/android-review.repository";
+import { getActiveIosReviewMappings } from "@/lib/server/repositories/reviews/ios-review.repository";
 import {
   enqueueAndroidReviewFullScanRuns,
   fetchAndroidStoreReviews,
   type FetchAndroidReviewsPayload,
 } from "@/lib/server/services/reviews/android-review-fetch.service";
+import {
+  enqueueIosReviewFullScanRuns,
+  fetchIosStoreReviews,
+  type FetchIosReviewsPayload,
+} from "@/lib/server/services/reviews/ios-review-fetch.service";
 
 const reviewRoles = ["Admin", "Dev", "Marketing"] as const;
 
@@ -18,24 +24,38 @@ function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function isFullScan(payload: FetchAndroidReviewsPayload) {
+type FetchReviewsPayload = FetchAndroidReviewsPayload &
+  FetchIosReviewsPayload & {
+    platform?: unknown;
+  };
+
+function isFullScan(payload: FetchReviewsPayload) {
   return clean(payload.scanMode).toLowerCase() === "full";
 }
 
-function isAllAppsScope(payload: FetchAndroidReviewsPayload) {
+function isAllAppsScope(payload: FetchReviewsPayload) {
   return clean(payload.scope).toLowerCase() === "all";
+}
+
+function reviewPlatform(payload: FetchReviewsPayload) {
+  return clean(payload.platform).toLowerCase() === "ios" ? "ios" : "android";
 }
 
 export async function handleReviewFetchRunsPost(request: Request) {
   try {
     const session = await requireConsoleApiSession([...reviewRoles]);
-    const payload = await parseJsonBody<FetchAndroidReviewsPayload>(request);
+    const payload = await parseJsonBody<FetchReviewsPayload>(request);
+    const platform = reviewPlatform(payload);
+
     if (isFullScan(payload)) {
       if (isAllAppsScope(payload)) {
-        const mappings = await getActiveAndroidReviewMappings();
-        const scopedMappings = hasAllAppAccess(session)
-          ? mappings
-          : mappings.filter((mapping) =>
+        const [androidMappings, iosMappings] = await Promise.all([
+          getActiveAndroidReviewMappings(),
+          getActiveIosReviewMappings(),
+        ]);
+        const scopedAndroidMappings = hasAllAppAccess(session)
+          ? androidMappings
+          : androidMappings.filter((mapping) =>
               canAccessScopedRecord(session, {
                 appName: mapping.appName,
                 mappingId: mapping.id,
@@ -45,12 +65,40 @@ export async function handleReviewFetchRunsPost(request: Request) {
                 storeProfileId: mapping.storeProfileId,
               }),
             );
+        const scopedIosMappings = hasAllAppAccess(session)
+          ? iosMappings
+          : iosMappings.filter((mapping) =>
+              canAccessScopedRecord(session, {
+                appName: mapping.appName,
+                bundleId: mapping.bundleId,
+                mappingId: mapping.id,
+                storeAccountName: mapping.storeAccountName,
+                storeMappingId: mapping.id,
+                storeProfileId: mapping.storeProfileId,
+              }),
+            );
+        const [androidResult, iosResult] = await Promise.all([
+          enqueueAndroidReviewFullScanRuns({
+            storeMappingIds: scopedAndroidMappings.map((mapping) => mapping.id),
+          }),
+          enqueueIosReviewFullScanRuns({
+            storeMappingIds: scopedIosMappings.map((mapping) => mapping.id),
+          }),
+        ]);
 
         return okJson({
-          platform: "android",
-          result: await enqueueAndroidReviewFullScanRuns({
-            storeMappingIds: scopedMappings.map((mapping) => mapping.id),
-          }),
+          platform: "mixed",
+          result: {
+            android: androidResult,
+            enqueued: androidResult.enqueued + iosResult.enqueued,
+            ios: iosResult,
+            requested: androidResult.requested + iosResult.requested,
+            skipped: androidResult.skipped + iosResult.skipped,
+            status:
+              androidResult.status === "queued" || iosResult.status === "queued"
+                ? "queued"
+                : "empty",
+          },
         });
       }
 
@@ -63,10 +111,15 @@ export async function handleReviewFetchRunsPost(request: Request) {
       }
 
       return okJson({
-        platform: "android",
-        result: await enqueueAndroidReviewFullScanRuns({
-          storeMappingIds: [storeMappingId],
-        }),
+        platform,
+        result:
+          platform === "ios"
+            ? await enqueueIosReviewFullScanRuns({
+                storeMappingIds: [storeMappingId],
+              })
+            : await enqueueAndroidReviewFullScanRuns({
+                storeMappingIds: [storeMappingId],
+              }),
       });
     }
 
@@ -78,10 +131,14 @@ export async function handleReviewFetchRunsPost(request: Request) {
     }
 
     return okJson({
-      platform: "android",
-      result: await fetchAndroidStoreReviews(payload),
+      platform,
+      result:
+        platform === "ios"
+          ? await fetchIosStoreReviews(payload)
+          : await fetchAndroidStoreReviews(payload),
     });
   } catch (error) {
-    return errorJson(error, "Fetch Google Play reviews failed.");
+    return errorJson(error, "Fetch store reviews failed.");
   }
 }
+

@@ -85,7 +85,7 @@ export type IapAppDetailPageData = {
 
 export type ReviewAppCard = {
   mappingId: string;
-  platform: "android";
+  platform: "android" | "ios";
   appName: string;
   identifier: string;
   appIconUrl: string | null;
@@ -120,7 +120,7 @@ export type ReviewAppGridPageData = {
   }>;
 };
 
-export type AndroidStoreReviewDto = {
+export type StoreReviewDto = {
   id: string;
   reviewId: string;
   authorName: string | null;
@@ -129,8 +129,8 @@ export type AndroidStoreReviewDto = {
   originalText: string | null;
   reviewerLanguage: string | null;
   device: string | null;
-  deviceMetadata: AndroidDeviceMetadataDto | null;
-  androidOsVersion: number | null;
+  deviceMetadata: ReviewDeviceMetadataDto | null;
+  osVersionLabel: string | null;
   appVersionCode: number | null;
   appVersionName: string | null;
   thumbsUpCount: number | null;
@@ -142,7 +142,7 @@ export type AndroidStoreReviewDto = {
   rawReview: unknown;
 };
 
-export type AndroidDeviceMetadataDto = {
+export type ReviewDeviceMetadataDto = {
   cpuMake: string | null;
   cpuModel: string | null;
   deviceClass: string | null;
@@ -259,7 +259,7 @@ export type ReviewReplyTemplatePreviewDto = {
 export type ReviewAppDetailPageData = {
   app: ReviewAppCard;
   stats: ReviewAppStats;
-  reviews: AndroidStoreReviewDto[];
+  reviews: StoreReviewDto[];
   reviewFilters: {
     rating: string;
     reply: string;
@@ -285,6 +285,7 @@ export type ReviewReplyTemplateDto = {
 
 export type ReplyStoreSummary = {
   storeProfileId: string;
+  platform: "android" | "ios";
   storeAccountName: string;
   storeAvatarUrl: string | null;
   contactEmail: string | null;
@@ -338,3 +339,4 @@ export type NotificationOverviewSummary = {
   totalSchedules: number;
   totalTokens: number;
 };
+

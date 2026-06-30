@@ -8,7 +8,12 @@ import {
   type ReviewFetchTrigger,
 } from "@prisma/client";
 
-import { ApiError, badRequest, conflict, notFound } from "@/lib/server/api/errors";
+import {
+  ApiError,
+  badRequest,
+  conflict,
+  notFound,
+} from "@/lib/server/api/errors";
 import {
   type AndroidReviewFingerprint,
   type AndroidReviewUpsertInput,
@@ -89,7 +94,12 @@ function isUuid(value: string) {
   );
 }
 
-function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
+function boundedInteger(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(Math.trunc(parsed), min), max);
@@ -348,7 +358,9 @@ function normalizeDateRange(input: {
   timezoneOffsetMinutes: unknown;
   toDate: unknown;
 }) {
-  const timezoneOffsetMinutes = parseTimezoneOffset(input.timezoneOffsetMinutes);
+  const timezoneOffsetMinutes = parseTimezoneOffset(
+    input.timezoneOffsetMinutes,
+  );
   const fromDate = parseDateOnly(input.fromDate, "From date");
   const toDate = parseDateOnly(input.toDate, "To date");
 
@@ -434,7 +446,10 @@ function reviewChanged(
 
   return (
     !sameTime(review.userCommentUpdatedAt, existing.userCommentUpdatedAt) ||
-    !sameTime(review.developerReplyUpdatedAt, existing.developerReplyUpdatedAt) ||
+    !sameTime(
+      review.developerReplyUpdatedAt,
+      existing.developerReplyUpdatedAt,
+    ) ||
     review.row.rating !== existing.rating ||
     review.row.reviewText !== existing.reviewText ||
     review.row.developerReplyText !== existing.developerReplyText
@@ -524,7 +539,9 @@ async function executeAndroidStoreReviewFetch(
   const mapping = await getAndroidReviewMappingById(normalized.storeMappingId);
   if (!mapping) throw notFound("Android app mapping was not found.");
   if (mapping.status !== "ACTIVE") {
-    throw badRequest("Android app mapping must be active before fetching reviews.");
+    throw badRequest(
+      "Android app mapping must be active before fetching reviews.",
+    );
   }
 
   const credential = await getActiveAndroidCredentialForStoreProfile(
@@ -645,7 +662,8 @@ async function executeAndroidStoreReviewFetch(
       if (
         normalized.dateRange.fromDate &&
         oldestReviewUpdatedAt &&
-        oldestReviewUpdatedAt.getTime() < normalized.dateRange.fromDate.getTime()
+        oldestReviewUpdatedAt.getTime() <
+          normalized.dateRange.fromDate.getTime()
       ) {
         stopReason = "DATE_RANGE_BOUNDARY";
         pageToken = "";
@@ -707,7 +725,9 @@ async function executeAndroidStoreReviewFetch(
   } catch (error) {
     const finishedAt = new Date();
     const message =
-      error instanceof Error ? error.message : "Unknown Google Play review fetch error.";
+      error instanceof Error
+        ? error.message
+        : "Unknown Google Play review fetch error.";
 
     if (context) {
       await finishAndroidReviewFetchRun(context.runId, {
@@ -740,7 +760,9 @@ async function executeAndroidStoreReviewFetch(
   }
 }
 
-export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPayload) {
+export async function fetchAndroidStoreReviews(
+  payload: FetchAndroidReviewsPayload,
+) {
   return executeAndroidStoreReviewFetch(payload);
 }
 
@@ -779,7 +801,10 @@ export async function enqueueAndroidReviewFullScanRuns(input: {
 
 export async function processClaimedAndroidReviewFetchRun(
   run: ClaimedAndroidReviewFetchRun,
-  payload: Omit<FetchAndroidReviewsPayload, "storeMappingId" | "triggerType"> = {},
+  payload: Omit<
+    FetchAndroidReviewsPayload,
+    "storeMappingId" | "triggerType"
+  > = {},
 ) {
   return executeAndroidStoreReviewFetch(
     {

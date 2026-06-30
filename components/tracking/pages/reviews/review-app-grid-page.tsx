@@ -61,6 +61,16 @@ type ReviewAppListResponse = {
   totalPages?: number;
 };
 
+function platformBadgeClass(platform: ReviewAppCard["platform"]) {
+  return platform === "ios"
+    ? "border-sky-200 bg-sky-50 text-sky-700"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function platformLabel(platform: ReviewAppCard["platform"]) {
+  return platform === "ios" ? "iOS" : "Android";
+}
+
 export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -136,7 +146,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   return (
     <div className="flex h-full flex-col gap-6 p-6">
       <PageHeader
-        eyebrow="Google Play"
+        eyebrow="App Stores"
         title="List Apps"
         description="Select an application to inspect comment sync, ratings and replies."
       />
@@ -251,10 +261,10 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
                   </Avatar>
                   <Badge
                     variant="outline"
-                    className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+                    className={cn("gap-1", platformBadgeClass(app.platform))}
                   >
                     <Smartphone size={12} />
-                    Android
+                    {platformLabel(app.platform)}
                   </Badge>
                 </CardHeader>
                 <CardContent className="space-y-4">

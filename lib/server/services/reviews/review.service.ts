@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import type {
   AndroidStoreReview,
+  IosStoreReview,
   ReviewFetchRun,
   ReviewSyncState,
 } from "@prisma/client";
@@ -18,17 +19,37 @@ import {
   getAndroidReviewsForMappingPage,
   getAndroidReviewRatingGroups,
   getAndroidReviewReplyGroups,
-  getAndroidReviewReplyTemplateForRating,
-  getAndroidReviewReplyTemplates,
-  getGlobalAndroidReviewFetchSchedule,
   getLatestAndroidReviewForMapping,
   updateAndroidReviewDeveloperReply,
-  updateAndroidStoreProfileReplyInfo,
-  upsertAndroidReviewReplyTemplate,
-  type AndroidReviewReplyTemplateRecord,
 } from "@/lib/server/repositories/reviews/android-review.repository";
+import {
+  getActiveIosReviewMappings,
+  getActiveIosCredentialForStoreProfile,
+  getIosReviewFetchRuns,
+  getIosReviewForReply,
+  getIosReviewMappingById,
+  getIosReviewRatingGroups,
+  getIosReviewReplyGroups,
+  getIosReviewsForMappingPage,
+  getLatestIosReviewForMapping,
+  updateIosReviewDeveloperReply,
+} from "@/lib/server/repositories/reviews/ios-review.repository";
+import {
+  getGlobalReviewFetchSchedule,
+  getReviewReplyTemplateForRating,
+  getReviewReplyTemplates,
+  updateReviewStoreTargetReplyInfo,
+  upsertReviewReplyTemplate,
+  type ReviewReplyTemplateRecord,
+} from "@/lib/server/repositories/reviews/review.repository";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
-import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/android-review-schedule.service";
+import {
+  appleAppStoreConnectToken,
+  readAppleJson,
+  resolveAppleAscCredential,
+  throwAppleApiError,
+} from "@/lib/server/services/apple/app-store-connect";
+import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/review-fetch-schedule.service";
 import {
   cleanText,
   nullableText,
@@ -37,8 +58,8 @@ import {
 } from "@/lib/server/services/credentials/credential.shared";
 import { googleServiceAccountAccessToken } from "@/lib/server/services/google/google-service-account";
 import type {
-  AndroidStoreReviewDto,
-  AndroidDeviceMetadataDto,
+  StoreReviewDto,
+  ReviewDeviceMetadataDto,
   ReplyConfigBasePageData,
   ReviewAppCard,
   ReviewAppDetailPageData,
@@ -70,6 +91,7 @@ type ReplyGroup = {
 };
 
 type AndroidReviewMapping = Awaited<ReturnType<typeof getActiveAndroidReviewMappings>>[number];
+type IosReviewMapping = Awaited<ReturnType<typeof getActiveIosReviewMappings>>[number];
 
 function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
@@ -129,7 +151,7 @@ function latestUserCommentFromRawReview(value: Prisma.JsonValue | null | undefin
 
 function deviceMetadataDto(
   deviceMetadata: Prisma.JsonValue | null | undefined,
-): AndroidDeviceMetadataDto | null {
+): ReviewDeviceMetadataDto | null {
   const metadata = jsonRecord(deviceMetadata);
   if (!metadata) return null;
 
@@ -205,22 +227,78 @@ function reviewAppCard(
   };
 }
 
-export async function getReviewAppCards(): Promise<ReviewAppCard[]> {
-  const mappings = await getActiveAndroidReviewMappings();
-  const mappingIds = mappings.map((mapping) => mapping.id);
-  const [ratingGroups, replyGroups] = await Promise.all([
-    getAndroidReviewRatingGroups(mappingIds),
-    getAndroidReviewReplyGroups(mappingIds),
-  ]);
-  const replyCounts = replyCountByMapping(replyGroups);
+function iosReviewAppCard(
+  mapping: IosReviewMapping,
+  ratingGroups: RatingGroup[],
+  replyCounts: Map<string, number>,
+): ReviewAppCard {
+  const reviewCount = mapping.reviewTarget?._count.iosReviews ?? 0;
+  const { averageRating } = ratingSummary(ratingGroups);
+  const repliedCount = replyCounts.get(mapping.id) ?? 0;
+  const syncState = mapping.reviewTarget?.syncState ?? null;
+  const storeTarget = mapping.reviewTarget?.storeTarget ?? null;
 
-  return mappings.map((mapping) =>
-    reviewAppCard(
-      mapping,
-      ratingGroups.filter((group) => group.storeMappingId === mapping.id),
-      replyCounts,
+  return {
+    appIconUrl: mapping.appIconUrl,
+    appLink: mapping.appLink,
+    appName: mapping.appName,
+    averageRating,
+    identifier: mapping.bundleId,
+    lastErrorMessage: syncState?.lastErrorMessage ?? null,
+    lastFetchedAt: iso(syncState?.lastFetchFinishedAt),
+    lastSyncStatus: syncState ? enumText(syncState.status) : null,
+    mappingId: mapping.id,
+    pendingReplyCount: Math.max(reviewCount - repliedCount, 0),
+    platform: "ios",
+    repliedCount,
+    reviewCount,
+    storeAccountName: mapping.storeAccountName,
+    storeAvatarUrl: mapping.storeProfile.avatarUrl,
+    storeContactEmail: storeTarget?.contactEmail ?? null,
+    storeLink: mapping.storeProfile.linkStore,
+    storeProfileId: mapping.storeProfileId,
+    storeSupportPhone: storeTarget?.supportPhone ?? null,
+    storeWebsiteUrl: storeTarget?.websiteUrl ?? null,
+  };
+}
+
+export async function getReviewAppCards(): Promise<ReviewAppCard[]> {
+  const [androidMappings, iosMappings] = await Promise.all([
+    getActiveAndroidReviewMappings(),
+    getActiveIosReviewMappings(),
+  ]);
+  const androidMappingIds = androidMappings.map((mapping) => mapping.id);
+  const iosMappingIds = iosMappings.map((mapping) => mapping.id);
+  const [
+    androidRatingGroups,
+    androidReplyGroups,
+    iosRatingGroups,
+    iosReplyGroups,
+  ] = await Promise.all([
+    getAndroidReviewRatingGroups(androidMappingIds),
+    getAndroidReviewReplyGroups(androidMappingIds),
+    getIosReviewRatingGroups(iosMappingIds),
+    getIosReviewReplyGroups(iosMappingIds),
+  ]);
+  const androidReplyCounts = replyCountByMapping(androidReplyGroups);
+  const iosReplyCounts = replyCountByMapping(iosReplyGroups);
+
+  return [
+    ...androidMappings.map((mapping) =>
+      reviewAppCard(
+        mapping,
+        androidRatingGroups.filter((group) => group.storeMappingId === mapping.id),
+        androidReplyCounts,
+      ),
     ),
-  );
+    ...iosMappings.map((mapping) =>
+      iosReviewAppCard(
+        mapping,
+        iosRatingGroups.filter((group) => group.storeMappingId === mapping.id),
+        iosReplyCounts,
+      ),
+    ),
+  ].sort((left, right) => left.appName.localeCompare(right.appName));
 }
 
 export function reviewStoreOptions(apps: ReviewAppCard[]) {
@@ -271,11 +349,10 @@ export function paginateReviewAppCards<T extends ReviewAppCard>(
   );
 }
 
-function reviewDto(review: AndroidStoreReview): AndroidStoreReviewDto {
+function androidReviewDto(review: AndroidStoreReview): StoreReviewDto {
   const rawUserComment = latestUserCommentFromRawReview(review.rawReview);
 
   return {
-    androidOsVersion: review.androidOsVersion,
     appVersionCode: review.appVersionCode,
     appVersionName: review.appVersionName,
     authorName: review.authorName,
@@ -288,6 +365,9 @@ function reviewDto(review: AndroidStoreReview): AndroidStoreReviewDto {
     fetchedAt: review.fetchedAt.toISOString(),
     id: review.id,
     originalText: review.originalText,
+    osVersionLabel: review.androidOsVersion
+      ? `Android ${review.androidOsVersion}`
+      : null,
     rating: review.rating,
     rawReview: review.rawReview,
     reviewerLanguage: review.reviewerLanguage,
@@ -296,6 +376,30 @@ function reviewDto(review: AndroidStoreReview): AndroidStoreReviewDto {
     thumbsDownCount: review.thumbsDownCount,
     thumbsUpCount: review.thumbsUpCount,
     userCommentUpdatedAt: iso(review.userCommentUpdatedAt),
+  };
+}
+
+function iosReviewDto(review: IosStoreReview): StoreReviewDto {
+  return {
+    appVersionCode: null,
+    appVersionName: review.appVersion,
+    authorName: review.authorName,
+    developerReplyText: review.developerReplyText,
+    developerReplyUpdatedAt: iso(review.developerReplyUpdatedAt),
+    device: null,
+    deviceMetadata: null,
+    fetchedAt: review.fetchedAt.toISOString(),
+    id: review.id,
+    originalText: review.title,
+    osVersionLabel: null,
+    rating: review.rating,
+    rawReview: review.rawReview,
+    reviewerLanguage: review.territory,
+    reviewId: review.reviewId,
+    reviewText: review.reviewText,
+    thumbsDownCount: null,
+    thumbsUpCount: null,
+    userCommentUpdatedAt: iso(review.reviewUpdatedAt ?? review.reviewCreatedAt),
   };
 }
 
@@ -338,7 +442,7 @@ function fetchRunDto(run: ReviewFetchRun): ReviewFetchRunDto {
   };
 }
 
-function buildRatingBuckets(reviews: AndroidStoreReviewDto[]): ReviewRatingBucket[] {
+function buildRatingBuckets(reviews: StoreReviewDto[]): ReviewRatingBucket[] {
   const total = Math.max(reviews.filter((review) => review.rating).length, 1);
 
   return RATINGS.map((rating) => {
@@ -382,20 +486,19 @@ function mockReview(
     authorName: string;
     developerReplyText?: string;
     device: string;
-    deviceMetadata?: AndroidDeviceMetadataDto;
+    deviceMetadata?: ReviewDeviceMetadataDto;
     originalText?: string;
     reviewText: string;
     thumbsDownCount: number;
     thumbsUpCount: number;
   },
-): AndroidStoreReviewDto {
+): StoreReviewDto {
   const updatedAt = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
   const replyUpdatedAt = payload.developerReplyText
     ? new Date(updatedAt.getTime() + 8 * 60 * 60 * 1000)
     : null;
 
   return {
-    androidOsVersion: 35,
     appVersionCode: 124,
     appVersionName: payload.appVersionName,
     authorName: payload.authorName,
@@ -406,6 +509,7 @@ function mockReview(
     fetchedAt: new Date().toISOString(),
     id: `mock-${storeMappingId}-${reviewId}`,
     originalText: payload.originalText ?? null,
+    osVersionLabel: "Android 35",
     rating,
     rawReview: {
       mock: true,
@@ -433,7 +537,7 @@ function mockReview(
   };
 }
 
-function mockAndroidReviews(mappingId: string): AndroidStoreReviewDto[] {
+function mockStoreReviews(mappingId: string): StoreReviewDto[] {
   return [
     mockReview(mappingId, "mock-review-5-star", 5, 1, {
       appVersionName: "2.8.1",
@@ -529,7 +633,7 @@ function mockAndroidReviews(mappingId: string): AndroidStoreReviewDto[] {
 }
 
 function filterMockReviews(
-  reviews: AndroidStoreReviewDto[],
+  reviews: StoreReviewDto[],
   filters: {
     rating?: string;
     reply?: string;
@@ -562,7 +666,7 @@ function filterMockReviews(
 
 function buildReviewStats(
   app: ReviewAppCard,
-  reviewDtos: AndroidStoreReviewDto[],
+  reviewDtos: StoreReviewDto[],
   averageRating?: number | null,
 ): ReviewAppStats {
   const repliedCount = reviewDtos.filter((review) => review.developerReplyText).length;
@@ -638,7 +742,7 @@ function replyTemplateContext(input: {
 }
 
 function replyTemplatePreviewDto(
-  template: AndroidReviewReplyTemplateRecord | null,
+  template: ReviewReplyTemplateRecord | null,
   storeMappingId: string,
   rating: number,
   context: ReviewReplyTemplateContext,
@@ -648,6 +752,94 @@ function replyTemplatePreviewDto(
   return {
     ...dto,
     resolvedReplyText: renderReplyTemplatePreviewText(dto.replyText, context),
+  };
+}
+
+async function getIosReviewAppDetail(
+  mappingId: string,
+  options?: {
+    includeMockData?: boolean;
+    rating?: string;
+    reply?: string;
+    reviewPagination?: PaginationQuery;
+    search?: string;
+  },
+): Promise<ReviewAppDetailPageData> {
+  const mapping = await getIosReviewMappingById(mappingId);
+  if (!mapping) throw notFound("Review app mapping was not found.");
+  const reviewPagination = options?.reviewPagination ?? {
+    page: 1,
+    pageSize: 10,
+    skip: 0,
+    take: 10,
+  };
+
+  const [
+    ratingGroups,
+    replyGroups,
+    reviewsPage,
+    fetchRuns,
+    fetchSchedule,
+    templates,
+    latestReview,
+  ] = await Promise.all([
+    getIosReviewRatingGroups([mappingId]),
+    getIosReviewReplyGroups([mappingId]),
+    getIosReviewsForMappingPage({
+      rating: options?.rating,
+      reply: options?.reply,
+      search: options?.search,
+      skip: reviewPagination.skip,
+      storeMappingId: mappingId,
+      take: reviewPagination.take,
+    }),
+    getIosReviewFetchRuns(mappingId),
+    getGlobalReviewFetchSchedule(),
+    getReviewReplyTemplates([{ platform: "ios", storeMappingId: mappingId }]),
+    getLatestIosReviewForMapping(mappingId),
+  ]);
+  const [reviews, reviewTotal] = reviewsPage;
+  const app = iosReviewAppCard(mapping, ratingGroups, replyCountByMapping(replyGroups));
+  const reviewDtos = reviews.map(iosReviewDto);
+  const paginatedReviews = paginatedResult(reviewDtos, reviewTotal, reviewPagination);
+
+  return {
+    app,
+    fetchSchedule: reviewFetchScheduleDto(fetchSchedule),
+    fetchRuns: fetchRuns.map(fetchRunDto),
+    isMockData: false,
+    replyTemplates: RATINGS.map((rating) =>
+      replyTemplatePreviewDto(
+        templates.find((template) => template.rating === rating) ?? null,
+        mappingId,
+        rating,
+        replyTemplateContext({
+          appName: mapping.appName,
+          contactEmail: app.storeContactEmail,
+          storeName: mapping.storeAccountName,
+          supportPhone: app.storeSupportPhone,
+          websiteUrl: app.storeWebsiteUrl,
+        }),
+      ),
+    ),
+    reviewFilters: {
+      rating: options?.rating ?? "all",
+      reply: options?.reply ?? "all",
+      search: options?.search ?? "",
+    },
+    reviewPagination: {
+      page: paginatedReviews.page,
+      pageSize: paginatedReviews.pageSize,
+      total: paginatedReviews.total,
+      totalPages: paginatedReviews.totalPages,
+    },
+    reviews: paginatedReviews.data,
+    stats: buildReviewStatsFromGroups(
+      app,
+      ratingGroups,
+      iso(latestReview?.reviewUpdatedAt ?? latestReview?.reviewCreatedAt ?? latestReview?.fetchedAt),
+    ),
+    syncState: syncStateDto(mapping.reviewTarget?.syncState ?? null),
   };
 }
 
@@ -662,7 +854,7 @@ export async function getReviewAppDetail(
   },
 ): Promise<ReviewAppDetailPageData> {
   const mapping = await getAndroidReviewMappingById(mappingId);
-  if (!mapping) throw notFound("Android app mapping was not found.");
+  if (!mapping) return getIosReviewAppDetail(mappingId, options);
   const reviewPagination = options?.reviewPagination ?? {
     page: 1,
     pageSize: 10,
@@ -690,13 +882,13 @@ export async function getReviewAppDetail(
       take: reviewPagination.take,
     }),
     getAndroidReviewFetchRuns(mappingId),
-    getGlobalAndroidReviewFetchSchedule(),
-    getAndroidReviewReplyTemplates([mappingId]),
+    getGlobalReviewFetchSchedule(),
+    getReviewReplyTemplates([mappingId]),
     getLatestAndroidReviewForMapping(mappingId),
   ]);
   const [reviews, reviewTotal] = reviewsPage;
   const app = reviewAppCard(mapping, ratingGroups, replyCountByMapping(replyGroups));
-  const realReviewDtos = reviews.map(reviewDto);
+  const realReviewDtos = reviews.map(androidReviewDto);
   const useMockData = Boolean(options?.includeMockData && !reviewTotal);
   let reviewDtos = realReviewDtos;
   let total = reviewTotal;
@@ -707,7 +899,7 @@ export async function getReviewAppDetail(
   );
 
   if (useMockData) {
-    const mockReviews = filterMockReviews(mockAndroidReviews(mappingId), {
+    const mockReviews = filterMockReviews(mockStoreReviews(mappingId), {
       rating: options?.rating,
       reply: options?.reply,
       search: options?.search,
@@ -717,7 +909,7 @@ export async function getReviewAppDetail(
       reviewPagination.skip + reviewPagination.take,
     );
     total = mockReviews.length;
-    stats = buildReviewStats(app, mockAndroidReviews(mappingId));
+    stats = buildReviewStats(app, mockStoreReviews(mappingId));
   }
   const paginatedReviews = paginatedResult(reviewDtos, total, reviewPagination);
 
@@ -758,7 +950,7 @@ export async function getReviewAppDetail(
 }
 
 function templateDto(
-  template: AndroidReviewReplyTemplateRecord | null,
+  template: ReviewReplyTemplateRecord | null,
   storeMappingId: string,
   rating: number,
 ): ReviewReplyTemplateDto {
@@ -775,8 +967,11 @@ function templateDto(
 
 export async function getReplyConfigPageData(): Promise<ReplyConfigBasePageData> {
   const apps = await getReviewAppCards();
-  const templates = await getAndroidReviewReplyTemplates(
-    apps.map((app) => app.mappingId),
+  const templates = await getReviewReplyTemplates(
+    apps.map((app) => ({
+      platform: app.platform,
+      storeMappingId: app.mappingId,
+    })),
   );
   const templatesByMappingId: ReplyConfigBasePageData["templatesByMappingId"] = {};
 
@@ -800,6 +995,7 @@ export async function getReplyConfigPageData(): Promise<ReplyConfigBasePageData>
 }
 
 export type SaveReviewReplyTemplatesPayload = {
+  platform?: unknown;
   storeMappingId?: unknown;
   templates?: Array<{
     isActive?: unknown;
@@ -810,22 +1006,26 @@ export type SaveReviewReplyTemplatesPayload = {
 
 export type SaveReplyStoreInfoPayload = {
   contactEmail?: unknown;
+  platform?: unknown;
   storeProfileId?: unknown;
   supportPhone?: unknown;
   websiteUrl?: unknown;
 };
 
-export type SendAndroidReviewReplyPayload = {
+export type SendReviewReplyPayload = {
+  platform?: unknown;
   reviewId?: unknown;
   storeMappingId?: unknown;
 };
 
 function normalizeTemplatePayload(payload: SaveReviewReplyTemplatesPayload) {
+  const platform: "android" | "ios" =
+    cleanText(payload.platform).toLowerCase() === "ios" ? "ios" : "android";
   const storeMappingId = cleanText(payload.storeMappingId);
   const templates = Array.isArray(payload.templates) ? payload.templates : [];
 
   if (!storeMappingId) {
-    throw badRequest("Android app mapping is required.");
+    throw badRequest("Review app mapping is required.");
   }
 
   if (templates.length !== RATINGS.length) {
@@ -864,6 +1064,7 @@ function normalizeTemplatePayload(payload: SaveReviewReplyTemplatesPayload) {
   }
 
   return {
+    platform,
     storeMappingId,
     templates: normalized,
   };
@@ -874,14 +1075,18 @@ export async function saveReviewReplyTemplates(
   authEmail: string,
 ) {
   const normalized = normalizeTemplatePayload(payload);
-  const mapping = await getAndroidReviewMappingById(normalized.storeMappingId);
-  if (!mapping) throw notFound("Android app mapping was not found.");
+  const mapping =
+    normalized.platform === "ios"
+      ? await getIosReviewMappingById(normalized.storeMappingId)
+      : await getAndroidReviewMappingById(normalized.storeMappingId);
+  if (!mapping) throw notFound("Review app mapping was not found.");
 
   const templates = await Promise.all(
     normalized.templates.map((template) =>
-      upsertAndroidReviewReplyTemplate({
+      upsertReviewReplyTemplate({
         createdBy: authEmail,
         isActive: template.isActive,
+        platform: normalized.platform,
         rating: template.rating,
         replyText: template.replyText,
         storeMappingId: normalized.storeMappingId,
@@ -899,6 +1104,8 @@ export async function saveReviewReplyTemplates(
 }
 
 function normalizeStoreInfoPayload(payload: SaveReplyStoreInfoPayload) {
+  const platform: "android" | "ios" =
+    cleanText(payload.platform).toLowerCase() === "ios" ? "ios" : "android";
   const storeProfileId = cleanText(payload.storeProfileId);
   const contactEmail = nullableText(payload.contactEmail);
   const supportPhone = nullableText(payload.supportPhone);
@@ -925,6 +1132,7 @@ function normalizeStoreInfoPayload(payload: SaveReplyStoreInfoPayload) {
 
   return {
     contactEmail,
+    platform,
     storeProfileId,
     supportPhone,
     websiteUrl,
@@ -935,7 +1143,8 @@ export async function saveReplyStoreInfo(
   payload: SaveReplyStoreInfoPayload,
 ) {
   const normalized = normalizeStoreInfoPayload(payload);
-  const store = await updateAndroidStoreProfileReplyInfo(
+  const store = await updateReviewStoreTargetReplyInfo(
+    normalized.platform,
     normalized.storeProfileId,
     {
       contactEmail: normalized.contactEmail,
@@ -947,7 +1156,7 @@ export async function saveReplyStoreInfo(
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === "P2025"
     ) {
-      throw notFound("Android store profile was not found.");
+      throw notFound("Review store profile was not found.");
     }
 
     throw error;
@@ -965,19 +1174,21 @@ export async function saveReplyStoreInfo(
   };
 }
 
-function normalizeSendReplyPayload(payload: SendAndroidReviewReplyPayload) {
+function normalizeSendReplyPayload(payload: SendReviewReplyPayload) {
+  const platform: "android" | "ios" =
+    cleanText(payload.platform).toLowerCase() === "ios" ? "ios" : "android";
   const storeMappingId = cleanText(payload.storeMappingId);
   const reviewId = cleanText(payload.reviewId);
 
   if (!storeMappingId || !isUuid(storeMappingId)) {
-    throw badRequest("Android app mapping is required.");
+    throw badRequest("Review app mapping is required.");
   }
 
   if (!reviewId) {
     throw badRequest("Review ID is required.");
   }
 
-  return { reviewId, storeMappingId };
+  return { platform, reviewId, storeMappingId };
 }
 
 function renderReplyText(
@@ -1080,8 +1291,83 @@ async function replyToGooglePlayReview(input: {
   return body;
 }
 
+async function replyToAppStoreReview(input: {
+  jwt: string;
+  replyText: string;
+  reviewId: string;
+}) {
+  const response = await fetch(
+    "https://api.appstoreconnect.apple.com/v1/customerReviewResponses",
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${input.jwt}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        data: {
+          type: "customerReviewResponses",
+          attributes: {
+            responseBody: input.replyText,
+          },
+          relationships: {
+            review: {
+              data: {
+                type: "customerReviews",
+                id: input.reviewId,
+              },
+            },
+          },
+        },
+      }),
+    },
+  );
+  const body = await readAppleJson(response);
+
+  if (!response.ok) {
+    throwAppleApiError(response, body, "App Store review reply");
+  }
+
+  return body;
+}
+
+function appleResponseData(body: unknown) {
+  const data = recordValue(body)?.data;
+  return recordValue(data);
+}
+
+function appleResponseAttributes(body: unknown) {
+  return recordValue(appleResponseData(body)?.attributes);
+}
+
+function appleResponseText(body: unknown) {
+  const attributes = appleResponseAttributes(body);
+  const responseBody = attributes?.responseBody;
+  return typeof responseBody === "string" && responseBody.trim()
+    ? responseBody
+    : null;
+}
+
+function appleResponseUpdatedAt(body: unknown) {
+  const attributes = appleResponseAttributes(body);
+  const updatedAt =
+    attributes?.lastModifiedDate ??
+    attributes?.modifiedDate ??
+    attributes?.updatedDate;
+
+  if (typeof updatedAt !== "string") return null;
+  const date = new Date(updatedAt);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function appleResponseId(body: unknown) {
+  const id = appleResponseData(body)?.id;
+  return typeof id === "string" && id.trim() ? id : null;
+}
+
 export async function sendAndroidReviewReply(
-  payload: SendAndroidReviewReplyPayload,
+  payload: SendReviewReplyPayload,
 ) {
   const { reviewId, storeMappingId } = normalizeSendReplyPayload(payload);
   const review = await getAndroidReviewForReply(storeMappingId, reviewId);
@@ -1091,10 +1377,11 @@ export async function sendAndroidReviewReply(
     throw badRequest("Review does not have a rating for template lookup.");
   }
 
-  const template = await getAndroidReviewReplyTemplateForRating(
+  const template = await getReviewReplyTemplateForRating({
+    platform: "android",
+    rating: review.rating,
     storeMappingId,
-    review.rating,
-  );
+  });
 
   if (!template?.isActive || !template.replyText.trim()) {
     throw badRequest(`${review.rating}-star reply template is not active.`);
@@ -1152,3 +1439,81 @@ export async function sendAndroidReviewReply(
     storeMappingId,
   };
 }
+
+export async function sendIosReviewReply(
+  payload: SendReviewReplyPayload,
+) {
+  const { reviewId, storeMappingId } = normalizeSendReplyPayload(payload);
+  const review = await getIosReviewForReply(storeMappingId, reviewId);
+  if (!review) throw notFound("iOS review was not found.");
+
+  if (!review.rating) {
+    throw badRequest("Review does not have a rating for template lookup.");
+  }
+
+  const template = await getReviewReplyTemplateForRating({
+    platform: "ios",
+    rating: review.rating,
+    storeMappingId,
+  });
+
+  if (!template?.isActive || !template.replyText.trim()) {
+    throw badRequest(`${review.rating}-star reply template is not active.`);
+  }
+
+  const mapping = review.appTarget.iosStoreMapping;
+  if (!mapping) throw notFound("iOS app mapping was not found.");
+
+  const storeTarget = mapping.reviewTarget?.storeTarget ?? null;
+  const replyText = renderReplyText(
+    template.replyText,
+    replyTemplateContext({
+      appName: mapping.appName,
+      authorName: review.authorName,
+      contactEmail: storeTarget?.contactEmail ?? null,
+      storeName: mapping.storeAccountName,
+      supportPhone: storeTarget?.supportPhone ?? null,
+      websiteUrl: storeTarget?.websiteUrl ?? null,
+    }),
+  );
+  const credential = await getActiveIosCredentialForStoreProfile(
+    mapping.storeProfileId,
+  );
+  if (!credential) {
+    throw badRequest("No active iOS App Store Connect credential was found.");
+  }
+
+  const appleCredential = await resolveAppleAscCredential(credential);
+  const jwt = await appleAppStoreConnectToken(appleCredential);
+  const appleResponse = await replyToAppStoreReview({
+    jwt,
+    replyText,
+    reviewId,
+  });
+  const appliedReplyText = appleResponseText(appleResponse) ?? replyText;
+  const repliedAt = appleResponseUpdatedAt(appleResponse) ?? new Date();
+  const developerReplyId = appleResponseId(appleResponse);
+
+  await updateIosReviewDeveloperReply(review.id, {
+    developerReplyId,
+    developerReplyText: appliedReplyText,
+    developerReplyUpdatedAt: repliedAt,
+  });
+
+  return {
+    developerReplyText: appliedReplyText,
+    developerReplyUpdatedAt: repliedAt.toISOString(),
+    message: "Reply sent to App Store.",
+    reviewId,
+    storeMappingId,
+  };
+}
+
+export function sendStoreReviewReply(payload: SendReviewReplyPayload) {
+  const { platform } = normalizeSendReplyPayload(payload);
+  return platform === "ios"
+    ? sendIosReviewReply(payload)
+    : sendAndroidReviewReply(payload);
+}
+
+

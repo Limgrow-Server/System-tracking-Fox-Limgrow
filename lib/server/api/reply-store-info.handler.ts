@@ -1,6 +1,9 @@
 import "server-only";
 
-import { canAccessReviewApp, canAccessScopedRecord } from "@/lib/auth/app-scope";
+import {
+  canAccessReviewApp,
+  canAccessScopedRecord,
+} from "@/lib/auth/app-scope";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
@@ -9,7 +12,7 @@ import {
   saveReplyStoreInfo,
   type SaveReplyStoreInfoPayload,
   getReviewAppCards,
-} from "@/lib/server/services/reviews/android-review.service";
+} from "@/lib/server/services/reviews/review.service";
 
 const reviewRoles = ["Admin", "Dev", "Marketing"] as const;
 
@@ -22,7 +25,9 @@ export async function handleReplyStoreInfoPut(request: Request) {
     const session = await requireConsoleApiSession([...reviewRoles]);
     const payload = await parseJsonBody<SaveReplyStoreInfoPayload>(request);
     const storeProfileId = clean(payload.storeProfileId);
-    const hasDirectStoreScope = canAccessScopedRecord(session, { storeProfileId });
+    const hasDirectStoreScope = canAccessScopedRecord(session, {
+      storeProfileId,
+    });
     const hasScopedAppInStore =
       session.role === "Admin" ||
       (await getReviewAppCards()).some(
@@ -30,7 +35,11 @@ export async function handleReplyStoreInfoPut(request: Request) {
           app.storeProfileId === storeProfileId &&
           canAccessReviewApp(session, app),
       );
-    if (session.role !== "Admin" && !hasDirectStoreScope && !hasScopedAppInStore) {
+    if (
+      session.role !== "Admin" &&
+      !hasDirectStoreScope &&
+      !hasScopedAppInStore
+    ) {
       throw forbidden("This reply store is outside your assigned app scope.");
     }
 

@@ -9,7 +9,7 @@ import {
   updateReviewFetchScheduleStatus,
   type SaveReviewFetchSchedulePayload,
   type UpdateReviewFetchScheduleStatusPayload,
-} from "@/lib/server/services/reviews/android-review-schedule.service";
+} from "@/lib/server/services/reviews/review-fetch-schedule.service";
 
 const reviewRoles = ["Admin", "Dev", "Marketing"] as const;
 

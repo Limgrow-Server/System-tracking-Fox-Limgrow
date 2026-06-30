@@ -3,14 +3,14 @@ import "server-only";
 import { canAccessReviewApp } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
-import { getGlobalAndroidReviewFetchSchedule } from "@/lib/server/repositories/reviews/android-review.repository";
+import { getGlobalReviewFetchSchedule } from "@/lib/server/repositories/reviews/review.repository";
 import {
   filterReviewAppCards,
   getReviewAppCards,
   paginateReviewAppCards,
   reviewStoreOptions,
-} from "@/lib/server/services/reviews/android-review.service";
-import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/android-review-schedule.service";
+} from "@/lib/server/services/reviews/review.service";
+import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/review-fetch-schedule.service";
 import type {
   ReviewFetchScheduleApp,
   ReviewFetchScheduleDto,
@@ -54,9 +54,7 @@ export async function getReviewFetchSchedulePageData(
   const apps = (await getReviewAppCards()).filter((app) =>
     canAccessReviewApp(session, app),
   );
-  const schedule = reviewFetchScheduleDto(
-    await getGlobalAndroidReviewFetchSchedule(),
-  );
+  const schedule = reviewFetchScheduleDto(await getGlobalReviewFetchSchedule());
   const filteredApps = filterReviewAppCards(apps, {
     search: options?.search,
     storeProfileId: options?.storeProfileId,

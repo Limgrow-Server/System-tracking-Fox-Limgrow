@@ -10,23 +10,35 @@ import type {
 
 import { badRequest, notFound } from "@/lib/server/api/errors";
 import {
-  claimDueAndroidReviewFetchSchedules,
   claimPendingAndroidReviewFetchRuns,
-  deleteGlobalAndroidReviewFetchSchedule,
   deleteOldAndroidReviewFetchRuns,
   enqueueScheduledAndroidReviewFetchRuns,
-  finishAndroidReviewFetchScheduleRun,
   getActiveAndroidReviewMappings,
-  getGlobalAndroidReviewFetchSchedule,
-  markAndroidReviewFetchSchedulesMaterialized,
   recoverStaleAndroidReviewFetchRuns,
   recoverStaleAndroidReviewSyncStates,
   retryAndroidReviewFetchRun,
-  updateGlobalAndroidReviewFetchScheduleStatus,
-  upsertGlobalAndroidReviewFetchSchedule,
 } from "@/lib/server/repositories/reviews/android-review.repository";
+import {
+  claimPendingIosReviewFetchRuns,
+  deleteOldIosReviewFetchRuns,
+  enqueueScheduledIosReviewFetchRuns,
+  getActiveIosReviewMappings,
+  recoverStaleIosReviewFetchRuns,
+  recoverStaleIosReviewSyncStates,
+  retryIosReviewFetchRun,
+} from "@/lib/server/repositories/reviews/ios-review.repository";
+import {
+  claimDueReviewFetchSchedules,
+  deleteGlobalReviewFetchSchedule,
+  finishReviewFetchScheduleRun,
+  getGlobalReviewFetchSchedule,
+  markReviewFetchSchedulesMaterialized,
+  updateGlobalReviewFetchScheduleStatus,
+  upsertGlobalReviewFetchSchedule,
+} from "@/lib/server/repositories/reviews/review.repository";
 import { cleanText } from "@/lib/server/services/credentials/credential.shared";
 import { processClaimedAndroidReviewFetchRun } from "@/lib/server/services/reviews/android-review-fetch.service";
+import { processClaimedIosReviewFetchRun } from "@/lib/server/services/reviews/ios-review-fetch.service";
 import type { ReviewFetchScheduleDto } from "@/lib/tracking/page-data";
 
 const DEFAULT_REVIEW_FETCH_INTERVAL_HOURS = 8;
@@ -127,7 +139,7 @@ export async function saveReviewFetchSchedule(
   const normalized = normalizeScheduleSettings(payload);
   const now = new Date();
 
-  const schedule = await upsertGlobalAndroidReviewFetchSchedule({
+  const schedule = await upsertGlobalReviewFetchSchedule({
     createdBy: authEmail,
     intervalHours: normalized.intervalHours,
     nextRunAt: now,
@@ -146,10 +158,10 @@ export async function updateReviewFetchScheduleStatus(
   authEmail: string,
 ) {
   const status = normalizeScheduleStatus(payload.status);
-  const current = await getGlobalAndroidReviewFetchSchedule();
+  const current = await getGlobalReviewFetchSchedule();
   if (!current) throw notFound("Review fetch schedule was not found.");
 
-  const schedule = await updateGlobalAndroidReviewFetchScheduleStatus({
+  const schedule = await updateGlobalReviewFetchScheduleStatus({
     nextRunAt: status === "ACTIVE" ? new Date() : undefined,
     status,
     updatedBy: authEmail,
@@ -162,7 +174,7 @@ export async function updateReviewFetchScheduleStatus(
 }
 
 export async function removeReviewFetchSchedule() {
-  await deleteGlobalAndroidReviewFetchSchedule().catch((error: unknown) => {
+  await deleteGlobalReviewFetchSchedule().catch((error: unknown) => {
     if (
       error &&
       typeof error === "object" &&
@@ -217,7 +229,7 @@ function retryableReviewFetchError(error: unknown) {
 
 async function materializeDueReviewFetchSchedules(now: Date) {
   const lockedBy = `review-fetch-scheduler-${randomUUID()}`;
-  const schedules = await claimDueAndroidReviewFetchSchedules({
+  const schedules = await claimDueReviewFetchSchedules({
     lockedBy,
     lockStaleBefore: new Date(now.getTime() - SCHEDULE_LOCK_TTL_MS),
     now,
@@ -230,11 +242,14 @@ async function materializeDueReviewFetchSchedules(now: Date) {
     };
   }
 
-  const mappings = await getActiveAndroidReviewMappings();
-  const jobs = schedules.flatMap((schedule) => {
+  const [androidMappings, iosMappings] = await Promise.all([
+    getActiveAndroidReviewMappings(),
+    getActiveIosReviewMappings(),
+  ]);
+  const androidJobs = schedules.flatMap((schedule) => {
     const scheduledFor = schedule.nextRunAt ?? now;
 
-    return mappings.map((mapping) => ({
+    return androidMappings.map((mapping) => ({
       maxAttempts: SCHEDULED_REVIEW_FETCH_MAX_ATTEMPTS,
       maxResults: SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
       nextAttemptAt: now,
@@ -243,9 +258,24 @@ async function materializeDueReviewFetchSchedules(now: Date) {
       storeMappingId: mapping.id,
     }));
   });
-  const enqueueResult = await enqueueScheduledAndroidReviewFetchRuns(jobs);
+  const iosJobs = schedules.flatMap((schedule) => {
+    const scheduledFor = schedule.nextRunAt ?? now;
 
-  await markAndroidReviewFetchSchedulesMaterialized(
+    return iosMappings.map((mapping) => ({
+      maxAttempts: SCHEDULED_REVIEW_FETCH_MAX_ATTEMPTS,
+      maxResults: SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
+      nextAttemptAt: now,
+      scheduledFor,
+      sourceScheduleId: schedule.id,
+      storeMappingId: mapping.id,
+    }));
+  });
+  const [androidEnqueueResult, iosEnqueueResult] = await Promise.all([
+    enqueueScheduledAndroidReviewFetchRuns(androidJobs),
+    enqueueScheduledIosReviewFetchRuns(iosJobs),
+  ]);
+
+  await markReviewFetchSchedulesMaterialized(
     schedules.map((schedule) => ({
       nextRunAt: nextIntervalReviewFetchRunAt(
         schedule.intervalHours,
@@ -258,35 +288,63 @@ async function materializeDueReviewFetchSchedules(now: Date) {
 
   return {
     claimed: schedules.length,
-    enqueued: enqueueResult.count,
-    schedules: jobs.map((job) => {
-      const mapping = mappings.find(
-        (candidate) => candidate.id === job.storeMappingId,
-      );
-      const schedule = schedules.find(
-        (candidate) => candidate.id === job.sourceScheduleId,
-      );
+    enqueued: androidEnqueueResult.count + iosEnqueueResult.count,
+    schedules: [
+      ...androidJobs.map((job) => {
+        const mapping = androidMappings.find(
+          (candidate) => candidate.id === job.storeMappingId,
+        );
+        const schedule = schedules.find(
+          (candidate) => candidate.id === job.sourceScheduleId,
+        );
 
-      return {
-        appName: mapping?.appName ?? "Unknown app",
-        intervalHours: schedule?.intervalHours ?? DEFAULT_REVIEW_FETCH_INTERVAL_HOURS,
-        nextRunAt: schedule
-          ? nextIntervalReviewFetchRunAt(
-              schedule.intervalHours,
-              schedule.nextRunAt ?? now,
-              now,
-            ).toISOString()
-          : null,
-        packageName: mapping?.packageName ?? null,
-        scheduleId: job.sourceScheduleId,
-        scheduledFor: job.scheduledFor.toISOString(),
-        storeMappingId: job.storeMappingId,
-      };
-    }),
+        return {
+          appName: mapping?.appName ?? "Unknown app",
+          intervalHours: schedule?.intervalHours ?? DEFAULT_REVIEW_FETCH_INTERVAL_HOURS,
+          nextRunAt: schedule
+            ? nextIntervalReviewFetchRunAt(
+                schedule.intervalHours,
+                schedule.nextRunAt ?? now,
+                now,
+              ).toISOString()
+            : null,
+          packageName: mapping?.packageName ?? null,
+          platform: "android",
+          scheduleId: job.sourceScheduleId,
+          scheduledFor: job.scheduledFor.toISOString(),
+          storeMappingId: job.storeMappingId,
+        };
+      }),
+      ...iosJobs.map((job) => {
+        const mapping = iosMappings.find(
+          (candidate) => candidate.id === job.storeMappingId,
+        );
+        const schedule = schedules.find(
+          (candidate) => candidate.id === job.sourceScheduleId,
+        );
+
+        return {
+          appName: mapping?.appName ?? "Unknown app",
+          bundleId: mapping?.bundleId ?? null,
+          intervalHours: schedule?.intervalHours ?? DEFAULT_REVIEW_FETCH_INTERVAL_HOURS,
+          nextRunAt: schedule
+            ? nextIntervalReviewFetchRunAt(
+                schedule.intervalHours,
+                schedule.nextRunAt ?? now,
+                now,
+              ).toISOString()
+            : null,
+          platform: "ios",
+          scheduleId: job.sourceScheduleId,
+          scheduledFor: job.scheduledFor.toISOString(),
+          storeMappingId: job.storeMappingId,
+        };
+      }),
+    ],
   };
 }
 
-async function processReviewFetchJob(
+async function processAndroidReviewFetchJob(
   run: Awaited<ReturnType<typeof claimPendingAndroidReviewFetchRuns>>[number],
 ) {
   const startedAt = run.startedAt ?? new Date();
@@ -298,7 +356,7 @@ async function processReviewFetchJob(
     const lastStatus = resultStatus(result.status);
 
     if (run.sourceScheduleId) {
-      await finishAndroidReviewFetchScheduleRun(run.sourceScheduleId, {
+      await finishReviewFetchScheduleRun(run.sourceScheduleId, {
         lastRunAt: startedAt,
         lastStatus,
       });
@@ -307,6 +365,7 @@ async function processReviewFetchJob(
     return {
       appName: run.storeMapping.appName,
       packageName: run.storeMapping.packageName,
+      platform: "android",
       result,
       runId: run.id,
       scheduleId: run.sourceScheduleId,
@@ -331,6 +390,7 @@ async function processReviewFetchJob(
         error: message,
         nextAttemptAt: nextAttemptAt.toISOString(),
         packageName: run.storeMapping.packageName,
+        platform: "android",
         runId: run.id,
         scheduleId: run.sourceScheduleId,
         status: "retrying",
@@ -339,7 +399,7 @@ async function processReviewFetchJob(
     }
 
     if (run.sourceScheduleId) {
-      await finishAndroidReviewFetchScheduleRun(run.sourceScheduleId, {
+      await finishReviewFetchScheduleRun(run.sourceScheduleId, {
         errorCode: "fetch_google_play_reviews_failed",
         errorMessage: message,
         lastRunAt: startedAt,
@@ -351,12 +411,105 @@ async function processReviewFetchJob(
       appName: run.storeMapping.appName,
       error: message,
       packageName: run.storeMapping.packageName,
+      platform: "android",
       runId: run.id,
       scheduleId: run.sourceScheduleId,
       status: "failed",
       storeMappingId: run.storeMappingId,
     };
   }
+}
+
+async function processIosReviewFetchJob(
+  run: Awaited<ReturnType<typeof claimPendingIosReviewFetchRuns>>[number],
+) {
+  const startedAt = run.startedAt ?? new Date();
+
+  try {
+    const result = await processClaimedIosReviewFetchRun(run, {
+      maxResults: run.maxResults || SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
+    });
+    const lastStatus = resultStatus(result.status);
+
+    if (run.sourceScheduleId) {
+      await finishReviewFetchScheduleRun(run.sourceScheduleId, {
+        lastRunAt: startedAt,
+        lastStatus,
+      });
+    }
+
+    return {
+      appName: run.storeMapping.appName,
+      bundleId: run.storeMapping.bundleId,
+      platform: "ios",
+      result,
+      runId: run.id,
+      scheduleId: run.sourceScheduleId,
+      status: lastStatus.toLowerCase(),
+      storeMappingId: run.storeMappingId,
+    };
+  } catch (error) {
+    const message = errorMessage(error, "Scheduled iOS review fetch failed.");
+    const canRetry =
+      retryableReviewFetchError(error) && run.attemptCount < run.maxAttempts;
+
+    if (canRetry) {
+      const nextAttemptAt = new Date(Date.now() + RETRY_DELAY_MS);
+      await retryIosReviewFetchRun(run.id, {
+        errorCode: "fetch_app_store_reviews_retry",
+        errorMessage: message,
+        nextAttemptAt,
+      });
+
+      return {
+        appName: run.storeMapping.appName,
+        bundleId: run.storeMapping.bundleId,
+        error: message,
+        nextAttemptAt: nextAttemptAt.toISOString(),
+        platform: "ios",
+        runId: run.id,
+        scheduleId: run.sourceScheduleId,
+        status: "retrying",
+        storeMappingId: run.storeMappingId,
+      };
+    }
+
+    if (run.sourceScheduleId) {
+      await finishReviewFetchScheduleRun(run.sourceScheduleId, {
+        errorCode: "fetch_app_store_reviews_failed",
+        errorMessage: message,
+        lastRunAt: startedAt,
+        lastStatus: "FAILED",
+      });
+    }
+
+    return {
+      appName: run.storeMapping.appName,
+      bundleId: run.storeMapping.bundleId,
+      error: message,
+      platform: "ios",
+      runId: run.id,
+      scheduleId: run.sourceScheduleId,
+      status: "failed",
+      storeMappingId: run.storeMappingId,
+    };
+  }
+}
+
+async function processReviewFetchJob(
+  run:
+    | Awaited<ReturnType<typeof claimPendingAndroidReviewFetchRuns>>[number]
+    | Awaited<ReturnType<typeof claimPendingIosReviewFetchRuns>>[number],
+) {
+  if ("packageName" in run.storeMapping) {
+    return processAndroidReviewFetchJob(
+      run as Awaited<ReturnType<typeof claimPendingAndroidReviewFetchRuns>>[number],
+    );
+  }
+
+  return processIosReviewFetchJob(
+    run as Awaited<ReturnType<typeof claimPendingIosReviewFetchRuns>>[number],
+  );
 }
 
 async function runPendingReviewFetchJobs() {
@@ -366,11 +519,24 @@ async function runPendingReviewFetchJobs() {
   for (let batch = 0; batch < REVIEW_FETCH_WORKER_MAX_BATCHES; batch += 1) {
     const now = new Date();
     const lockedBy = `review-fetch-worker-${randomUUID()}`;
-    const jobs = await claimPendingAndroidReviewFetchRuns({
+    const androidJobs = await claimPendingAndroidReviewFetchRuns({
       limit: REVIEW_FETCH_WORKER_CONCURRENCY,
       lockedBy,
       now,
     });
+    const iosLimit = Math.max(
+      0,
+      REVIEW_FETCH_WORKER_CONCURRENCY - androidJobs.length,
+    );
+    const iosJobs = iosLimit
+      ? await claimPendingIosReviewFetchRuns({
+          limit: iosLimit,
+          lockedBy,
+          now,
+        })
+      : [];
+    const jobs = [...androidJobs, ...iosJobs];
+
     if (!jobs.length) break;
 
     claimed += jobs.length;
@@ -385,35 +551,65 @@ async function runPendingReviewFetchJobs() {
 
 export async function runDueReviewFetchSchedules() {
   const now = new Date();
-  const staleRuns = await recoverStaleAndroidReviewFetchRuns({
-    errorCode: "stale_review_fetch_lock",
-    errorMessage: "Review fetch worker lock expired before the job finished.",
-    nextAttemptAt: now,
-    staleBefore: new Date(now.getTime() - RUN_LOCK_TTL_MS),
-  });
-  const staleSyncStates = await recoverStaleAndroidReviewSyncStates({
-    errorCode: "stale_review_fetch_sync_state",
-    errorMessage: "Review fetch sync state lock expired before cleanup finished.",
-    finishedAt: now,
-    staleBefore: new Date(now.getTime() - RUN_LOCK_TTL_MS),
-  });
+  const [androidStaleRuns, iosStaleRuns] = await Promise.all([
+    recoverStaleAndroidReviewFetchRuns({
+      errorCode: "stale_review_fetch_lock",
+      errorMessage: "Review fetch worker lock expired before the job finished.",
+      nextAttemptAt: now,
+      staleBefore: new Date(now.getTime() - RUN_LOCK_TTL_MS),
+    }),
+    recoverStaleIosReviewFetchRuns({
+      errorCode: "stale_review_fetch_lock",
+      errorMessage: "Review fetch worker lock expired before the job finished.",
+      nextAttemptAt: now,
+      staleBefore: new Date(now.getTime() - RUN_LOCK_TTL_MS),
+    }),
+  ]);
+  const [androidStaleSyncStates, iosStaleSyncStates] = await Promise.all([
+    recoverStaleAndroidReviewSyncStates({
+      errorCode: "stale_review_fetch_sync_state",
+      errorMessage: "Review fetch sync state lock expired before cleanup finished.",
+      finishedAt: now,
+      staleBefore: new Date(now.getTime() - RUN_LOCK_TTL_MS),
+    }),
+    recoverStaleIosReviewSyncStates({
+      errorCode: "stale_review_fetch_sync_state",
+      errorMessage: "Review fetch sync state lock expired before cleanup finished.",
+      finishedAt: now,
+      staleBefore: new Date(now.getTime() - RUN_LOCK_TTL_MS),
+    }),
+  ]);
   const materialized = await materializeDueReviewFetchSchedules(now);
   const worker = await runPendingReviewFetchJobs();
-  const retention = await deleteOldAndroidReviewFetchRuns({
-    before: new Date(now.getTime() - FETCH_RUN_RETENTION_DAYS * 24 * 60 * 60 * 1000),
-  });
+  const retentionBefore = new Date(
+    now.getTime() - FETCH_RUN_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  );
+  const [androidRetention, iosRetention] = await Promise.all([
+    deleteOldAndroidReviewFetchRuns({
+      before: retentionBefore,
+    }),
+    deleteOldIosReviewFetchRuns({
+      before: retentionBefore,
+    }),
+  ]);
 
   return {
     checkedAt: now.toISOString(),
     materialized,
     retention: {
-      deleted: retention.count,
+      androidDeleted: androidRetention.count,
+      deleted: androidRetention.count + iosRetention.count,
       days: FETCH_RUN_RETENTION_DAYS,
+      iosDeleted: iosRetention.count,
     },
     stale: {
-      runs: staleRuns,
-      syncStates: staleSyncStates.count,
+      runs: {
+        android: androidStaleRuns,
+        ios: iosStaleRuns,
+      },
+      syncStates: androidStaleSyncStates.count + iosStaleSyncStates.count,
     },
     worker,
   };
 }
+
