@@ -12,6 +12,7 @@ model AndroidStoreProfile {
   mappings         AndroidStoreMapping[]
   credentials      AndroidCredential[]
   iapTransactions  IapAndroid[]
+  reviewTarget     ReviewStoreTarget?
 
   @@index([status, storeAccountName], map: "android_store_profiles_status_name_idx")
   @@map("android_store_profiles")
@@ -35,6 +36,7 @@ model AndroidStoreMapping {
   reviewFetchRuns     AndroidStoreReviewFetchRun[]
   reviewFetchSchedule AndroidStoreReviewFetchSchedule?
   replyTemplates      AndroidStoreReviewReplyTemplate[]
+  reviewTarget        ReviewAppTarget?
 
   @@unique([storeProfileId, appName], map: "android_store_mappings_profile_app_name_key")
   @@unique([storeProfileId, appId], map: "android_store_mappings_profile_app_id_key")
@@ -48,6 +50,7 @@ model AndroidStoreMapping {
 model AndroidStoreReview {
   id                      String              @id @default(uuid()) @db.Uuid
   storeMappingId          String              @map("store_mapping_id") @db.Uuid
+  reviewAppTargetId       String?             @map("review_app_target_id") @db.Uuid
   reviewId                String              @map("review_id")
   authorName              String?             @map("author_name")
   rating                  Int?
@@ -69,8 +72,10 @@ model AndroidStoreReview {
   createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
   storeMapping            AndroidStoreMapping @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  appTarget               ReviewAppTarget?    @relation(fields: [reviewAppTargetId], references: [id], onDelete: SetNull)
 
   @@unique([storeMappingId, reviewId], map: "android_store_reviews_mapping_review_key")
+  @@index([reviewAppTargetId], map: "android_store_reviews_app_target_idx")
   @@index([storeMappingId, userCommentUpdatedAt], map: "android_store_reviews_mapping_user_updated_idx")
   @@index([storeMappingId, rating], map: "android_store_reviews_mapping_rating_idx")
   @@index([developerReplyUpdatedAt], map: "android_store_reviews_reply_updated_idx")

@@ -80,3 +80,10 @@ enum ReviewFetchScheduleStatus {
 
   @@map("review_fetch_schedule_status")
 }
+
+enum ReviewPlatform {
+  ANDROID @map("android")
+  IOS     @map("ios")
+
+  @@map("review_platform")
+}
