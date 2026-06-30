@@ -106,6 +106,8 @@ model AndroidStoreReviewFetchRun {
   sourceScheduleId String?                          @map("source_schedule_id") @db.Uuid
   triggerType      ReviewFetchTrigger               @default(SCHEDULED) @map("trigger_type")
   status           ReviewFetchRunStatus             @default(PENDING)
+  scanMode         ReviewFetchScanMode              @default(LIMITED) @map("scan_mode")
+  stopReason       ReviewFetchStopReason?           @map("stop_reason")
   scheduledFor     DateTime?                        @map("scheduled_for") @db.Timestamptz(6)
   nextAttemptAt    DateTime?                        @map("next_attempt_at") @db.Timestamptz(6)
   attemptCount     Int                              @default(0) @map("attempt_count")
@@ -113,6 +115,8 @@ model AndroidStoreReviewFetchRun {
   lockedAt         DateTime?                        @map("locked_at") @db.Timestamptz(6)
   lockedBy         String?                          @map("locked_by")
   maxResults       Int                              @default(100) @map("max_results")
+  requestCount     Int                              @default(0) @map("request_count")
+  nextPageToken    String?                          @map("next_page_token") @db.Text
   pagesFetched     Int                              @default(0) @map("pages_fetched")
   reviewsFetched   Int                              @default(0) @map("reviews_fetched")
   reviewsUpserted  Int                              @default(0) @map("reviews_upserted")
@@ -138,9 +142,7 @@ model AndroidStoreReviewFetchSchedule {
   id               String                       @id @default(uuid()) @db.Uuid
   storeMappingId   String                       @unique @map("store_mapping_id") @db.Uuid
   status           ReviewFetchScheduleStatus    @default(ACTIVE)
-  scheduleType     String                       @default("daily") @map("schedule_type")
-  timeOfDay        String                       @default("09:00") @map("time_of_day")
-  timezone         String                       @default("Asia/Ho_Chi_Minh")
+  intervalHours    Int                          @default(8) @map("interval_hours")
   nextRunAt        DateTime                     @map("next_run_at") @db.Timestamptz(6)
   lastRunAt        DateTime?                    @map("last_run_at") @db.Timestamptz(6)
   lastStatus       ReviewFetchRunStatus?        @map("last_status")

@@ -62,10 +62,15 @@ import {
 } from "@/components/tracking/primitives";
 import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
+import {
+  MAX_REVIEW_REPLY_TEXT_LENGTH,
+  renderReviewReplyTemplate,
+} from "@/lib/tracking/reply-template";
 import type {
   AndroidDeviceMetadataDto,
   AndroidStoreReviewDto,
   PaginationMeta,
+  ReviewAppCard,
   ReviewAppDetailPageData,
   ReviewAppStats,
   ReviewFetchRunDto,
@@ -78,6 +83,7 @@ import { showToast } from "@/lib/client/toast";
 
 const GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_REPLY_TEXT_LENGTH = MAX_REVIEW_REPLY_TEXT_LENGTH;
 
 function formatRating(value: number | null) {
   return value ? value.toFixed(1) : "N/A";
@@ -102,7 +108,7 @@ function Stars({ rating }: { rating: number | null }) {
 
 function RatingDistribution({ data }: { data: ReviewAppDetailPageData }) {
   return (
-    <Card className="rounded-lg">
+    <Card className="self-start rounded-lg">
       <CardHeader>
         <CardTitle className="text-base">Rating Distribution</CardTitle>
       </CardHeader>
@@ -486,8 +492,8 @@ function SyncPanel({
             Recent runs
           </div>
           {data.fetchRuns.length ? (
-            <div className="space-y-2">
-              {data.fetchRuns.slice(0, 5).map((run) => (
+            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              {data.fetchRuns.map((run) => (
                 <div
                   key={run.id}
                   className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
@@ -498,9 +504,13 @@ function SyncPanel({
                       <span className="text-xs text-muted-foreground">
                         {run.triggerType}
                       </span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                        {run.scanMode}
+                      </span>
                     </div>
                     <div className="mt-1 truncate text-xs text-muted-foreground">
                       {dateTime(run.startedAt)}
+                      {run.stopReason ? ` / ${run.stopReason}` : ""}
                     </div>
                   </div>
                   <div className="text-right text-xs text-muted-foreground">
@@ -527,6 +537,11 @@ function CommentAuthorCell({ review }: { review: AndroidStoreReviewDto }) {
       <div className="font-medium text-foreground">
         {review.authorName ?? "Anonymous reviewer"}
       </div>
+      {review.reviewerLanguage ? (
+        <Badge variant="secondary" className="mt-1 text-[11px] font-medium">
+          {review.reviewerLanguage}
+        </Badge>
+      ) : null}
     </div>
   );
 }
@@ -553,11 +568,13 @@ function CommentContentCell({ review }: { review: AndroidStoreReviewDto }) {
 }
 
 function CommentReplyCell({
+  app,
   onSend,
   review,
   replyTemplate,
   sending,
 }: {
+  app: ReviewAppCard;
   onSend: () => void;
   review: AndroidStoreReviewDto;
   replyTemplate: ReviewReplyTemplatePreviewDto | null;
@@ -565,12 +582,22 @@ function CommentReplyCell({
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const commentText = review.reviewText || review.originalText || "No comment text.";
-  const templatePreviewText =
-    replyTemplate?.resolvedReplyText || replyTemplate?.replyText.trim() || "";
+  const templatePreviewText = replyTemplate
+    ? renderReviewReplyTemplate(replyTemplate.replyText, {
+        appName: app.appName,
+        authorName: review.authorName,
+        contactEmail: app.storeContactEmail,
+        storeName: app.storeAccountName,
+        supportPhone: app.storeSupportPhone,
+        websiteUrl: app.storeWebsiteUrl,
+      })
+    : "";
+  const templateTooLong = templatePreviewText.length > MAX_REPLY_TEXT_LENGTH;
   const canSendTemplate = Boolean(
     review.rating &&
       replyTemplate?.isActive &&
-      replyTemplate.resolvedReplyText.trim(),
+      templatePreviewText.trim() &&
+      !templateTooLong,
   );
 
   function confirmSend() {
@@ -643,10 +670,14 @@ function CommentReplyCell({
                   No mapped reply content is available for this rating.
                 </div>
               )}
-              {replyTemplate?.isActive && !replyTemplate.resolvedReplyText.trim() ? (
+              {replyTemplate?.isActive && !templatePreviewText.trim() ? (
                 <div className="text-xs text-amber-700">
-                  The active template becomes empty after mapping store contact
-                  fields.
+                  The active template becomes empty after mapping variables.
+                </div>
+              ) : null}
+              {templateTooLong ? (
+                <div className="text-xs font-medium text-destructive">
+                  Mapped reply is longer than {MAX_REPLY_TEXT_LENGTH} characters.
                 </div>
               ) : null}
             </div>
@@ -901,10 +932,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         result?: {
           hasMore?: boolean;
           pagesFetched?: number;
+          requestCount?: number;
           reviewsFetched?: number;
           reviewsMatched?: number;
           reviewsSkipped?: number;
           reviewsUpserted?: number;
+          scanMode?: string;
+          stopReason?: string;
         };
       };
 
@@ -1030,7 +1064,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <RatingDistribution data={pageData} />
         <SyncPanel
           data={pageData}
@@ -1124,6 +1158,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                     </TableCell>
                     <TableCell className="align-top">
                       <CommentReplyCell
+                        app={pageData.app}
                         onSend={() => sendReply(review)}
                         replyTemplate={
                           review.rating

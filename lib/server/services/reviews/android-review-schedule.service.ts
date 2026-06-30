@@ -34,9 +34,9 @@ import { cleanText } from "@/lib/server/services/credentials/credential.shared";
 import { processClaimedAndroidReviewFetchRun } from "@/lib/server/services/reviews/android-review-fetch.service";
 import type { ReviewFetchScheduleDto } from "@/lib/tracking/page-data";
 
-const DEFAULT_REVIEW_FETCH_TIME = "09:00";
-const DEFAULT_REVIEW_FETCH_TIMEZONE = "Asia/Ho_Chi_Minh";
-const SCHEDULED_REVIEW_FETCH_LOOKBACK_DAYS = 7;
+const DEFAULT_REVIEW_FETCH_INTERVAL_HOURS = 8;
+const MIN_REVIEW_FETCH_INTERVAL_HOURS = 1;
+const MAX_REVIEW_FETCH_INTERVAL_HOURS = 24;
 const SCHEDULED_REVIEW_FETCH_MAX_RESULTS = 100;
 const SCHEDULED_REVIEW_FETCH_MAX_ATTEMPTS = 3;
 const SCHEDULE_LOCK_TTL_MS = 15 * 60 * 1000;
@@ -46,21 +46,11 @@ const REVIEW_FETCH_WORKER_CONCURRENCY = 5;
 const REVIEW_FETCH_WORKER_MAX_BATCHES = 10;
 const RETRY_DELAY_MS = 5 * 60 * 1000;
 
-type TimeZoneDateParts = {
-  day: number;
-  hour: number;
-  minute: number;
-  month: number;
-  second: number;
-  year: number;
-};
-
 export type SaveReviewFetchSchedulePayload = {
+  intervalHours?: unknown;
   scope?: unknown;
   status?: unknown;
   storeMappingId?: unknown;
-  timeOfDay?: unknown;
-  timezone?: unknown;
 };
 
 export type UpdateReviewFetchScheduleStatusPayload = {
@@ -84,26 +74,21 @@ function isUuid(value: string) {
   );
 }
 
-function normalizeTimeOfDay(value: unknown) {
-  const text = cleanText(value) || DEFAULT_REVIEW_FETCH_TIME;
-  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(text);
-  if (!match) {
-    throw badRequest("Schedule time must use HH:mm format.");
+function normalizeIntervalHours(value: unknown) {
+  const parsed = Number(value ?? DEFAULT_REVIEW_FETCH_INTERVAL_HOURS);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+    throw badRequest("Schedule interval must be a whole number of hours.");
+  }
+  if (
+    parsed < MIN_REVIEW_FETCH_INTERVAL_HOURS ||
+    parsed > MAX_REVIEW_FETCH_INTERVAL_HOURS
+  ) {
+    throw badRequest(
+      `Schedule interval must be between ${MIN_REVIEW_FETCH_INTERVAL_HOURS} and ${MAX_REVIEW_FETCH_INTERVAL_HOURS} hours.`,
+    );
   }
 
-  return text;
-}
-
-function normalizeTimezone(value: unknown) {
-  const timezone = cleanText(value) || DEFAULT_REVIEW_FETCH_TIMEZONE;
-
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
-  } catch {
-    throw badRequest("Schedule timezone is invalid.");
-  }
-
-  return timezone;
+  return parsed;
 }
 
 function normalizeScheduleStatus(value: unknown): ReviewFetchScheduleStatus {
@@ -117,138 +102,19 @@ function isAllAppsScope(value: unknown) {
   return cleanText(value).toLowerCase() === "all";
 }
 
-function timeZoneParts(date: Date, timeZone: string): TimeZoneDateParts {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    day: "2-digit",
-    hour: "2-digit",
-    hour12: false,
-    minute: "2-digit",
-    month: "2-digit",
-    second: "2-digit",
-    timeZone,
-    year: "numeric",
-  }).formatToParts(date);
-  const value = (type: Intl.DateTimeFormatPartTypes) =>
-    Number(parts.find((part) => part.type === type)?.value);
-
-  return {
-    day: value("day"),
-    hour: value("hour"),
-    minute: value("minute"),
-    month: value("month"),
-    second: value("second"),
-    year: value("year"),
-  };
-}
-
-function utcDateFromLocalDate(
-  input: {
-    day: number;
-    hour: number;
-    minute: number;
-    month: number;
-    second?: number;
-    year: number;
-  },
-  timeZone: string,
+function nextIntervalReviewFetchRunAt(
+  intervalHours: number,
+  scheduledFor: Date,
+  now = new Date(),
 ) {
-  const targetLocalMs = Date.UTC(
-    input.year,
-    input.month - 1,
-    input.day,
-    input.hour,
-    input.minute,
-    input.second ?? 0,
-  );
-  let candidate = new Date(targetLocalMs);
+  const intervalMs = intervalHours * 60 * 60 * 1000;
+  let nextRunAt = new Date(scheduledFor.getTime() + intervalMs);
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const parts = timeZoneParts(candidate, timeZone);
-    const candidateLocalMs = Date.UTC(
-      parts.year,
-      parts.month - 1,
-      parts.day,
-      parts.hour,
-      parts.minute,
-      parts.second,
-    );
-    candidate = new Date(candidate.getTime() + (targetLocalMs - candidateLocalMs));
+  while (nextRunAt.getTime() <= now.getTime()) {
+    nextRunAt = new Date(nextRunAt.getTime() + intervalMs);
   }
 
-  return candidate;
-}
-
-function localDateStringFromParts(
-  parts: Pick<TimeZoneDateParts, "day" | "month" | "year">,
-  addDays = 0,
-) {
-  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + addDays));
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-function timeZoneOffsetMinutes(timeZone: string, at: Date) {
-  const parts = timeZoneParts(at, timeZone);
-  const localAsUtc = Date.UTC(
-    parts.year,
-    parts.month - 1,
-    parts.day,
-    parts.hour,
-    parts.minute,
-    parts.second,
-  );
-
-  return Math.round((at.getTime() - localAsUtc) / 60_000);
-}
-
-export function nextDailyReviewFetchRunAt(
-  timeOfDay: string,
-  timeZone: string,
-  from = new Date(),
-) {
-  const [hourText, minuteText] = timeOfDay.split(":");
-  const localNow = timeZoneParts(from, timeZone);
-  const candidate = utcDateFromLocalDate(
-    {
-      day: localNow.day,
-      hour: Number(hourText),
-      minute: Number(minuteText),
-      month: localNow.month,
-      year: localNow.year,
-    },
-    timeZone,
-  );
-
-  if (candidate.getTime() > from.getTime()) return candidate;
-
-  const tomorrow = new Date(Date.UTC(localNow.year, localNow.month - 1, localNow.day + 1));
-  return utcDateFromLocalDate(
-    {
-      day: tomorrow.getUTCDate(),
-      hour: Number(hourText),
-      minute: Number(minuteText),
-      month: tomorrow.getUTCMonth() + 1,
-      year: tomorrow.getUTCFullYear(),
-    },
-    timeZone,
-  );
-}
-
-function reviewFetchDateWindow(input: {
-  lookbackDays: number;
-  now: Date;
-  timeZone: string;
-}) {
-  const localNow = timeZoneParts(input.now, input.timeZone);
-
-  return {
-    fromDate: localDateStringFromParts(localNow, -(input.lookbackDays - 1)),
-    timezoneOffsetMinutes: timeZoneOffsetMinutes(input.timeZone, input.now),
-    toDate: localDateStringFromParts(localNow),
-  };
+  return nextRunAt;
 }
 
 export function reviewFetchScheduleDto(
@@ -258,30 +124,24 @@ export function reviewFetchScheduleDto(
 
   return {
     id: schedule.id,
+    intervalHours: schedule.intervalHours,
     lastErrorCode: schedule.lastErrorCode,
     lastErrorMessage: schedule.lastErrorMessage,
     lastRunAt: iso(schedule.lastRunAt),
     lastStatus: schedule.lastStatus ? schedule.lastStatus.toLowerCase() : null,
     nextRunAt: schedule.nextRunAt.toISOString(),
     runCount: schedule.runCount,
-    scheduleType: schedule.scheduleType,
     storeMappingId: schedule.storeMappingId,
     status: schedule.status.toLowerCase(),
-    timeOfDay: schedule.timeOfDay,
-    timezone: schedule.timezone,
     updatedAt: schedule.updatedAt.toISOString(),
     updatedBy: schedule.updatedBy,
   };
 }
 
 function normalizeScheduleSettings(payload: SaveReviewFetchSchedulePayload) {
-  const timeOfDay = normalizeTimeOfDay(payload.timeOfDay);
-  const timezone = normalizeTimezone(payload.timezone);
-
   return {
+    intervalHours: normalizeIntervalHours(payload.intervalHours),
     status: normalizeScheduleStatus(payload.status),
-    timeOfDay,
-    timezone,
   };
 }
 
@@ -317,17 +177,14 @@ export async function saveReviewFetchSchedule(
   const normalized = normalizeSaveSchedulePayload(payload);
   const mapping = await getAndroidReviewMappingById(normalized.storeMappingId);
   if (!mapping) throw notFound("Android app mapping was not found.");
+  const now = new Date();
 
   const schedule = await upsertAndroidReviewFetchSchedule({
     createdBy: authEmail,
-    nextRunAt: nextDailyReviewFetchRunAt(
-      normalized.timeOfDay,
-      normalized.timezone,
-    ),
+    intervalHours: normalized.intervalHours,
+    nextRunAt: now,
     status: normalized.status,
     storeMappingId: normalized.storeMappingId,
-    timeOfDay: normalized.timeOfDay,
-    timezone: normalized.timezone,
     updatedBy: authEmail,
   });
 
@@ -345,18 +202,14 @@ export async function saveAllReviewFetchSchedules(
   const mappings = await getActiveAndroidReviewMappings();
   if (!mappings.length) throw notFound("No active Android apps were found.");
 
-  const nextRunAt = nextDailyReviewFetchRunAt(
-    normalized.timeOfDay,
-    normalized.timezone,
-  );
+  const nextRunAt = new Date();
   const schedules = await upsertAndroidReviewFetchSchedules(
     mappings.map((mapping) => ({
       createdBy: authEmail,
+      intervalHours: normalized.intervalHours,
       nextRunAt,
       status: normalized.status,
       storeMappingId: mapping.id,
-      timeOfDay: normalized.timeOfDay,
-      timezone: normalized.timezone,
       updatedBy: authEmail,
     })),
   );
@@ -378,12 +231,10 @@ export async function updateReviewFetchScheduleStatus(
     const schedules = await getAndroidReviewFetchSchedules(
       mappings.map((mapping) => mapping.id),
     );
+    const now = new Date();
     const updatedSchedules = await updateAndroidReviewFetchScheduleStatuses(
       schedules.map((schedule) => ({
-        nextRunAt:
-          status === "ACTIVE"
-            ? nextDailyReviewFetchRunAt(schedule.timeOfDay, schedule.timezone)
-            : undefined,
+        nextRunAt: status === "ACTIVE" ? now : undefined,
         status,
         storeMappingId: schedule.storeMappingId,
         updatedBy: authEmail,
@@ -402,10 +253,7 @@ export async function updateReviewFetchScheduleStatus(
   if (!current) throw notFound("Review fetch schedule was not found.");
 
   const schedule = await updateAndroidReviewFetchScheduleStatus(storeMappingId, {
-    nextRunAt:
-      status === "ACTIVE"
-        ? nextDailyReviewFetchRunAt(current.timeOfDay, current.timezone)
-        : undefined,
+    nextRunAt: status === "ACTIVE" ? new Date() : undefined,
     status,
     updatedBy: authEmail,
   });
@@ -508,9 +356,9 @@ async function materializeDueReviewFetchSchedules(now: Date) {
 
   await markAndroidReviewFetchSchedulesMaterialized(
     schedules.map((schedule) => ({
-      nextRunAt: nextDailyReviewFetchRunAt(
-        schedule.timeOfDay,
-        schedule.timezone,
+      nextRunAt: nextIntervalReviewFetchRunAt(
+        schedule.intervalHours,
+        schedule.nextRunAt,
         now,
       ),
       scheduleId: schedule.id,
@@ -522,9 +370,10 @@ async function materializeDueReviewFetchSchedules(now: Date) {
     enqueued: enqueueResult.count,
     schedules: schedules.map((schedule) => ({
       appName: schedule.storeMapping.appName,
-      nextRunAt: nextDailyReviewFetchRunAt(
-        schedule.timeOfDay,
-        schedule.timezone,
+      intervalHours: schedule.intervalHours,
+      nextRunAt: nextIntervalReviewFetchRunAt(
+        schedule.intervalHours,
+        schedule.nextRunAt,
         now,
       ).toISOString(),
       packageName: schedule.storeMapping.packageName,
@@ -539,21 +388,10 @@ async function processReviewFetchJob(
   run: Awaited<ReturnType<typeof claimPendingAndroidReviewFetchRuns>>[number],
 ) {
   const startedAt = run.startedAt ?? new Date();
-  const schedule = run.sourceSchedule;
-  const timeZone = schedule?.timezone ?? DEFAULT_REVIEW_FETCH_TIMEZONE;
-  const dateWindow = reviewFetchDateWindow({
-    lookbackDays: SCHEDULED_REVIEW_FETCH_LOOKBACK_DAYS,
-    now: startedAt,
-    timeZone,
-  });
 
   try {
     const result = await processClaimedAndroidReviewFetchRun(run, {
-      fetchAllPages: true,
-      fromDate: dateWindow.fromDate,
       maxResults: run.maxResults || SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
-      timezoneOffsetMinutes: dateWindow.timezoneOffsetMinutes,
-      toDate: dateWindow.toDate,
     });
     const lastStatus = resultStatus(result.status);
 
@@ -566,7 +404,6 @@ async function processReviewFetchJob(
 
     return {
       appName: run.storeMapping.appName,
-      dateWindow,
       packageName: run.storeMapping.packageName,
       result,
       runId: run.id,

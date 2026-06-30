@@ -182,22 +182,24 @@ export type ReviewFetchRunDto = {
   nextAttemptAt: string | null;
   attemptCount: number;
   maxAttempts: number;
+  nextPageToken: string | null;
   pagesFetched: number;
+  requestCount: number;
   reviewsFetched: number;
   reviewsUpserted: number;
+  scanMode: string;
   errorCode: string | null;
   errorMessage: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  stopReason: string | null;
 };
 
 export type ReviewFetchScheduleDto = {
   id: string;
+  intervalHours: number;
   status: string;
-  scheduleType: string;
   storeMappingId: string;
-  timeOfDay: string;
-  timezone: string;
   nextRunAt: string;
   lastRunAt: string | null;
   lastStatus: string | null;

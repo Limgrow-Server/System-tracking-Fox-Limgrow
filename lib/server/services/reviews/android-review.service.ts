@@ -8,7 +8,7 @@ import type {
   AndroidStoreReviewSyncState,
 } from "@prisma/client";
 
-import { badRequest, notFound } from "@/lib/server/api/errors";
+import { ApiError, badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import { getCredentialVaultSecret } from "@/lib/server/repositories/vault/secret.repository";
 import {
   getActiveAndroidCredentialForStoreProfile,
@@ -49,9 +49,14 @@ import type {
   ReviewReplyTemplateDto,
   ReviewSyncStateDto,
 } from "@/lib/tracking/page-data";
+import {
+  MAX_REVIEW_REPLY_TEXT_LENGTH,
+  renderReviewReplyTemplate,
+  type ReviewReplyTemplateContext,
+} from "@/lib/tracking/reply-template";
 
 const RATINGS = [5, 4, 3, 2, 1] as const;
-const MAX_REPLY_TEXT_LENGTH = 350;
+const MAX_REPLY_TEXT_LENGTH = MAX_REVIEW_REPLY_TEXT_LENGTH;
 
 type RatingGroup = {
   storeMappingId: string;
@@ -320,12 +325,16 @@ function fetchRunDto(run: AndroidStoreReviewFetchRun): ReviewFetchRunDto {
     id: run.id,
     maxAttempts: run.maxAttempts,
     nextAttemptAt: iso(run.nextAttemptAt),
+    nextPageToken: run.nextPageToken,
     pagesFetched: run.pagesFetched,
+    requestCount: run.requestCount,
     reviewsFetched: run.reviewsFetched,
     reviewsUpserted: run.reviewsUpserted,
+    scanMode: enumText(run.scanMode),
     scheduledFor: iso(run.scheduledFor),
     startedAt: iso(run.startedAt),
     status: enumText(run.status),
+    stopReason: run.stopReason ? enumText(run.stopReason) : null,
     triggerType: enumText(run.triggerType),
   };
 }
@@ -606,34 +615,40 @@ function buildReviewStatsFromGroups(
 
 function renderReplyTemplatePreviewText(
   templateText: string,
-  storeInfo: {
-    contactEmail: string | null;
-    supportPhone: string | null;
-    websiteUrl: string | null;
-  },
+  context: ReviewReplyTemplateContext,
 ) {
-  return templateText
-    .replaceAll("{{contactEmail}}", storeInfo.contactEmail ?? "")
-    .replaceAll("{{supportPhone}}", storeInfo.supportPhone ?? "")
-    .replaceAll("{{websiteUrl}}", storeInfo.websiteUrl ?? "")
-    .trim();
+  return renderReviewReplyTemplate(templateText, context);
+}
+
+function replyTemplateContext(input: {
+  appName?: string | null;
+  authorName?: string | null;
+  contactEmail: string | null;
+  storeName?: string | null;
+  supportPhone: string | null;
+  websiteUrl: string | null;
+}): ReviewReplyTemplateContext {
+  return {
+    appName: input.appName,
+    authorName: input.authorName,
+    contactEmail: input.contactEmail,
+    storeName: input.storeName,
+    supportPhone: input.supportPhone,
+    websiteUrl: input.websiteUrl,
+  };
 }
 
 function replyTemplatePreviewDto(
   template: AndroidStoreReviewReplyTemplate | null,
   storeMappingId: string,
   rating: number,
-  storeInfo: {
-    contactEmail: string | null;
-    supportPhone: string | null;
-    websiteUrl: string | null;
-  },
+  context: ReviewReplyTemplateContext,
 ): ReviewReplyTemplatePreviewDto {
   const dto = templateDto(template, storeMappingId, rating);
 
   return {
     ...dto,
-    resolvedReplyText: renderReplyTemplatePreviewText(dto.replyText, storeInfo),
+    resolvedReplyText: renderReplyTemplatePreviewText(dto.replyText, context),
   };
 }
 
@@ -717,11 +732,13 @@ export async function getReviewAppDetail(
         templates.find((template) => template.rating === rating) ?? null,
         mappingId,
         rating,
-        {
+        replyTemplateContext({
+          appName: mapping.appName,
           contactEmail: mapping.storeProfile.contactEmail,
+          storeName: mapping.storeProfile.storeAccountName,
           supportPhone: mapping.storeProfile.supportPhone,
           websiteUrl: mapping.storeProfile.websiteUrl,
-        },
+        }),
       ),
     ),
     reviewFilters: {
@@ -966,17 +983,9 @@ function normalizeSendReplyPayload(payload: SendAndroidReviewReplyPayload) {
 
 function renderReplyText(
   templateText: string,
-  storeInfo: {
-    contactEmail: string | null;
-    supportPhone: string | null;
-    websiteUrl: string | null;
-  },
+  context: ReviewReplyTemplateContext,
 ) {
-  const replyText = templateText
-    .replaceAll("{{contactEmail}}", storeInfo.contactEmail ?? "")
-    .replaceAll("{{supportPhone}}", storeInfo.supportPhone ?? "")
-    .replaceAll("{{websiteUrl}}", storeInfo.websiteUrl ?? "")
-    .trim();
+  const replyText = renderReviewReplyTemplate(templateText, context);
 
   if (!replyText) {
     throw badRequest("Reply template is empty.");
@@ -997,6 +1006,49 @@ function timestampToDate(value: unknown) {
 
   if (!Number.isFinite(seconds)) return null;
   return new Date(seconds * 1000 + Math.floor((Number.isFinite(nanos) ? nanos : 0) / 1_000_000));
+}
+
+function recordValue(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function googleError(body: Record<string, unknown>) {
+  return recordValue(body.error) ?? body;
+}
+
+function googleErrorText(value: unknown) {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number") return String(value);
+  return "";
+}
+
+function throwGooglePlayReplyError(status: number, body: Record<string, unknown>): never {
+  const error = googleError(body);
+  const providerStatus = googleErrorText(error.status);
+  const providerCode = googleErrorText(error.code);
+
+  if (status === 404 || providerStatus === "NOT_FOUND" || providerCode === "404") {
+    throw conflict(
+      "Google Play could not find this review ID. The review may have been deleted, removed, or become unavailable to the API.",
+    );
+  }
+
+  if (status === 403 || providerStatus === "PERMISSION_DENIED" || providerCode === "403") {
+    throw new ApiError(
+      "Google Play credential is not allowed to reply to this review.",
+      502,
+    );
+  }
+
+  const shortCode = [providerCode, providerStatus].filter(Boolean).join(" ");
+  throw new ApiError(
+    shortCode
+      ? `Google Play review reply failed: ${shortCode}.`
+      : "Google Play review reply failed.",
+    502,
+  );
 }
 
 async function replyToGooglePlayReview(input: {
@@ -1023,7 +1075,7 @@ async function replyToGooglePlayReview(input: {
   >;
 
   if (!response.ok) {
-    throw new Error(`Google Play reviews.reply failed: ${JSON.stringify(body)}`);
+    throwGooglePlayReplyError(response.status, body);
   }
 
   return body;
@@ -1050,11 +1102,14 @@ export async function sendAndroidReviewReply(
   }
 
   const storeProfile = review.storeMapping.storeProfile;
-  const replyText = renderReplyText(template.replyText, {
+  const replyText = renderReplyText(template.replyText, replyTemplateContext({
+    appName: review.storeMapping.appName,
+    authorName: review.authorName,
     contactEmail: storeProfile.contactEmail,
+    storeName: storeProfile.storeAccountName,
     supportPhone: storeProfile.supportPhone,
     websiteUrl: storeProfile.websiteUrl,
-  });
+  }));
   const credential = await getActiveAndroidCredentialForStoreProfile(
     review.storeMapping.storeProfileId,
   );
