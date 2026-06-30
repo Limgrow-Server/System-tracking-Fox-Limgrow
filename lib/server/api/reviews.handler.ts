@@ -101,6 +101,7 @@ export async function handleReviewScheduleAppsGet(request: Request) {
       },
       {
         filters: data.filters,
+        schedule: data.schedule,
         storeNames: data.storeNames,
         storeOptions: data.storeOptions,
         summary: data.summary,

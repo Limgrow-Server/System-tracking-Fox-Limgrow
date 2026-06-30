@@ -1,12 +1,16 @@
 import "server-only";
 
 import {
+  type AndroidStoreMapping,
   Prisma,
+  type ReviewFetchRun,
   type ReviewFetchRunStatus,
   type ReviewFetchScanMode,
+  type ReviewFetchSchedule,
   type ReviewFetchScheduleStatus,
   type ReviewFetchStopReason,
   type ReviewFetchTrigger,
+  type ReviewReplyTemplate,
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
@@ -47,7 +51,6 @@ type AndroidReviewFetchScheduleUpsertInput = {
   intervalHours: number;
   nextRunAt: Date;
   status: ReviewFetchScheduleStatus;
-  storeMappingId: string;
   updatedBy: string;
 };
 
@@ -55,12 +58,90 @@ function nullableJson(value: Prisma.InputJsonValue | null) {
   return value === null ? Prisma.DbNull : value;
 }
 
+const REVIEW_FETCH_GLOBAL_SCOPE = "global";
+
+export type AndroidReviewReplyTemplateRecord = Pick<
+  ReviewReplyTemplate,
+  | "id"
+  | "isActive"
+  | "rating"
+  | "replyText"
+  | "updatedAt"
+  | "updatedBy"
+> & {
+  storeMappingId: string;
+};
+
+export type ClaimedAndroidReviewFetchRunRecord = ReviewFetchRun & {
+  sourceSchedule: ReviewFetchSchedule | null;
+  storeMapping: AndroidStoreMapping;
+  storeMappingId: string;
+};
+
+async function androidReviewAppTargetId(storeMappingId: string) {
+  const target = await prisma.reviewAppTarget.findUnique({
+    where: { androidStoreMappingId: storeMappingId },
+    select: { id: true },
+  });
+
+  if (!target) {
+    throw new Error(`Review app target was not found for Android mapping ${storeMappingId}.`);
+  }
+
+  return target.id;
+}
+
+async function androidReviewAppTargetIdByMappingId(storeMappingIds: string[]) {
+  const uniqueStoreMappingIds = Array.from(new Set(storeMappingIds));
+  if (!uniqueStoreMappingIds.length) return new Map<string, string>();
+
+  const targets = await prisma.reviewAppTarget.findMany({
+    where: {
+      androidStoreMappingId: { in: uniqueStoreMappingIds },
+      platform: "ANDROID",
+    },
+    select: {
+      androidStoreMappingId: true,
+      id: true,
+    },
+  });
+
+  return new Map(
+    targets
+      .filter((target) => target.androidStoreMappingId)
+      .map((target) => [target.androidStoreMappingId!, target.id]),
+  );
+}
+
+function reviewReplyTemplateRecord(
+  template: ReviewReplyTemplate & {
+    appTarget: { androidStoreMappingId: string | null };
+  },
+): AndroidReviewReplyTemplateRecord | null {
+  const storeMappingId = template.appTarget.androidStoreMappingId;
+  if (!storeMappingId) return null;
+
+  return {
+    id: template.id,
+    isActive: template.isActive,
+    rating: template.rating,
+    replyText: template.replyText,
+    storeMappingId,
+    updatedAt: template.updatedAt,
+    updatedBy: template.updatedBy,
+  };
+}
+
 export function getActiveAndroidReviewMappings() {
   return prisma.androidStoreMapping.findMany({
     where: { status: "ACTIVE" },
     include: {
+      reviewTarget: {
+        include: {
+          syncState: true,
+        },
+      },
       storeProfile: true,
-      reviewSyncState: true,
       _count: { select: { reviews: true } },
     },
     orderBy: { appName: "asc" },
@@ -71,8 +152,12 @@ export function getAndroidReviewMappingById(mappingId: string) {
   return prisma.androidStoreMapping.findUnique({
     where: { id: mappingId },
     include: {
+      reviewTarget: {
+        include: {
+          syncState: true,
+        },
+      },
       storeProfile: true,
-      reviewSyncState: true,
       _count: { select: { reviews: true } },
     },
   });
@@ -181,8 +266,11 @@ export function getLatestAndroidReviewForMapping(mappingId: string) {
 }
 
 export function getAndroidReviewFetchRuns(mappingId: string, take = 10) {
-  return prisma.androidStoreReviewFetchRun.findMany({
-    where: { storeMappingId: mappingId },
+  return prisma.reviewFetchRun.findMany({
+    where: {
+      appTarget: { androidStoreMappingId: mappingId },
+      platform: "ANDROID",
+    },
     orderBy: [{ createdAt: "desc" }],
     take,
   });
@@ -210,32 +298,23 @@ export function getAndroidReviewFingerprints(
   });
 }
 
-export function getAndroidReviewFetchSchedule(storeMappingId: string) {
-  return prisma.androidStoreReviewFetchSchedule.findUnique({
-    where: { storeMappingId },
-  });
-}
-
-export function getAndroidReviewFetchSchedules(storeMappingIds: string[]) {
-  if (!storeMappingIds.length) return Promise.resolve([]);
-
-  return prisma.androidStoreReviewFetchSchedule.findMany({
-    where: { storeMappingId: { in: storeMappingIds } },
-    orderBy: [{ status: "asc" }, { nextRunAt: "asc" }],
+export function getGlobalAndroidReviewFetchSchedule() {
+  return prisma.reviewFetchSchedule.findUnique({
+    where: { scope: REVIEW_FETCH_GLOBAL_SCOPE },
   });
 }
 
 function upsertAndroidReviewFetchScheduleQuery(
   input: AndroidReviewFetchScheduleUpsertInput,
 ) {
-  return prisma.androidStoreReviewFetchSchedule.upsert({
-    where: { storeMappingId: input.storeMappingId },
+  return prisma.reviewFetchSchedule.upsert({
+    where: { scope: REVIEW_FETCH_GLOBAL_SCOPE },
     create: {
       createdBy: input.createdBy,
       intervalHours: input.intervalHours,
       nextRunAt: input.nextRunAt,
+      scope: REVIEW_FETCH_GLOBAL_SCOPE,
       status: input.status,
-      storeMappingId: input.storeMappingId,
       updatedBy: input.updatedBy,
     },
     update: {
@@ -251,32 +330,21 @@ function upsertAndroidReviewFetchScheduleQuery(
   });
 }
 
-export function upsertAndroidReviewFetchSchedule(
+export function upsertGlobalAndroidReviewFetchSchedule(
   input: AndroidReviewFetchScheduleUpsertInput,
 ) {
   return upsertAndroidReviewFetchScheduleQuery(input);
 }
 
-export function upsertAndroidReviewFetchSchedules(
-  inputs: AndroidReviewFetchScheduleUpsertInput[],
-) {
-  if (!inputs.length) return Promise.resolve([]);
-
-  return prisma.$transaction(
-    inputs.map((input) => upsertAndroidReviewFetchScheduleQuery(input)),
-  );
-}
-
-export function updateAndroidReviewFetchScheduleStatus(
-  storeMappingId: string,
+export function updateGlobalAndroidReviewFetchScheduleStatus(
   input: {
     nextRunAt?: Date;
     status: ReviewFetchScheduleStatus;
     updatedBy: string;
   },
 ) {
-  return prisma.androidStoreReviewFetchSchedule.update({
-    where: { storeMappingId },
+  return prisma.reviewFetchSchedule.update({
+    where: { scope: REVIEW_FETCH_GLOBAL_SCOPE },
     data: {
       lockedAt: null,
       lockedBy: null,
@@ -287,43 +355,9 @@ export function updateAndroidReviewFetchScheduleStatus(
   });
 }
 
-export function updateAndroidReviewFetchScheduleStatuses(
-  inputs: Array<{
-    nextRunAt?: Date;
-    status: ReviewFetchScheduleStatus;
-    storeMappingId: string;
-    updatedBy: string;
-  }>,
-) {
-  if (!inputs.length) return Promise.resolve([]);
-
-  return prisma.$transaction(
-    inputs.map((input) =>
-      prisma.androidStoreReviewFetchSchedule.update({
-        where: { storeMappingId: input.storeMappingId },
-        data: {
-          lockedAt: null,
-          lockedBy: null,
-          nextRunAt: input.nextRunAt,
-          status: input.status,
-          updatedBy: input.updatedBy,
-        },
-      }),
-    ),
-  );
-}
-
-export function deleteAndroidReviewFetchSchedule(storeMappingId: string) {
-  return prisma.androidStoreReviewFetchSchedule.delete({
-    where: { storeMappingId },
-  });
-}
-
-export function deleteAndroidReviewFetchSchedules(storeMappingIds: string[]) {
-  if (!storeMappingIds.length) return Promise.resolve({ count: 0 });
-
-  return prisma.androidStoreReviewFetchSchedule.deleteMany({
-    where: { storeMappingId: { in: storeMappingIds } },
+export function deleteGlobalAndroidReviewFetchSchedule() {
+  return prisma.reviewFetchSchedule.delete({
+    where: { scope: REVIEW_FETCH_GLOBAL_SCOPE },
   });
 }
 
@@ -334,7 +368,7 @@ export async function claimDueAndroidReviewFetchSchedules(input: {
   now: Date;
 }) {
   return prisma.$transaction(async (tx) => {
-    const dueSchedules = await tx.androidStoreReviewFetchSchedule.findMany({
+    const dueSchedules = await tx.reviewFetchSchedule.findMany({
       where: {
         nextRunAt: { lte: input.now },
         status: "ACTIVE",
@@ -350,7 +384,7 @@ export async function claimDueAndroidReviewFetchSchedules(input: {
     const ids = dueSchedules.map((schedule) => schedule.id);
     if (!ids.length) return [];
 
-    await tx.androidStoreReviewFetchSchedule.updateMany({
+    await tx.reviewFetchSchedule.updateMany({
       where: {
         id: { in: ids },
         nextRunAt: { lte: input.now },
@@ -366,15 +400,14 @@ export async function claimDueAndroidReviewFetchSchedules(input: {
       },
     });
 
-    return tx.androidStoreReviewFetchSchedule.findMany({
+    return tx.reviewFetchSchedule.findMany({
       where: { id: { in: ids }, lockedBy: input.lockedBy },
-      include: { storeMapping: true },
       orderBy: { nextRunAt: "asc" },
     });
   });
 }
 
-export function enqueueScheduledAndroidReviewFetchRuns(
+export async function enqueueScheduledAndroidReviewFetchRuns(
   inputs: Array<{
     maxAttempts: number;
     maxResults: number;
@@ -386,18 +419,31 @@ export function enqueueScheduledAndroidReviewFetchRuns(
 ) {
   if (!inputs.length) return Promise.resolve({ count: 0 });
 
-  return prisma.androidStoreReviewFetchRun.createMany({
-    data: inputs.map((input) => ({
+  const targetIdByMappingId = await androidReviewAppTargetIdByMappingId(
+    inputs.map((input) => input.storeMappingId),
+  );
+  const data = inputs.flatMap((input) => {
+    const reviewAppTargetId = targetIdByMappingId.get(input.storeMappingId);
+    if (!reviewAppTargetId) return [];
+
+    return {
       maxAttempts: input.maxAttempts,
       maxResults: input.maxResults,
       nextAttemptAt: input.nextAttemptAt,
+      platform: "ANDROID" as const,
+      reviewAppTargetId,
       scheduledFor: input.scheduledFor,
-      scanMode: "INCREMENTAL",
+      scanMode: "INCREMENTAL" as const,
       sourceScheduleId: input.sourceScheduleId,
-      status: "PENDING",
-      storeMappingId: input.storeMappingId,
-      triggerType: "SCHEDULED",
-    })),
+      status: "PENDING" as const,
+      triggerType: "SCHEDULED" as const,
+    };
+  });
+
+  if (!data.length) return { count: 0 };
+
+  return prisma.reviewFetchRun.createMany({
+    data,
     skipDuplicates: true,
   });
 }
@@ -421,34 +467,53 @@ export async function enqueueManualAndroidReviewFetchRuns(
   }
 
   const storeMappingIds = inputs.map((input) => input.storeMappingId);
-  const activeFullRuns = await prisma.androidStoreReviewFetchRun.findMany({
+  const activeFullRuns = await prisma.reviewFetchRun.findMany({
     where: {
+      appTarget: { androidStoreMappingId: { in: storeMappingIds } },
+      platform: "ANDROID",
       scanMode: "FULL",
       status: { in: ["PENDING", "RUNNING"] },
-      storeMappingId: { in: storeMappingIds },
     },
-    select: { storeMappingId: true },
+    select: {
+      appTarget: {
+        select: {
+          androidStoreMappingId: true,
+        },
+      },
+    },
   });
   const activeFullStoreMappingIds = new Set(
-    activeFullRuns.map((run) => run.storeMappingId),
+    activeFullRuns
+      .map((run) => run.appTarget.androidStoreMappingId)
+      .filter((storeMappingId): storeMappingId is string =>
+        Boolean(storeMappingId),
+      ),
   );
   const enqueueInputs = inputs.filter(
     (input) => !activeFullStoreMappingIds.has(input.storeMappingId),
   );
+  const targetIdByMappingId = await androidReviewAppTargetIdByMappingId(
+    enqueueInputs.map((input) => input.storeMappingId),
+  );
+  const data = enqueueInputs.flatMap((input) => {
+    const reviewAppTargetId = targetIdByMappingId.get(input.storeMappingId);
+    if (!reviewAppTargetId) return [];
 
-  const result = enqueueInputs.length
-    ? await prisma.androidStoreReviewFetchRun.createMany({
-        data: enqueueInputs.map((input) => ({
-          maxAttempts: input.maxAttempts,
-          maxResults: input.maxResults,
-          nextAttemptAt: input.nextAttemptAt,
-          scheduledFor: input.scheduledFor,
-          scanMode: input.scanMode,
-          status: "PENDING",
-          storeMappingId: input.storeMappingId,
-          triggerType: "MANUAL",
-        })),
-      })
+    return {
+      maxAttempts: input.maxAttempts,
+      maxResults: input.maxResults,
+      nextAttemptAt: input.nextAttemptAt,
+      platform: "ANDROID" as const,
+      reviewAppTargetId,
+      scheduledFor: input.scheduledFor,
+      scanMode: input.scanMode,
+      status: "PENDING" as const,
+      triggerType: "MANUAL" as const,
+    };
+  });
+
+  const result = data.length
+    ? await prisma.reviewFetchRun.createMany({ data })
     : { count: 0 };
 
   return {
@@ -468,7 +533,7 @@ export function markAndroidReviewFetchSchedulesMaterialized(
 
   return prisma.$transaction(
     inputs.map((input) =>
-      prisma.androidStoreReviewFetchSchedule.update({
+      prisma.reviewFetchSchedule.update({
         where: { id: input.scheduleId },
         data: {
           lockedAt: null,
@@ -490,7 +555,7 @@ export function finishAndroidReviewFetchScheduleRun(
     nextRunAt?: Date;
   },
 ) {
-  return prisma.androidStoreReviewFetchSchedule.update({
+  return prisma.reviewFetchSchedule.update({
     where: { id: scheduleId },
     data: {
       lastErrorCode: input.errorCode ?? null,
@@ -511,28 +576,37 @@ export async function claimPendingAndroidReviewFetchRuns(input: {
   now: Date;
 }) {
   return prisma.$transaction(async (tx) => {
-    const candidates = await tx.androidStoreReviewFetchRun.findMany({
+    const candidates = await tx.reviewFetchRun.findMany({
       where: {
+        appTarget: { androidStoreMappingId: { not: null } },
+        platform: "ANDROID",
         status: "PENDING",
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: input.now } }],
       },
       orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
-      select: { id: true, storeMappingId: true },
+      select: {
+        appTarget: { select: { androidStoreMappingId: true } },
+        id: true,
+      },
       take: input.limit * 3,
     });
     const claimedStoreMappingIds = new Set<string>();
     const ids = [];
     for (const candidate of candidates) {
-      if (claimedStoreMappingIds.has(candidate.storeMappingId)) continue;
-      claimedStoreMappingIds.add(candidate.storeMappingId);
+      const storeMappingId = candidate.appTarget.androidStoreMappingId;
+      if (!storeMappingId || claimedStoreMappingIds.has(storeMappingId)) {
+        continue;
+      }
+      claimedStoreMappingIds.add(storeMappingId);
       ids.push(candidate.id);
       if (ids.length >= input.limit) break;
     }
     if (!ids.length) return [];
 
-    await tx.androidStoreReviewFetchRun.updateMany({
+    await tx.reviewFetchRun.updateMany({
       where: {
         id: { in: ids },
+        platform: "ANDROID",
         status: "PENDING",
         OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: input.now } }],
       },
@@ -549,17 +623,35 @@ export async function claimPendingAndroidReviewFetchRuns(input: {
       },
     });
 
-    return tx.androidStoreReviewFetchRun.findMany({
+    const runs = await tx.reviewFetchRun.findMany({
       where: {
         id: { in: ids },
         lockedBy: input.lockedBy,
+        platform: "ANDROID",
         status: "RUNNING",
       },
       include: {
+        appTarget: {
+          include: {
+            androidStoreMapping: true,
+          },
+        },
         sourceSchedule: true,
-        storeMapping: true,
       },
       orderBy: [{ startedAt: "asc" }],
+    });
+
+    return runs.flatMap((run): ClaimedAndroidReviewFetchRunRecord[] => {
+      const storeMapping = run.appTarget.androidStoreMapping;
+      if (!storeMapping) return [];
+
+      return [
+        {
+          ...run,
+          storeMapping,
+          storeMappingId: storeMapping.id,
+        },
+      ];
     });
   });
 }
@@ -572,7 +664,7 @@ export function retryAndroidReviewFetchRun(
     nextAttemptAt: Date;
   },
 ) {
-  return prisma.androidStoreReviewFetchRun.update({
+  return prisma.reviewFetchRun.update({
     where: { id: runId },
     data: {
       errorCode: input.errorCode,
@@ -592,16 +684,17 @@ export async function recoverStaleAndroidReviewFetchRuns(input: {
   nextAttemptAt: Date;
   staleBefore: Date;
 }) {
-  const staleRuns = await prisma.androidStoreReviewFetchRun.findMany({
+  const staleRuns = await prisma.reviewFetchRun.findMany({
     where: {
       lockedAt: { lt: input.staleBefore },
+      platform: "ANDROID",
       status: "RUNNING",
     },
     select: {
       attemptCount: true,
       id: true,
       maxAttempts: true,
-      storeMappingId: true,
+      reviewAppTargetId: true,
     },
   });
   if (!staleRuns.length) {
@@ -613,12 +706,12 @@ export async function recoverStaleAndroidReviewFetchRuns(input: {
     .map((run) => run.id);
   const failedRuns = staleRuns.filter((run) => run.attemptCount >= run.maxAttempts);
   const failedIds = failedRuns.map((run) => run.id);
-  const failedStoreMappingIds = failedRuns.map((run) => run.storeMappingId);
+  const failedReviewAppTargetIds = failedRuns.map((run) => run.reviewAppTargetId);
 
   await prisma.$transaction([
     ...(retryIds.length
       ? [
-          prisma.androidStoreReviewFetchRun.updateMany({
+          prisma.reviewFetchRun.updateMany({
             where: { id: { in: retryIds } },
             data: {
               errorCode: input.errorCode,
@@ -634,7 +727,7 @@ export async function recoverStaleAndroidReviewFetchRuns(input: {
       : []),
     ...(failedIds.length
       ? [
-          prisma.androidStoreReviewFetchRun.updateMany({
+          prisma.reviewFetchRun.updateMany({
             where: { id: { in: failedIds } },
             data: {
               errorCode: input.errorCode,
@@ -645,8 +738,8 @@ export async function recoverStaleAndroidReviewFetchRuns(input: {
               status: "FAILED",
             },
           }),
-          prisma.androidStoreReviewSyncState.updateMany({
-            where: { storeMappingId: { in: failedStoreMappingIds } },
+          prisma.reviewSyncState.updateMany({
+            where: { reviewAppTargetId: { in: failedReviewAppTargetIds } },
             data: {
               lastErrorCode: input.errorCode,
               lastErrorMessage: input.errorMessage,
@@ -672,8 +765,9 @@ export function recoverStaleAndroidReviewSyncStates(input: {
   finishedAt: Date;
   staleBefore: Date;
 }) {
-  return prisma.androidStoreReviewSyncState.updateMany({
+  return prisma.reviewSyncState.updateMany({
     where: {
+      appTarget: { platform: "ANDROID" },
       lockedAt: { lt: input.staleBefore },
       status: "RUNNING",
     },
@@ -689,17 +783,20 @@ export function recoverStaleAndroidReviewSyncStates(input: {
 }
 
 export function deleteOldAndroidReviewFetchRuns(input: { before: Date }) {
-  return prisma.androidStoreReviewFetchRun.deleteMany({
+  return prisma.reviewFetchRun.deleteMany({
     where: {
       createdAt: { lt: input.before },
+      platform: "ANDROID",
       status: { in: ["SUCCEEDED", "FAILED", "PARTIAL"] },
     },
   });
 }
 
 export function getAndroidReviewSyncState(storeMappingId: string) {
-  return prisma.androidStoreReviewSyncState.findUnique({
-    where: { storeMappingId },
+  return prisma.reviewSyncState.findFirst({
+    where: {
+      appTarget: { androidStoreMappingId: storeMappingId },
+    },
     select: {
       lockedAt: true,
       status: true,
@@ -714,26 +811,28 @@ export function markAndroidReviewSyncRunning(
     startedAt: Date;
   },
 ) {
-  return prisma.androidStoreReviewSyncState.upsert({
-    where: { storeMappingId },
-    create: {
-      lastErrorCode: null,
-      lastErrorMessage: null,
-      lastFetchStartedAt: input.startedAt,
-      lockedAt: input.startedAt,
-      lockedBy: input.lockedBy,
-      status: "RUNNING",
-      storeMappingId,
-    },
-    update: {
-      lastErrorCode: null,
-      lastErrorMessage: null,
-      lastFetchStartedAt: input.startedAt,
-      lockedAt: input.startedAt,
-      lockedBy: input.lockedBy,
-      status: "RUNNING",
-    },
-  });
+  return androidReviewAppTargetId(storeMappingId).then((reviewAppTargetId) =>
+    prisma.reviewSyncState.upsert({
+      where: { reviewAppTargetId },
+      create: {
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        lastFetchStartedAt: input.startedAt,
+        lockedAt: input.startedAt,
+        lockedBy: input.lockedBy,
+        reviewAppTargetId,
+        status: "RUNNING",
+      },
+      update: {
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        lastFetchStartedAt: input.startedAt,
+        lockedAt: input.startedAt,
+        lockedBy: input.lockedBy,
+        status: "RUNNING",
+      },
+    }),
+  );
 }
 
 export function createAndroidReviewFetchRun(input: {
@@ -746,22 +845,25 @@ export function createAndroidReviewFetchRun(input: {
   sourceScheduleId?: string | null;
   scheduledFor?: Date | null;
 }) {
-  return prisma.androidStoreReviewFetchRun.create({
-    data: {
-      attemptCount: 1,
-      lockedAt: input.lockedBy ? input.startedAt : null,
-      lockedBy: input.lockedBy ?? null,
-      maxResults: input.maxResults,
-      scheduledFor: input.scheduledFor ?? null,
-      scanMode: input.scanMode,
-      sourceScheduleId: input.sourceScheduleId ?? null,
-      startedAt: input.startedAt,
-      status: "RUNNING",
-      storeMappingId: input.storeMappingId,
-      triggerType: input.triggerType,
-    },
-    select: { id: true },
-  });
+  return androidReviewAppTargetId(input.storeMappingId).then((reviewAppTargetId) =>
+    prisma.reviewFetchRun.create({
+      data: {
+        attemptCount: 1,
+        lockedAt: input.lockedBy ? input.startedAt : null,
+        lockedBy: input.lockedBy ?? null,
+        maxResults: input.maxResults,
+        platform: "ANDROID",
+        reviewAppTargetId,
+        scheduledFor: input.scheduledFor ?? null,
+        scanMode: input.scanMode,
+        sourceScheduleId: input.sourceScheduleId ?? null,
+        startedAt: input.startedAt,
+        status: "RUNNING",
+        triggerType: input.triggerType,
+      },
+      select: { id: true },
+    }),
+  );
 }
 
 export function finishAndroidReviewFetchRun(
@@ -779,7 +881,7 @@ export function finishAndroidReviewFetchRun(
     stopReason?: ReviewFetchStopReason | null;
   },
 ) {
-  return prisma.androidStoreReviewFetchRun.update({
+  return prisma.reviewFetchRun.update({
     where: { id: runId },
     data: {
       errorCode: input.errorCode ?? null,
@@ -810,21 +912,23 @@ export function finishAndroidReviewSyncState(
     status: "SUCCEEDED" | "FAILED";
   },
 ) {
-  return prisma.androidStoreReviewSyncState.update({
-    where: { storeMappingId },
-    data: {
-      lastErrorCode: input.errorCode ?? null,
-      lastErrorMessage: input.errorMessage ?? null,
-      lastFetchFinishedAt: input.finishedAt,
-      lastFetchedCount: input.reviewsFetched,
-      lastReviewUpdatedAt: input.lastReviewUpdatedAt ?? undefined,
-      lastSuccessAt: input.status === "SUCCEEDED" ? input.finishedAt : undefined,
-      lastUpsertedCount: input.reviewsUpserted,
-      lockedAt: null,
-      lockedBy: null,
-      status: input.status,
-    },
-  });
+  return androidReviewAppTargetId(storeMappingId).then((reviewAppTargetId) =>
+    prisma.reviewSyncState.update({
+      where: { reviewAppTargetId },
+      data: {
+        lastErrorCode: input.errorCode ?? null,
+        lastErrorMessage: input.errorMessage ?? null,
+        lastFetchFinishedAt: input.finishedAt,
+        lastFetchedCount: input.reviewsFetched,
+        lastReviewActivityAt: input.lastReviewUpdatedAt ?? undefined,
+        lastSuccessAt: input.status === "SUCCEEDED" ? input.finishedAt : undefined,
+        lastUpsertedCount: input.reviewsUpserted,
+        lockedAt: null,
+        lockedBy: null,
+        status: input.status,
+      },
+    }),
+  );
 }
 
 export function getAndroidReviewForReply(storeMappingId: string, reviewId: string) {
@@ -850,18 +954,27 @@ export function getActiveAndroidCredentialForStoreProfile(storeProfileId: string
   });
 }
 
-export function getAndroidReviewReplyTemplateForRating(
+export async function getAndroidReviewReplyTemplateForRating(
   storeMappingId: string,
   rating: number,
 ) {
-  return prisma.androidStoreReviewReplyTemplate.findUnique({
+  const template = await prisma.reviewReplyTemplate.findFirst({
     where: {
-      storeMappingId_rating: {
-        rating,
-        storeMappingId,
+      appTarget: {
+        androidStoreMappingId: storeMappingId,
+      },
+      rating,
+    },
+    include: {
+      appTarget: {
+        select: {
+          androidStoreMappingId: true,
+        },
       },
     },
   });
+
+  return template ? reviewReplyTemplateRecord(template) : null;
 }
 
 export function updateAndroidReviewDeveloperReply(
@@ -883,8 +996,25 @@ export function updateAndroidReviewDeveloperReply(
 export async function upsertAndroidReviews(reviews: AndroidReviewUpsertInput[]) {
   if (!reviews.length) return 0;
 
+  const targetIdByMappingId = await androidReviewAppTargetIdByMappingId(
+    reviews.map((review) => review.storeMappingId),
+  );
+  const rows = reviews.map((review) => {
+    const reviewAppTargetId = targetIdByMappingId.get(review.storeMappingId);
+    if (!reviewAppTargetId) {
+      throw new Error(
+        `Review app target was not found for Android mapping ${review.storeMappingId}.`,
+      );
+    }
+
+    return {
+      ...review,
+      reviewAppTargetId,
+    };
+  });
+
   const results = await prisma.$transaction(
-    reviews.map((review) =>
+    rows.map((review) =>
       prisma.androidStoreReview.upsert({
         where: {
           storeMappingId_reviewId: {
@@ -906,6 +1036,7 @@ export async function upsertAndroidReviews(reviews: AndroidReviewUpsertInput[]) 
           rating: review.rating,
           rawReview: review.rawReview,
           reviewId: review.reviewId,
+          reviewAppTargetId: review.reviewAppTargetId,
           reviewerLanguage: review.reviewerLanguage,
           reviewText: review.reviewText,
           storeMappingId: review.storeMappingId,
@@ -926,6 +1057,7 @@ export async function upsertAndroidReviews(reviews: AndroidReviewUpsertInput[]) 
           originalText: review.originalText,
           rating: review.rating,
           rawReview: review.rawReview,
+          reviewAppTargetId: review.reviewAppTargetId,
           reviewerLanguage: review.reviewerLanguage,
           reviewText: review.reviewText,
           thumbsDownCount: review.thumbsDownCount,
@@ -939,12 +1071,28 @@ export async function upsertAndroidReviews(reviews: AndroidReviewUpsertInput[]) 
   return results.length;
 }
 
-export function getAndroidReviewReplyTemplates(mappingIds: string[]) {
+export async function getAndroidReviewReplyTemplates(mappingIds: string[]) {
   if (!mappingIds.length) return Promise.resolve([]);
 
-  return prisma.androidStoreReviewReplyTemplate.findMany({
-    where: { storeMappingId: { in: mappingIds } },
-    orderBy: [{ storeMappingId: "asc" }, { rating: "desc" }],
+  const templates = await prisma.reviewReplyTemplate.findMany({
+    where: {
+      appTarget: {
+        androidStoreMappingId: { in: mappingIds },
+      },
+    },
+    include: {
+      appTarget: {
+        select: {
+          androidStoreMappingId: true,
+        },
+      },
+    },
+    orderBy: [{ rating: "desc" }],
+  });
+
+  return templates.flatMap((template) => {
+    const record = reviewReplyTemplateRecord(template);
+    return record ? [record] : [];
   });
 }
 
@@ -963,24 +1111,51 @@ export function updateAndroidStoreProfileReplyInfo(
 }
 
 export async function upsertAndroidReviewReplyTemplate(
-  data: Prisma.AndroidStoreReviewReplyTemplateUncheckedCreateInput &
-    Pick<
-      Prisma.AndroidStoreReviewReplyTemplateUncheckedUpdateInput,
-      "replyText" | "isActive" | "updatedBy"
-    >,
+  data: {
+    createdBy?: string | null;
+    isActive: boolean;
+    rating: number;
+    replyText: string;
+    storeMappingId: string;
+    updatedBy?: string | null;
+  },
 ) {
-  return prisma.androidStoreReviewReplyTemplate.upsert({
+  const reviewAppTargetId = await androidReviewAppTargetId(data.storeMappingId);
+  const template = await prisma.reviewReplyTemplate.upsert({
     where: {
-      storeMappingId_rating: {
-        storeMappingId: data.storeMappingId,
+      reviewAppTargetId_rating: {
         rating: data.rating,
+        reviewAppTargetId,
       },
     },
-    create: data,
+    create: {
+      createdBy: data.createdBy,
+      isActive: data.isActive,
+      rating: data.rating,
+      replyText: data.replyText,
+      reviewAppTargetId,
+      updatedBy: data.updatedBy,
+    },
     update: {
       isActive: data.isActive,
       replyText: data.replyText,
       updatedBy: data.updatedBy,
     },
+    include: {
+      appTarget: {
+        select: {
+          androidStoreMappingId: true,
+        },
+      },
+    },
   });
+
+  const record = reviewReplyTemplateRecord(template);
+  if (!record) {
+    throw new Error(
+      `Review app target was not found for Android mapping ${data.storeMappingId}.`,
+    );
+  }
+
+  return record;
 }

@@ -3,9 +3,8 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import type {
   AndroidStoreReview,
-  AndroidStoreReviewFetchRun,
-  AndroidStoreReviewReplyTemplate,
-  AndroidStoreReviewSyncState,
+  ReviewFetchRun,
+  ReviewSyncState,
 } from "@prisma/client";
 
 import { ApiError, badRequest, conflict, notFound } from "@/lib/server/api/errors";
@@ -14,7 +13,6 @@ import {
   getActiveAndroidCredentialForStoreProfile,
   getActiveAndroidReviewMappings,
   getAndroidReviewFetchRuns,
-  getAndroidReviewFetchSchedule,
   getAndroidReviewMappingById,
   getAndroidReviewForReply,
   getAndroidReviewsForMappingPage,
@@ -22,10 +20,12 @@ import {
   getAndroidReviewReplyGroups,
   getAndroidReviewReplyTemplateForRating,
   getAndroidReviewReplyTemplates,
+  getGlobalAndroidReviewFetchSchedule,
   getLatestAndroidReviewForMapping,
   updateAndroidReviewDeveloperReply,
   updateAndroidStoreProfileReplyInfo,
   upsertAndroidReviewReplyTemplate,
+  type AndroidReviewReplyTemplateRecord,
 } from "@/lib/server/repositories/reviews/android-review.repository";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/android-review-schedule.service";
@@ -179,6 +179,7 @@ function reviewAppCard(
   const reviewCount = mapping._count.reviews;
   const { averageRating } = ratingSummary(ratingGroups);
   const repliedCount = replyCounts.get(mapping.id) ?? 0;
+  const syncState = mapping.reviewTarget?.syncState ?? null;
 
   return {
     appIconUrl: mapping.appIconUrl,
@@ -186,11 +187,9 @@ function reviewAppCard(
     appName: mapping.appName,
     averageRating,
     identifier: mapping.packageName,
-    lastErrorMessage: mapping.reviewSyncState?.lastErrorMessage ?? null,
-    lastFetchedAt: iso(mapping.reviewSyncState?.lastFetchFinishedAt),
-    lastSyncStatus: mapping.reviewSyncState
-      ? enumText(mapping.reviewSyncState.status)
-      : null,
+    lastErrorMessage: syncState?.lastErrorMessage ?? null,
+    lastFetchedAt: iso(syncState?.lastFetchFinishedAt),
+    lastSyncStatus: syncState ? enumText(syncState.status) : null,
     mappingId: mapping.id,
     pendingReplyCount: Math.max(reviewCount - repliedCount, 0),
     platform: "android",
@@ -300,7 +299,7 @@ function reviewDto(review: AndroidStoreReview): AndroidStoreReviewDto {
   };
 }
 
-function syncStateDto(state: AndroidStoreReviewSyncState | null): ReviewSyncStateDto | null {
+function syncStateDto(state: ReviewSyncState | null): ReviewSyncStateDto | null {
   if (!state) return null;
 
   return {
@@ -309,14 +308,14 @@ function syncStateDto(state: AndroidStoreReviewSyncState | null): ReviewSyncStat
     lastFetchedCount: state.lastFetchedCount,
     lastFetchFinishedAt: iso(state.lastFetchFinishedAt),
     lastFetchStartedAt: iso(state.lastFetchStartedAt),
-    lastReviewUpdatedAt: iso(state.lastReviewUpdatedAt),
+    lastReviewUpdatedAt: iso(state.lastReviewActivityAt),
     lastSuccessAt: iso(state.lastSuccessAt),
     lastUpsertedCount: state.lastUpsertedCount,
     status: enumText(state.status),
   };
 }
 
-function fetchRunDto(run: AndroidStoreReviewFetchRun): ReviewFetchRunDto {
+function fetchRunDto(run: ReviewFetchRun): ReviewFetchRunDto {
   return {
     attemptCount: run.attemptCount,
     errorCode: run.errorCode,
@@ -639,7 +638,7 @@ function replyTemplateContext(input: {
 }
 
 function replyTemplatePreviewDto(
-  template: AndroidStoreReviewReplyTemplate | null,
+  template: AndroidReviewReplyTemplateRecord | null,
   storeMappingId: string,
   rating: number,
   context: ReviewReplyTemplateContext,
@@ -691,7 +690,7 @@ export async function getReviewAppDetail(
       take: reviewPagination.take,
     }),
     getAndroidReviewFetchRuns(mappingId),
-    getAndroidReviewFetchSchedule(mappingId),
+    getGlobalAndroidReviewFetchSchedule(),
     getAndroidReviewReplyTemplates([mappingId]),
     getLatestAndroidReviewForMapping(mappingId),
   ]);
@@ -754,12 +753,12 @@ export async function getReviewAppDetail(
     },
     reviews: paginatedReviews.data,
     stats,
-    syncState: syncStateDto(mapping.reviewSyncState),
+    syncState: syncStateDto(mapping.reviewTarget?.syncState ?? null),
   };
 }
 
 function templateDto(
-  template: AndroidStoreReviewReplyTemplate | null,
+  template: AndroidReviewReplyTemplateRecord | null,
   storeMappingId: string,
   rating: number,
 ): ReviewReplyTemplateDto {

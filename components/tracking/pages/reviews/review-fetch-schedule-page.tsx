@@ -82,11 +82,11 @@ type FullScanTarget =
 
 type BulkScheduleResponse = {
   appliedCount?: number;
-  deleted?: number;
+  deleted?: boolean;
   error?: string;
   message?: string;
   ok?: boolean;
-  schedules?: Array<ReviewFetchScheduleDto | null>;
+  schedule?: ReviewFetchScheduleDto | null;
 };
 
 type ScheduleAppsResponse = {
@@ -95,6 +95,7 @@ type ScheduleAppsResponse = {
   filters?: ReviewFetchSchedulePageData["filters"];
   page?: number;
   pageSize?: number;
+  schedule?: ReviewFetchScheduleDto | null;
   storeOptions?: ReviewFetchSchedulePageData["storeOptions"];
   success?: boolean;
   summary?: ReviewFetchSchedulePageData["summary"];
@@ -141,25 +142,13 @@ function finalizeIntervalHours(value: string) {
   );
 }
 
-function firstConfiguredSchedule(data: ReviewFetchSchedulePageData) {
-  return data.apps.find((app) => app.fetchSchedule)?.fetchSchedule ?? null;
-}
-
-function scheduleMap(schedules: Array<ReviewFetchScheduleDto | null> | undefined) {
-  return new Map(
-    (schedules ?? [])
-      .filter((schedule): schedule is ReviewFetchScheduleDto => Boolean(schedule))
-      .map((schedule) => [schedule.storeMappingId, schedule]),
-  );
-}
-
 export function ReviewFetchSchedulePage({
   data,
 }: {
   data: ReviewFetchSchedulePageData;
 }) {
   const router = useRouter();
-  const initialSchedule = firstConfiguredSchedule(data);
+  const [schedule, setSchedule] = useState(data.schedule);
   const [apps, setApps] = useState(data.apps);
   const [appPagination, setAppPagination] =
     useState<PaginationMeta>(data.appPagination);
@@ -178,7 +167,7 @@ export function ReviewFetchSchedulePage({
   const [fullScanPending, setFullScanPending] = useState(false);
   const [loadingApps, setLoadingApps] = useState(false);
   const [intervalHours, setIntervalHours] = useState(
-    normalizedIntervalHours(initialSchedule?.intervalHours),
+    normalizedIntervalHours(data.schedule?.intervalHours),
   );
 
   const selectedStoreLabel =
@@ -187,8 +176,8 @@ export function ReviewFetchSchedulePage({
       : storeOptions.find((store) => store.id === selectedStore)?.name ??
         "All Stores";
   const formDisabled = Boolean(pendingAction) || summary.appCount === 0;
-  const canPauseSchedule = summary.activeCount > 0;
-  const canResumeSchedule = summary.pausedCount > 0;
+  const canPauseSchedule = schedule?.status === "active";
+  const canResumeSchedule = schedule?.status === "paused";
 
   async function loadScheduleAppsPage(
     page: number,
@@ -227,6 +216,7 @@ export function ReviewFetchSchedulePage({
         totalPages: payload.totalPages ?? 1,
       });
       if (payload.summary) setSummary(payload.summary);
+      if ("schedule" in payload) setSchedule(payload.schedule ?? null);
       if (payload.storeOptions) setStoreOptions(payload.storeOptions);
     } catch (error) {
       void showToast("error",
@@ -236,23 +226,6 @@ export function ReviewFetchSchedulePage({
       );
     } finally {
       setLoadingApps(false);
-    }
-  }
-
-  function applySchedulesToState(schedules: Array<ReviewFetchScheduleDto | null>) {
-    const byMappingId = scheduleMap(schedules);
-    const firstSchedule = schedules.find(
-      (schedule): schedule is ReviewFetchScheduleDto => Boolean(schedule),
-    );
-
-    setApps((current) =>
-      current.map((app) => ({
-        ...app,
-        fetchSchedule: byMappingId.get(app.mappingId) ?? app.fetchSchedule,
-      })),
-    );
-    if (firstSchedule) {
-      setIntervalHours(String(firstSchedule.intervalHours));
     }
   }
 
@@ -270,17 +243,17 @@ export function ReviewFetchSchedulePage({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           intervalHours: scheduledIntervalHours,
-          scope: "all",
           status: "active",
         }),
       });
       const payload = (await response.json()) as BulkScheduleResponse;
 
-      if (!response.ok || !payload.ok || !payload.schedules) {
+      if (!response.ok || !payload.ok || !payload.schedule) {
         throw new Error(payload.error ?? "Schedules could not be saved.");
       }
 
-      applySchedulesToState(payload.schedules);
+      setSchedule(payload.schedule);
+      setIntervalHours(String(payload.schedule.intervalHours));
       await loadScheduleAppsPage(appPagination.page);
       void showToast("success", payload.message ?? "Schedules saved.");
       router.refresh();
@@ -303,17 +276,17 @@ export function ReviewFetchSchedulePage({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          scope: "all",
           status,
         }),
       });
       const payload = (await response.json()) as BulkScheduleResponse;
 
-      if (!response.ok || !payload.ok || !payload.schedules) {
+      if (!response.ok || !payload.ok || !payload.schedule) {
         throw new Error(payload.error ?? "Schedules could not be updated.");
       }
 
-      applySchedulesToState(payload.schedules);
+      setSchedule(payload.schedule);
+      setIntervalHours(String(payload.schedule.intervalHours));
       await loadScheduleAppsPage(appPagination.page);
       void showToast("success", payload.message ?? "Schedules updated.");
       router.refresh();
@@ -337,7 +310,7 @@ export function ReviewFetchSchedulePage({
       const response = await fetch("/api/review-fetch-schedules", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scope: "all" }),
+        body: JSON.stringify({}),
       });
       const payload = (await response.json()) as BulkScheduleResponse;
 
@@ -345,9 +318,7 @@ export function ReviewFetchSchedulePage({
         throw new Error(payload.error ?? "Schedules could not be deleted.");
       }
 
-      setApps((current) =>
-        current.map((app) => ({ ...app, fetchSchedule: null })),
-      );
+      setSchedule(null);
       await loadScheduleAppsPage(appPagination.page);
       setDeleteDialogOpen(false);
       void showToast("success", payload.message ?? "Schedules deleted.");
@@ -692,23 +663,21 @@ export function ReviewFetchSchedulePage({
                     <TableCell>
                       <div className="flex min-w-[13rem] items-center gap-2 text-sm">
                         <Clock3 size={14} className="text-muted-foreground" />
-                        {scheduleIntervalLabel(app.fetchSchedule)}
+                        {scheduleIntervalLabel(schedule)}
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className="min-w-[10rem] text-sm">
-                        {dateTime(app.fetchSchedule?.nextRunAt ?? null)}
+                        {dateTime(schedule?.nextRunAt ?? null)}
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className="min-w-[10rem] text-sm">
-                        {dateTime(app.fetchSchedule?.lastRunAt ?? null)}
+                        {dateTime(schedule?.lastRunAt ?? null)}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <StatusBadge
-                        status={app.fetchSchedule?.status ?? "no_schedule"}
-                      />
+                      <StatusBadge status={schedule?.status ?? "no_schedule"} />
                     </TableCell>
                     <TableCell>
                       <Button

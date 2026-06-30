@@ -3,7 +3,7 @@ import "server-only";
 import { canAccessReviewApp } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
-import { getAndroidReviewFetchSchedules } from "@/lib/server/repositories/reviews/android-review.repository";
+import { getGlobalAndroidReviewFetchSchedule } from "@/lib/server/repositories/reviews/android-review.repository";
 import {
   filterReviewAppCards,
   getReviewAppCards,
@@ -11,35 +11,26 @@ import {
   reviewStoreOptions,
 } from "@/lib/server/services/reviews/android-review.service";
 import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/android-review-schedule.service";
-import type { ReviewFetchScheduleApp, ReviewFetchSchedulePageData } from "@/lib/tracking/page-data";
+import type {
+  ReviewFetchScheduleApp,
+  ReviewFetchScheduleDto,
+  ReviewFetchSchedulePageData,
+} from "@/lib/tracking/page-data";
 
-function scheduleSummary(apps: ReviewFetchScheduleApp[]) {
-  const scheduledCount = apps.filter((app) => app.fetchSchedule).length;
-  const activeCount = apps.filter(
-    (app) => app.fetchSchedule?.status === "active",
-  ).length;
-  const pausedCount = apps.filter(
-    (app) => app.fetchSchedule?.status === "paused",
-  ).length;
+function scheduleSummary(
+  apps: ReviewFetchScheduleApp[],
+  schedule: ReviewFetchScheduleDto | null,
+) {
+  const scheduledCount = schedule ? apps.length : 0;
+  const activeCount = schedule?.status === "active" ? apps.length : 0;
+  const pausedCount = schedule?.status === "paused" ? apps.length : 0;
   const unscheduledCount = apps.length - scheduledCount;
-  const scheduleStatus =
-    scheduledCount === 0
-      ? "no_schedule"
-      : unscheduledCount > 0 || (activeCount > 0 && pausedCount > 0)
-        ? "mixed"
-        : activeCount > 0
-          ? "active"
-          : "paused";
-  const nextRunAt =
-    apps
-      .map((app) => app.fetchSchedule?.nextRunAt)
-      .filter(Boolean)
-      .sort()[0] ?? null;
+  const scheduleStatus = schedule?.status ?? "no_schedule";
 
   return {
     activeCount,
     appCount: apps.length,
-    nextRunAt,
+    nextRunAt: schedule?.nextRunAt ?? null,
     pausedCount,
     scheduleStatus,
     scheduledCount,
@@ -63,19 +54,10 @@ export async function getReviewFetchSchedulePageData(
   const apps = (await getReviewAppCards()).filter((app) =>
     canAccessReviewApp(session, app),
   );
-  const schedules = await getAndroidReviewFetchSchedules(
-    apps.map((app) => app.mappingId),
+  const schedule = reviewFetchScheduleDto(
+    await getGlobalAndroidReviewFetchSchedule(),
   );
-  const scheduleByMappingId = new Map(
-    schedules.map((schedule) => [schedule.storeMappingId, schedule]),
-  );
-  const appsWithSchedules = apps.map((app) => ({
-    ...app,
-    fetchSchedule: reviewFetchScheduleDto(
-      scheduleByMappingId.get(app.mappingId) ?? null,
-    ),
-  }));
-  const filteredApps = filterReviewAppCards(appsWithSchedules, {
+  const filteredApps = filterReviewAppCards(apps, {
     search: options?.search,
     storeProfileId: options?.storeProfileId,
   });
@@ -94,8 +76,9 @@ export async function getReviewFetchSchedulePageData(
       search: options?.search ?? "",
       storeProfileId: options?.storeProfileId ?? "all",
     },
+    schedule,
     storeNames: storeOptions.map((store) => store.name),
     storeOptions,
-    summary: scheduleSummary(filteredApps),
+    summary: scheduleSummary(filteredApps, schedule),
   };
 }

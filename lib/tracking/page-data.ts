@@ -199,8 +199,7 @@ export type ReviewFetchScheduleDto = {
   id: string;
   intervalHours: number;
   status: string;
-  storeMappingId: string;
-  nextRunAt: string;
+  nextRunAt: string | null;
   lastRunAt: string | null;
   lastStatus: string | null;
   lastErrorCode: string | null;
@@ -210,9 +209,7 @@ export type ReviewFetchScheduleDto = {
   updatedBy: string | null;
 };
 
-export type ReviewFetchScheduleApp = ReviewAppCard & {
-  fetchSchedule: ReviewFetchScheduleDto | null;
-};
+export type ReviewFetchScheduleApp = ReviewAppCard;
 
 export type ReviewFetchSchedulePageData = {
   appPagination: PaginationMeta;
@@ -221,6 +218,7 @@ export type ReviewFetchSchedulePageData = {
     search: string;
     storeProfileId: string;
   };
+  schedule: ReviewFetchScheduleDto | null;
   summary: {
     activeCount: number;
     appCount: number;

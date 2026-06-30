@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import type {
-  AndroidStoreReviewFetchSchedule,
+  ReviewFetchSchedule,
   ReviewFetchRunStatus,
   ReviewFetchScheduleStatus,
 } from "@prisma/client";
@@ -12,23 +12,18 @@ import { badRequest, notFound } from "@/lib/server/api/errors";
 import {
   claimDueAndroidReviewFetchSchedules,
   claimPendingAndroidReviewFetchRuns,
-  deleteAndroidReviewFetchSchedule,
-  deleteAndroidReviewFetchSchedules,
+  deleteGlobalAndroidReviewFetchSchedule,
   deleteOldAndroidReviewFetchRuns,
   enqueueScheduledAndroidReviewFetchRuns,
   finishAndroidReviewFetchScheduleRun,
   getActiveAndroidReviewMappings,
-  getAndroidReviewFetchSchedule,
-  getAndroidReviewFetchSchedules,
-  getAndroidReviewMappingById,
+  getGlobalAndroidReviewFetchSchedule,
   markAndroidReviewFetchSchedulesMaterialized,
   recoverStaleAndroidReviewFetchRuns,
   recoverStaleAndroidReviewSyncStates,
   retryAndroidReviewFetchRun,
-  updateAndroidReviewFetchScheduleStatuses,
-  updateAndroidReviewFetchScheduleStatus,
-  upsertAndroidReviewFetchSchedule,
-  upsertAndroidReviewFetchSchedules,
+  updateGlobalAndroidReviewFetchScheduleStatus,
+  upsertGlobalAndroidReviewFetchSchedule,
 } from "@/lib/server/repositories/reviews/android-review.repository";
 import { cleanText } from "@/lib/server/services/credentials/credential.shared";
 import { processClaimedAndroidReviewFetchRun } from "@/lib/server/services/reviews/android-review-fetch.service";
@@ -48,30 +43,15 @@ const RETRY_DELAY_MS = 5 * 60 * 1000;
 
 export type SaveReviewFetchSchedulePayload = {
   intervalHours?: unknown;
-  scope?: unknown;
   status?: unknown;
-  storeMappingId?: unknown;
 };
 
 export type UpdateReviewFetchScheduleStatusPayload = {
-  scope?: unknown;
   status?: unknown;
-  storeMappingId?: unknown;
-};
-
-export type DeleteReviewFetchSchedulePayload = {
-  scope?: unknown;
-  storeMappingId?: unknown;
 };
 
 function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
-}
-
-function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(
-    value,
-  );
 }
 
 function normalizeIntervalHours(value: unknown) {
@@ -98,10 +78,6 @@ function normalizeScheduleStatus(value: unknown): ReviewFetchScheduleStatus {
   throw badRequest("Schedule status must be active or paused.");
 }
 
-function isAllAppsScope(value: unknown) {
-  return cleanText(value).toLowerCase() === "all";
-}
-
 function nextIntervalReviewFetchRunAt(
   intervalHours: number,
   scheduledFor: Date,
@@ -118,7 +94,7 @@ function nextIntervalReviewFetchRunAt(
 }
 
 export function reviewFetchScheduleDto(
-  schedule: AndroidStoreReviewFetchSchedule | null,
+  schedule: ReviewFetchSchedule | null,
 ): ReviewFetchScheduleDto | null {
   if (!schedule) return null;
 
@@ -129,9 +105,8 @@ export function reviewFetchScheduleDto(
     lastErrorMessage: schedule.lastErrorMessage,
     lastRunAt: iso(schedule.lastRunAt),
     lastStatus: schedule.lastStatus ? schedule.lastStatus.toLowerCase() : null,
-    nextRunAt: schedule.nextRunAt.toISOString(),
+    nextRunAt: iso(schedule.nextRunAt),
     runCount: schedule.runCount,
-    storeMappingId: schedule.storeMappingId,
     status: schedule.status.toLowerCase(),
     updatedAt: schedule.updatedAt.toISOString(),
     updatedBy: schedule.updatedBy,
@@ -145,79 +120,24 @@ function normalizeScheduleSettings(payload: SaveReviewFetchSchedulePayload) {
   };
 }
 
-function normalizeSaveSchedulePayload(payload: SaveReviewFetchSchedulePayload) {
-  const storeMappingId = cleanText(payload.storeMappingId);
-  if (!storeMappingId || !isUuid(storeMappingId)) {
-    throw badRequest("Android app mapping is required.");
-  }
-
-  return {
-    ...normalizeScheduleSettings(payload),
-    storeMappingId,
-  };
-}
-
-function normalizeScheduleIdentity(payload: { storeMappingId?: unknown }) {
-  const storeMappingId = cleanText(payload.storeMappingId);
-  if (!storeMappingId || !isUuid(storeMappingId)) {
-    throw badRequest("Android app mapping is required.");
-  }
-
-  return storeMappingId;
-}
-
 export async function saveReviewFetchSchedule(
   payload: SaveReviewFetchSchedulePayload,
   authEmail: string,
 ) {
-  if (isAllAppsScope(payload.scope)) {
-    return saveAllReviewFetchSchedules(payload, authEmail);
-  }
-
-  const normalized = normalizeSaveSchedulePayload(payload);
-  const mapping = await getAndroidReviewMappingById(normalized.storeMappingId);
-  if (!mapping) throw notFound("Android app mapping was not found.");
+  const normalized = normalizeScheduleSettings(payload);
   const now = new Date();
 
-  const schedule = await upsertAndroidReviewFetchSchedule({
+  const schedule = await upsertGlobalAndroidReviewFetchSchedule({
     createdBy: authEmail,
     intervalHours: normalized.intervalHours,
     nextRunAt: now,
     status: normalized.status,
-    storeMappingId: normalized.storeMappingId,
     updatedBy: authEmail,
   });
 
   return {
-    message: `Review fetch schedule for ${mapping.appName} has been saved.`,
+    message: "Review fetch schedule has been saved.",
     schedule: reviewFetchScheduleDto(schedule),
-  };
-}
-
-export async function saveAllReviewFetchSchedules(
-  payload: SaveReviewFetchSchedulePayload,
-  authEmail: string,
-) {
-  const normalized = normalizeScheduleSettings(payload);
-  const mappings = await getActiveAndroidReviewMappings();
-  if (!mappings.length) throw notFound("No active Android apps were found.");
-
-  const nextRunAt = new Date();
-  const schedules = await upsertAndroidReviewFetchSchedules(
-    mappings.map((mapping) => ({
-      createdBy: authEmail,
-      intervalHours: normalized.intervalHours,
-      nextRunAt,
-      status: normalized.status,
-      storeMappingId: mapping.id,
-      updatedBy: authEmail,
-    })),
-  );
-
-  return {
-    appliedCount: schedules.length,
-    message: `Review fetch schedule has been applied to ${schedules.length} app(s).`,
-    schedules: schedules.map(reviewFetchScheduleDto),
   };
 }
 
@@ -226,33 +146,10 @@ export async function updateReviewFetchScheduleStatus(
   authEmail: string,
 ) {
   const status = normalizeScheduleStatus(payload.status);
-  if (isAllAppsScope(payload.scope)) {
-    const mappings = await getActiveAndroidReviewMappings();
-    const schedules = await getAndroidReviewFetchSchedules(
-      mappings.map((mapping) => mapping.id),
-    );
-    const now = new Date();
-    const updatedSchedules = await updateAndroidReviewFetchScheduleStatuses(
-      schedules.map((schedule) => ({
-        nextRunAt: status === "ACTIVE" ? now : undefined,
-        status,
-        storeMappingId: schedule.storeMappingId,
-        updatedBy: authEmail,
-      })),
-    );
-
-    return {
-      appliedCount: updatedSchedules.length,
-      message: `Review fetch schedule status has been updated for ${updatedSchedules.length} app(s).`,
-      schedules: updatedSchedules.map(reviewFetchScheduleDto),
-    };
-  }
-
-  const storeMappingId = normalizeScheduleIdentity(payload);
-  const current = await getAndroidReviewFetchSchedule(storeMappingId);
+  const current = await getGlobalAndroidReviewFetchSchedule();
   if (!current) throw notFound("Review fetch schedule was not found.");
 
-  const schedule = await updateAndroidReviewFetchScheduleStatus(storeMappingId, {
+  const schedule = await updateGlobalAndroidReviewFetchScheduleStatus({
     nextRunAt: status === "ACTIVE" ? new Date() : undefined,
     status,
     updatedBy: authEmail,
@@ -264,32 +161,21 @@ export async function updateReviewFetchScheduleStatus(
   };
 }
 
-export async function removeReviewFetchSchedule(
-  payload: DeleteReviewFetchSchedulePayload,
-) {
-  if (isAllAppsScope(payload.scope)) {
-    const mappings = await getActiveAndroidReviewMappings();
-    const result = await deleteAndroidReviewFetchSchedules(
-      mappings.map((mapping) => mapping.id),
-    );
-
-    return {
-      deleted: result.count,
-      message: `Review fetch schedules have been deleted for ${result.count} app(s).`,
-    };
-  }
-
-  const storeMappingId = normalizeScheduleIdentity(payload);
-
-  await deleteAndroidReviewFetchSchedule(storeMappingId).catch((error: unknown) => {
-    if (error && typeof error === "object" && "code" in error && error.code === "P2025") {
+export async function removeReviewFetchSchedule() {
+  await deleteGlobalAndroidReviewFetchSchedule().catch((error: unknown) => {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "P2025"
+    ) {
       throw notFound("Review fetch schedule was not found.");
     }
     throw error;
   });
 
   return {
-    deleted: storeMappingId,
+    deleted: true,
     message: "Review fetch schedule has been deleted.",
   };
 }
@@ -344,21 +230,26 @@ async function materializeDueReviewFetchSchedules(now: Date) {
     };
   }
 
-  const jobs = schedules.map((schedule) => ({
-    maxAttempts: SCHEDULED_REVIEW_FETCH_MAX_ATTEMPTS,
-    maxResults: SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
-    nextAttemptAt: now,
-    scheduledFor: schedule.nextRunAt,
-    sourceScheduleId: schedule.id,
-    storeMappingId: schedule.storeMappingId,
-  }));
+  const mappings = await getActiveAndroidReviewMappings();
+  const jobs = schedules.flatMap((schedule) => {
+    const scheduledFor = schedule.nextRunAt ?? now;
+
+    return mappings.map((mapping) => ({
+      maxAttempts: SCHEDULED_REVIEW_FETCH_MAX_ATTEMPTS,
+      maxResults: SCHEDULED_REVIEW_FETCH_MAX_RESULTS,
+      nextAttemptAt: now,
+      scheduledFor,
+      sourceScheduleId: schedule.id,
+      storeMappingId: mapping.id,
+    }));
+  });
   const enqueueResult = await enqueueScheduledAndroidReviewFetchRuns(jobs);
 
   await markAndroidReviewFetchSchedulesMaterialized(
     schedules.map((schedule) => ({
       nextRunAt: nextIntervalReviewFetchRunAt(
         schedule.intervalHours,
-        schedule.nextRunAt,
+        schedule.nextRunAt ?? now,
         now,
       ),
       scheduleId: schedule.id,
@@ -368,19 +259,30 @@ async function materializeDueReviewFetchSchedules(now: Date) {
   return {
     claimed: schedules.length,
     enqueued: enqueueResult.count,
-    schedules: schedules.map((schedule) => ({
-      appName: schedule.storeMapping.appName,
-      intervalHours: schedule.intervalHours,
-      nextRunAt: nextIntervalReviewFetchRunAt(
-        schedule.intervalHours,
-        schedule.nextRunAt,
-        now,
-      ).toISOString(),
-      packageName: schedule.storeMapping.packageName,
-      scheduleId: schedule.id,
-      scheduledFor: schedule.nextRunAt.toISOString(),
-      storeMappingId: schedule.storeMappingId,
-    })),
+    schedules: jobs.map((job) => {
+      const mapping = mappings.find(
+        (candidate) => candidate.id === job.storeMappingId,
+      );
+      const schedule = schedules.find(
+        (candidate) => candidate.id === job.sourceScheduleId,
+      );
+
+      return {
+        appName: mapping?.appName ?? "Unknown app",
+        intervalHours: schedule?.intervalHours ?? DEFAULT_REVIEW_FETCH_INTERVAL_HOURS,
+        nextRunAt: schedule
+          ? nextIntervalReviewFetchRunAt(
+              schedule.intervalHours,
+              schedule.nextRunAt ?? now,
+              now,
+            ).toISOString()
+          : null,
+        packageName: mapping?.packageName ?? null,
+        scheduleId: job.sourceScheduleId,
+        scheduledFor: job.scheduledFor.toISOString(),
+        storeMappingId: job.storeMappingId,
+      };
+    }),
   };
 }
 
