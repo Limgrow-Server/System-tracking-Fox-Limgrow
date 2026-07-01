@@ -23,7 +23,10 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { valuesMatchSearch as fuzzyValuesMatchSearch } from "@/lib/search";
+import {
+  searchTextVariants,
+  valuesMatchSearch as fuzzyValuesMatchSearch,
+} from "@/lib/search";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData } from "@/lib/tracking/page-data";
 import type {
@@ -313,9 +316,14 @@ function normalizedValue(value: string | null | undefined) {
 }
 
 function normalizedValues(values: Array<string | null | undefined>) {
-  return values
-    .map(normalizedValue)
-    .filter((value): value is string => Boolean(value));
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) => searchTextVariants(value))
+        .map(normalizedValue)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
 }
 
 function valuesOverlap(
@@ -375,14 +383,15 @@ export function jobMatchesApp(job: NotificationJob, app: StoreMapping) {
   if (job.platform !== app.platform) return false;
   if (job.app_mapping_id) return sameValue(job.app_mapping_id, app.id);
 
+  if (sameValue(app.package_name, job.package_name)) return true;
+  if (sameValue(app.bundle_id, job.bundle_id)) return true;
+
   const appIds = normalizedValues([app.app_id]);
   const jobIds = normalizedValues([job.app_id]);
   if (appIds.length && jobIds.length) {
     return valuesOverlap(appIds, jobIds);
   }
 
-  if (sameValue(app.package_name, job.package_name)) return true;
-  if (sameValue(app.bundle_id, job.bundle_id)) return true;
   if (!jobIds.length && sameValue(job.app_name, app.app_name)) return true;
   return !jobIds.length
     && !job.package_name
@@ -394,14 +403,15 @@ export function scheduleMatchesApp(schedule: NotificationSchedule, app: StoreMap
   if (schedule.platform !== app.platform) return false;
   if (schedule.app_mapping_id) return sameValue(schedule.app_mapping_id, app.id);
 
+  if (sameValue(app.package_name, schedule.package_name)) return true;
+  if (sameValue(app.bundle_id, schedule.bundle_id)) return true;
+
   const appIds = normalizedValues([app.app_id]);
   const scheduleIds = normalizedValues([schedule.app_id]);
   if (appIds.length && scheduleIds.length) {
     return valuesOverlap(appIds, scheduleIds);
   }
 
-  if (sameValue(app.package_name, schedule.package_name)) return true;
-  if (sameValue(app.bundle_id, schedule.bundle_id)) return true;
   if (!scheduleIds.length && sameValue(schedule.app_name, app.app_name)) return true;
   return !scheduleIds.length
     && !schedule.package_name

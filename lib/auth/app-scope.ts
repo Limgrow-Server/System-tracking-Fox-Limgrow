@@ -7,6 +7,7 @@ import type {
   NotificationSchedule,
   StoreMapping,
 } from "@/lib/tracking/types";
+import { searchTextVariants } from "@/lib/search";
 import { firstAppId, normalizeScopeKey } from "@/lib/tracking/identity";
 
 type ScopeRecord = Partial<{
@@ -45,12 +46,12 @@ function clean(value: unknown) {
 
 function unique(values: unknown[]) {
   return Array.from(
-    new Set(values.map(normalizeScopeKey).filter(Boolean)),
+    new Set(values.flatMap(searchTextVariants).map(normalizeScopeKey).filter(Boolean)),
   );
 }
 
 function scopeSet(values: string[] | null | undefined) {
-  return new Set((values ?? []).map(normalizeScopeKey).filter(Boolean));
+  return new Set((values ?? []).flatMap(searchTextVariants).map(normalizeScopeKey).filter(Boolean));
 }
 
 function hasOverlap(keys: string[], values: Set<string>) {

@@ -22,7 +22,10 @@ import {
 } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
-import { valuesMatchSearch as fuzzyValuesMatchSearch } from "@/lib/search";
+import {
+  searchTextVariants,
+  valuesMatchSearch as fuzzyValuesMatchSearch,
+} from "@/lib/search";
 import type {
   NotificationOverviewSummary,
   NotificationsPageData,
@@ -195,8 +198,12 @@ function uniqueClean(values: Array<string | null | undefined>) {
   );
 }
 
+function uniqueSearchKeys(values: Array<string | null | undefined>) {
+  return uniqueClean(values.flatMap((value) => searchTextVariants(value)));
+}
+
 function recordAppKeys(record: DeviceToken | NotificationJob | NotificationSchedule) {
-  return uniqueClean([
+  return uniqueSearchKeys([
     "app_mapping_id" in record ? record.app_mapping_id : null,
     record.id,
     record.app_id,
@@ -227,7 +234,8 @@ function routeAppMatches(app: StoreMapping, appId: string | null | undefined) {
     app.id === appId ||
     app.app_id?.toLowerCase() === normalized ||
     app.package_name?.toLowerCase() === normalized ||
-    app.bundle_id?.toLowerCase() === normalized
+    app.bundle_id?.toLowerCase() === normalized ||
+    valuesMatchSearch([app.id, app.app_id, app.package_name, app.bundle_id], appId)
   );
 }
 
@@ -268,7 +276,7 @@ function appMatchIndex(apps: StoreMapping[]) {
   return {
     appKeys: new Set(
       apps.flatMap((app) =>
-        uniqueClean([
+        uniqueSearchKeys([
           app.id,
           app.app_id,
           app.app_name,
