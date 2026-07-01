@@ -24,6 +24,7 @@
     "prisma:studio": "DOTENV_CONFIG_PATH=.env prisma studio --schema prisma"
   },
   "dependencies": {
+    "@apple/app-store-server-library": "^3.1.0",
     "@prisma/client": "^6.19.3",
     "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.108.2",
