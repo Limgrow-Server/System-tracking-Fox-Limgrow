@@ -1,6 +1,7 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 
 type IapAppMappingOptions = {
   search?: string;
@@ -26,14 +27,17 @@ function androidMappingWhere(
   }
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
-    const searchOr: Prisma.AndroidStoreMappingWhereInput[] = [
-      { appName: contains },
-      { appId: contains },
-      { packageName: contains },
-      { storeAccountName: contains },
-      { storeProfile: { storeAccountName: contains } },
-    ];
+    const searchOr: Prisma.AndroidStoreMappingWhereInput[] = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { appName: contains },
+        { appId: contains },
+        { packageName: contains },
+        { storeAccountName: contains },
+        { storeProfile: { storeAccountName: contains } },
+      ];
+    });
 
     where.AND = [...(where.AND instanceof Array ? where.AND : []), { OR: searchOr }];
   }
@@ -60,14 +64,17 @@ function iosMappingWhere(
   }
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
-    const searchOr: Prisma.IosStoreMappingWhereInput[] = [
-      { appName: contains },
-      { appId: contains },
-      { bundleId: contains },
-      { storeAccountName: contains },
-      { storeProfile: { storeAccountName: contains } },
-    ];
+    const searchOr: Prisma.IosStoreMappingWhereInput[] = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { appName: contains },
+        { appId: contains },
+        { bundleId: contains },
+        { storeAccountName: contains },
+        { storeProfile: { storeAccountName: contains } },
+      ];
+    });
 
     where.AND = [...(where.AND instanceof Array ? where.AND : []), { OR: searchOr }];
   }
@@ -154,13 +161,16 @@ function androidTransactionWhere(
   const kind = options?.kind?.trim();
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
-    where.OR = [
-      { orderId: contains },
-      { productId: contains },
-      { purchaseToken: contains },
-      { packageName: contains },
-    ];
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { orderId: contains },
+        { productId: contains },
+        { purchaseToken: contains },
+        { packageName: contains },
+      ];
+    });
   }
 
   if (state && state !== "all") {
@@ -262,18 +272,21 @@ function iosTransactionWhere(
   const state = options?.state?.trim();
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
+    const searchOr: Prisma.IosIapTransactionWhereInput[] = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { transactionId: contains },
+        { originalTransactionId: contains },
+        { productId: contains },
+        { bundleId: contains },
+        { userId: contains },
+      ];
+    });
+
     where.AND = [
       ...(where.AND instanceof Array ? where.AND : []),
-      {
-        OR: [
-          { transactionId: contains },
-          { originalTransactionId: contains },
-          { productId: contains },
-          { bundleId: contains },
-          { userId: contains },
-        ],
-      },
+      { OR: searchOr },
     ];
   }
 

@@ -8,6 +8,7 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 
 export type AndroidReviewUpsertInput = {
   androidOsVersion: number | null;
@@ -131,13 +132,16 @@ function androidReviewWhere(
   }
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
-    where.OR = [
-      { authorName: contains },
-      { originalText: contains },
-      { reviewId: contains },
-      { reviewText: contains },
-    ];
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { authorName: contains },
+        { originalText: contains },
+        { reviewId: contains },
+        { reviewText: contains },
+      ];
+    });
   }
 
   return where;

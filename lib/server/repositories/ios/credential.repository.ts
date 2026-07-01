@@ -3,6 +3,7 @@ import "server-only";
 import type { CredentialPurpose, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 
 type CredentialTargetInput = {
   credentialRef?: string;
@@ -29,24 +30,26 @@ function iosCredentialGroupWhere(options: IosCredentialGroupPageOptions): Prisma
   const search = options.search?.trim();
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
 
-    where.OR = [
-      { storeAccountName: contains },
-      { issuerId: contains },
-      {
-        credentials: {
-          some: {
-            OR: [
-              { credentialRef: contains },
-              { keyId: contains },
-              { vaultSecretName: contains },
-              { storeAccountName: contains },
-            ],
+      return [
+        { storeAccountName: contains },
+        { issuerId: contains },
+        {
+          credentials: {
+            some: {
+              OR: [
+                { credentialRef: contains },
+                { keyId: contains },
+                { vaultSecretName: contains },
+                { storeAccountName: contains },
+              ],
+            },
           },
         },
-      },
-    ];
+      ];
+    });
   }
 
   return where;

@@ -4,6 +4,7 @@ import type { MappingStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { upsertIosStoreProfile } from "@/lib/server/repositories/ios/store-profile.repository";
+import { searchTextVariants } from "@/lib/search";
 import { nullableAppId } from "@/lib/tracking/identity";
 
 type SaveIosStoreMappingInput = {
@@ -50,15 +51,17 @@ function iosStoreMappingWhere(options: IosStoreMappingPageOptions): Prisma.IosSt
   }
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
 
-    where.OR = [
-      { appName: contains },
-      { appId: contains },
-      { bundleId: contains },
-      { storeAccountName: contains },
-      { storeProfile: { storeAccountName: contains } },
-    ];
+      return [
+        { appName: contains },
+        { appId: contains },
+        { bundleId: contains },
+        { storeAccountName: contains },
+        { storeProfile: { storeAccountName: contains } },
+      ];
+    });
   }
 
   return where;

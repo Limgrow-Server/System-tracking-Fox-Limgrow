@@ -3,6 +3,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 
 import { CACHE_TAGS } from "@/lib/server/cache-tags";
+import { valuesMatchSearch } from "@/lib/search";
 import {
   getAllActiveStoreMappings,
   getAndroidMappingById,
@@ -46,19 +47,19 @@ function toPublicIapAppCard(app: CachedIapAppCard): IapAppCard {
 }
 
 function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions) {
-  const search = options?.search?.trim().toLowerCase();
+  const search = options?.search;
   const storeAccountName = options?.storeAccountName?.trim().toLowerCase();
 
   return apps.filter((app) => {
     const matchesStore =
       !storeAccountName ||
       app.storeAccountName.toLowerCase() === storeAccountName;
-    const matchesSearch =
-      !search ||
-      app.appName.toLowerCase().includes(search) ||
-      app.identifier.toLowerCase().includes(search) ||
-      app.storeAccountName.toLowerCase().includes(search) ||
-      Boolean(app.appId?.toLowerCase().includes(search));
+    const matchesSearch = valuesMatchSearch([
+      app.appName,
+      app.identifier,
+      app.storeAccountName,
+      app.appId,
+    ], search);
 
     return matchesStore && matchesSearch;
   });
