@@ -54,8 +54,11 @@ export type IapAppCard = {
   identifier: string; // packageName or bundleId
   appIconUrl: string | null;
   appLink: string | null;
+  revenueCurrency?: string | null;
+  revenueMicros?: number | string | null;
   storeAccountName: string;
   storeProfileId: string;
+  transactionCount?: number | null;
 };
 
 export type IapAppGridPageData = {
