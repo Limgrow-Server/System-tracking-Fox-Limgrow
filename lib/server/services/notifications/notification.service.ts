@@ -1,9 +1,10 @@
 import "server-only";
 
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { searchTextVariants } from "@/lib/search";
+import { firstAppId } from "@/lib/tracking/identity";
 import {
   deviceTokenToTracking,
   notificationEventToTracking,
@@ -50,29 +51,6 @@ type DeviceTokenPageOptions = {
   skip?: number;
   take?: number;
 };
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  callback: (item: T) => Promise<R>,
-) {
-  const results: R[] = new Array(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (nextIndex < items.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      results[currentIndex] = await callback(items[currentIndex]);
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, () => worker()),
-  );
-
-  return results;
-}
 
 type NotificationRecordPageOptions = {
   apps?: StoreMapping[];
@@ -132,6 +110,7 @@ function deviceTokenClausesForApp(app: StoreMapping): Prisma.DeviceTokenWhereInp
   const packageNames = uniqueSearchValues([app.package_name]);
   const bundleIds = uniqueSearchValues([app.bundle_id]);
   const identifiers = app.platform === "android" ? packageNames : bundleIds;
+  const hasStableIdentifier = Boolean(identifiers.length || packageNames.length || bundleIds.length);
   const clauses: Prisma.DeviceTokenWhereInput[] = [];
 
   if (identifiers.length) {
@@ -143,7 +122,7 @@ function deviceTokenClausesForApp(app: StoreMapping): Prisma.DeviceTokenWhereInp
   if (bundleIds.length) {
     clauses.push({ bundleId: { in: bundleIds }, platform: app.platform });
   }
-  if (appIds.length) {
+  if (!hasStableIdentifier && appIds.length) {
     clauses.push(
       { appId: { in: appIds }, platform: app.platform },
       { platform: app.platform, productAppId: { in: appIds } },
@@ -163,6 +142,58 @@ function deviceTokenClausesForApp(app: StoreMapping): Prisma.DeviceTokenWhereInp
   }
 
   return clauses;
+}
+
+type NotificationDeviceTargetInput = {
+  appId?: unknown;
+  bundleId?: unknown;
+  packageName?: unknown;
+  platform?: unknown;
+  productAppId?: unknown;
+  storeAccountName?: unknown;
+};
+
+function inferTargetPlatform(input: NotificationDeviceTargetInput) {
+  const platform = clean(input.platform);
+  if (platform === "android" || platform === "ios") return platform;
+  return clean(input.bundleId) ? "ios" : "android";
+}
+
+export function deviceTokenWhereForNotificationTarget(
+  input: NotificationDeviceTargetInput,
+  options?: { activeOnly?: boolean },
+): Prisma.DeviceTokenWhereInput {
+  const platform = inferTargetPlatform(input);
+  const appIds = uniqueSearchValues([firstAppId(input.appId, input.productAppId)]);
+  const packageNames = uniqueSearchValues([input.packageName]);
+  const bundleIds = uniqueSearchValues([input.bundleId]);
+  const identifiers = platform === "android" ? packageNames : bundleIds;
+  const hasStableIdentifier = Boolean(identifiers.length || packageNames.length || bundleIds.length);
+  const clauses: Prisma.DeviceTokenWhereInput[] = [];
+
+  if (identifiers.length) clauses.push({ appIdentifier: { in: identifiers } });
+  if (packageNames.length) clauses.push({ packageName: { in: packageNames } });
+  if (bundleIds.length) clauses.push({ bundleId: { in: bundleIds } });
+  if (!hasStableIdentifier && appIds.length) clauses.push({ appId: { in: appIds } }, { productAppId: { in: appIds } });
+
+  if (!clauses.length && clean(input.storeAccountName)) {
+    clauses.push({
+      appId: null,
+      appIdentifier: null,
+      bundleId: null,
+      packageName: null,
+      productAppId: null,
+      storeAccountName: clean(input.storeAccountName),
+    });
+  }
+
+  const and: Prisma.DeviceTokenWhereInput[] = [
+    { platform },
+    clauses.length ? { OR: clauses } : { id: { in: [] } },
+  ];
+  if (options?.activeOnly) and.push({ status: "active" });
+
+  return { AND: and };
 }
 
 function deviceTokenWhereForApps(
@@ -515,18 +546,97 @@ export async function getDeviceTokenSummariesForApps(
   return devices.map(deviceTokenSummaryToTracking);
 }
 
+function textArraySql(values: string[]) {
+  return values.length
+    ? Prisma.sql`array[${Prisma.join(values)}]::text[]`
+    : Prisma.sql`array[]::text[]`;
+}
+
 export async function getActiveDeviceTokenCountsForApps(apps: StoreMapping[]) {
   if (!apps.length) return {};
 
-  const entries = await mapWithConcurrency(apps, 8, async (app) => {
-    const count = await prisma.deviceToken.count({
-      where: deviceTokenWhereForApps([app], { activeOnly: true }),
-    });
+  const appRows = apps.map((app) => {
+    const appIds = uniqueSearchValues([app.app_id]);
+    const packageNames = uniqueSearchValues([app.package_name]);
+    const bundleIds = uniqueSearchValues([app.bundle_id]);
+    const identifiers = app.platform === "android" ? packageNames : bundleIds;
+    const hasStableIdentifier = Boolean(packageNames.length || bundleIds.length || identifiers.length);
+    const scopedAppIds = hasStableIdentifier ? [] : appIds;
+    const hasIdentifier = Boolean(scopedAppIds.length || packageNames.length || bundleIds.length || identifiers.length);
 
-    return [app.id, count] as const;
+    return Prisma.sql`(
+      ${app.id}::text,
+      ${app.platform}::text,
+      ${textArraySql(scopedAppIds)},
+      ${textArraySql(packageNames)},
+      ${textArraySql(bundleIds)},
+      ${textArraySql(identifiers)},
+      ${clean(app.store_account_name)}::text,
+      ${!hasIdentifier && Boolean(clean(app.store_account_name))}::boolean
+    )`;
   });
 
-  return Object.fromEntries(entries) as Record<string, number>;
+  const rows = await prisma.$queryRaw<Array<{ count: number; mappingId: string }>>(Prisma.sql`
+    with app_scope(
+      mapping_id,
+      platform,
+      app_ids,
+      package_names,
+      bundle_ids,
+      identifiers,
+      store_account_name,
+      store_fallback
+    ) as (
+      values ${Prisma.join(appRows)}
+    )
+    select
+      app_scope.mapping_id as "mappingId",
+      count(device_tokens.id)::int as "count"
+    from app_scope
+    left join public.device_tokens
+      on device_tokens.platform = app_scope.platform
+      and device_tokens.status = 'active'
+      and (
+        device_tokens.app_identifier = any(app_scope.identifiers)
+        or device_tokens.package_name = any(app_scope.package_names)
+        or device_tokens.bundle_id = any(app_scope.bundle_ids)
+        or device_tokens.app_id = any(app_scope.app_ids)
+        or device_tokens.product_app_id = any(app_scope.app_ids)
+        or (
+          app_scope.store_fallback
+          and device_tokens.app_id is null
+          and device_tokens.app_identifier is null
+          and device_tokens.bundle_id is null
+          and device_tokens.package_name is null
+          and device_tokens.product_app_id is null
+          and device_tokens.store_account_name = app_scope.store_account_name
+        )
+      )
+    group by app_scope.mapping_id
+  `);
+
+  return Object.fromEntries(rows.map((row) => [row.mappingId, Number(row.count)])) as Record<string, number>;
+}
+
+export async function getActiveDeviceIdsForNotificationTarget(
+  input: NotificationDeviceTargetInput,
+  take: number,
+) {
+  const rows = await prisma.deviceToken.groupBy({
+    by: ["deviceId"],
+    orderBy: {
+      _max: {
+        lastSeenAt: "desc",
+      },
+    },
+    take,
+    where: deviceTokenWhereForNotificationTarget(input, { activeOnly: true }),
+    _max: {
+      lastSeenAt: true,
+    },
+  });
+
+  return rows.map((row) => row.deviceId).filter(Boolean);
 }
 
 export async function getDeviceTokenSummaryPageForApps(

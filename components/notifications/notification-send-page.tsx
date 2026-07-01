@@ -19,7 +19,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import type { NotificationsPageData } from "@/lib/tracking/page-data";
-import type { DeviceToken, NotificationEvent, NotificationJob, NotificationSchedule, StoreMapping } from "@/lib/tracking/types";
+import type { NotificationEvent, NotificationJob, NotificationSchedule, StoreMapping } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
 import {
@@ -34,8 +34,6 @@ import {
   type SendResponse,
   TITLE_MAX_LENGTH,
   createLocaleRows,
-  devicesForApp,
-  tokensForApp,
   appIdentifierForApp,
   matchingFirebaseCredentials,
   platformLabel,
@@ -44,27 +42,6 @@ import {
   topicBaseForApp,
   validateMessageRows,
 } from "./shared";
-
-const CLIENT_DIRECT_DEVICE_LIMIT = 500;
-const SEND_DEVICE_PAGE_SIZE = 100;
-
-type SendDevicePageResponse = {
-  success?: boolean;
-  data?: DeviceToken[];
-  error?: string;
-  notificationDeviceCounts?: Record<string, number>;
-  page?: number;
-  pageSize?: number;
-  total?: number;
-  totalPages?: number;
-};
-
-type DevicePageState = {
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-};
 
 export function NotificationSendPage({
   data,
@@ -90,10 +67,7 @@ export function NotificationSendPage({
   const [, setJobs] = useState(data.notificationJobs);
   const [, setEvents] = useState(data.notificationEvents);
   const [schedules, setSchedules] = useState(data.notificationSchedules);
-  const [deviceTokens, setDeviceTokens] = useState<DeviceToken[]>(data.deviceTokens);
-  const [deviceCounts, setDeviceCounts] = useState<Record<string, number>>(data.notificationDeviceCounts);
-  const [devicePages, setDevicePages] = useState<Record<string, DevicePageState>>({});
-  const [loadingDeviceAppIds, setLoadingDeviceAppIds] = useState<Set<string>>(() => new Set());
+  const deviceCounts = data.notificationDeviceCounts;
   const [lastSendSummaries, setLastSendSummaries] = useState<AppSendSummary[]>([]);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
@@ -103,16 +77,12 @@ export function NotificationSendPage({
     [platformApps, selectedAppIdSet]
   );
   const selectedTokenCount = useMemo(
-    () => selectedApps.reduce((total, app) => total + (deviceCounts[app.id] ?? tokensForApp(app, deviceTokens, { activeOnly: true }).length), 0),
-    [deviceCounts, deviceTokens, selectedApps]
-  );
-  const selectedLoadedDeviceCount = useMemo(
-    () => selectedApps.reduce((total, app) => total + devicesForApp(app, deviceTokens).length, 0),
-    [deviceTokens, selectedApps]
+    () => selectedApps.reduce((total, app) => total + (deviceCounts[app.id] ?? 0), 0),
+    [deviceCounts, selectedApps]
   );
   const enabledRows = localeRows.filter((row) => row.enabled);
   const selectedReadyAppCount = selectedApps.filter((app) => matchingFirebaseCredentials(app, data.credentialSecrets).length).length;
-  const selectedAppsWithDevices = selectedApps.filter((app) => (deviceCounts[app.id] ?? tokensForApp(app, deviceTokens, { activeOnly: true }).length) > 0).length;
+  const selectedAppsWithDevices = selectedApps.filter((app) => (deviceCounts[app.id] ?? 0) > 0).length;
   const selectedMissingConfigCount = Math.max(selectedApps.length - selectedReadyAppCount, 0);
   const selectedAppHasConfig = selectedApps.length > 0 && selectedMissingConfigCount === 0;
   const canTranslateContent =
@@ -170,73 +140,14 @@ export function NotificationSendPage({
   }
 
   function activeTokenCountForApp(app: StoreMapping) {
-    return deviceCounts[app.id] ?? tokensForApp(app, deviceTokens, { activeOnly: true }).length;
-  }
-
-  async function loadDevicesForApp(app: StoreMapping, page?: number) {
-    if (loadingDeviceAppIds.has(app.id)) return;
-
-    const currentPage = devicePages[app.id]?.page ?? 0;
-    const nextPage = page ?? currentPage + 1;
-
-    setLoadingDeviceAppIds((current) => new Set(current).add(app.id));
-
-    try {
-      const params = new URLSearchParams({
-        appId: app.id,
-        page: String(nextPage),
-        pageSize: String(SEND_DEVICE_PAGE_SIZE),
-      });
-      const response = await fetch(`/api/admin/notifications/send-devices?${params.toString()}`);
-      const payload = (await response.json()) as SendDevicePageResponse;
-      if (!response.ok || payload.success === false) {
-        throw new Error(payload.error ?? "Load FCM tokens failed.");
-      }
-
-      const nextTokens = payload.data ?? [];
-      setDeviceTokens((current) => {
-        const byId = new Map(current.map((device) => [device.id, device]));
-        nextTokens.forEach((device) => byId.set(device.id, device));
-        return Array.from(byId.values()).sort(
-          (first, second) => new Date(second.last_seen_at).getTime() - new Date(first.last_seen_at).getTime(),
-        );
-      });
-      setDeviceCounts((current) => ({
-        ...current,
-        ...(payload.notificationDeviceCounts ?? {}),
-        [app.id]: payload.total ?? payload.notificationDeviceCounts?.[app.id] ?? current[app.id] ?? nextTokens.length,
-      }));
-      setDevicePages((current) => ({
-        ...current,
-        [app.id]: {
-          page: payload.page ?? nextPage,
-          pageSize: payload.pageSize ?? SEND_DEVICE_PAGE_SIZE,
-          total: payload.total ?? nextTokens.length,
-          totalPages: payload.totalPages ?? 1,
-        },
-      }));
-    } catch (error) {
-      void showToast("error", error instanceof Error ? error.message : "Load FCM tokens failed.");
-    } finally {
-      setLoadingDeviceAppIds((current) => {
-        const next = new Set(current);
-        next.delete(app.id);
-        return next;
-      });
-    }
+    return deviceCounts[app.id] ?? 0;
   }
 
   function buildPayloadForApp(app: StoreMapping, options?: { allowQueueByApp?: boolean }) {
     const deliveryRows = rowsForDelivery();
     validateMessageRows(deliveryRows);
-    const appDevices = devicesForApp(app, deviceTokens);
-    const deviceIds = appDevices.map((device) => device.device_id);
     const allowQueueByApp = options?.allowQueueByApp ?? true;
-    const totalTokenCount = activeTokenCountForApp(app);
-    const loadedTokenCount = tokensForApp(app, deviceTokens, { activeOnly: true }).length;
-    const hasPartialTokens = totalTokenCount > loadedTokenCount;
-    const queueByApp = allowQueueByApp && (hasPartialTokens || deviceIds.length === 0 || deviceIds.length > CLIENT_DIRECT_DEVICE_LIMIT);
-    if (!queueByApp && !deviceIds.length) throw new Error(`${app.app_name} does not have any active FCM token.`);
+    if (!activeTokenCountForApp(app)) throw new Error(`${app.app_name} does not have any active FCM token.`);
 
     const appIdentifier = appIdentifierForApp(app);
 
@@ -245,7 +156,7 @@ export function NotificationSendPage({
       appName: app.app_name,
       bundleId: app.bundle_id,
       data: {},
-      deviceIds: queueByApp ? [] : deviceIds,
+      deviceIds: [],
       notifications: deliveryRows.map((row) => ({
         message: row.message,
         title: row.title,
@@ -254,8 +165,9 @@ export function NotificationSendPage({
       packageName: app.package_name,
       platform: app.platform,
       productAppId: appIdentifier,
-      queueByApp,
-      queueMode: queueByApp ? "app" : undefined,
+      queueByApp: allowQueueByApp,
+      queueMode: allowQueueByApp ? "app" : undefined,
+      resolveByApp: true,
       storeAccountName: app.store_account_name,
       storePlatform: app.store_platform,
       storeProfileId: app.store_profile_id,
@@ -383,7 +295,6 @@ export function NotificationSendPage({
     try {
       for (const app of selectedApps) {
         try {
-          const appDevices = devicesForApp(app, deviceTokens);
           const response = await fetch("/api/admin/notifications/send", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -397,8 +308,8 @@ export function NotificationSendPage({
           const sentCount = queued ? 0 : payload.result?.sentCount ?? results.filter((result) => result.ok).length;
           const errorCount = queued ? 0 : payload.result?.errorCount ?? results.filter((result) => !result.ok).length;
           const totalCount = queued
-            ? Math.max(Number(payload.result?.targetCount ?? 0), appDevices.length)
-            : Math.max(results.length, sentCount + errorCount, appDevices.length);
+            ? Number(payload.result?.targetCount ?? 0)
+            : Math.max(results.length, sentCount + errorCount);
           const resultJob = payload.result?.job;
 
           if (resultJob) {
@@ -443,7 +354,7 @@ export function NotificationSendPage({
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Send notification failed.";
-          const totalCount = Math.max(activeTokenCountForApp(app), devicesForApp(app, deviceTokens).length, 1);
+          const totalCount = Math.max(activeTokenCountForApp(app), 1);
           summaries.push({
             appId: appIdentifierForApp(app),
             appName: app.app_name,
@@ -566,7 +477,6 @@ export function NotificationSendPage({
   }
 
   function updateAppSelection(appId: string, checked?: boolean) {
-    const app = platformApps.find((item) => item.id === appId);
     setSelectedAppIds((current) => {
       const selected = current.includes(appId);
       const shouldSelect = checked ?? !selected;
@@ -574,13 +484,6 @@ export function NotificationSendPage({
       if (!shouldSelect && selected) return current.filter((id) => id !== appId);
       return current;
     });
-    if (app && (checked ?? !selectedAppIdSet.has(appId))) {
-      const loaded = tokensForApp(app, deviceTokens, { activeOnly: true }).length;
-      const total = activeTokenCountForApp(app);
-      if (total > loaded) {
-        void loadDevicesForApp(app, loaded ? undefined : 1);
-      }
-    }
   }
 
   return (
@@ -602,13 +505,11 @@ export function NotificationSendPage({
                 apps={platformApps}
                 credentials={data.credentialSecrets}
                 deviceCounts={deviceCounts}
-                devices={deviceTokens}
+                devices={[]}
                 fillHeight
-                loadingDeviceAppIds={loadingDeviceAppIds}
                 schedules={schedules}
                 search={search}
                 selectedAppIdSet={selectedAppIdSet}
-                onLoadMoreDevices={loadDevicesForApp}
                 updateAppSelection={updateAppSelection}
                 onSearchChange={setSearch}
               />
@@ -770,7 +671,7 @@ export function NotificationSendPage({
                   <Button
                     className="h-9 px-3 text-xs"
                     onClick={saveSchedule}
-                    disabled={pendingAction !== null || !selectedApps.length || (scheduleMode === "now" ? !selectedTokenCount : !selectedTokenCount || selectedLoadedDeviceCount < selectedTokenCount)}
+                    disabled={pendingAction !== null || !selectedApps.length || !selectedTokenCount}
                   >
                     {pendingAction === "schedule" || pendingAction === "send" ? <Spinner /> : scheduleMode === "now" ? <Send size={16} /> : <Clock3 size={16} />}
                     {scheduleMode === "now" ? "Send" : "Save"}

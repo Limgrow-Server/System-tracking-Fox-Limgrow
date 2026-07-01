@@ -4,10 +4,10 @@ import { randomUUID } from "crypto";
 
 import type { NotificationJob, Prisma } from "@prisma/client";
 
-import { searchTextVariants } from "@/lib/search";
 import { firstAppId } from "@/lib/tracking/identity";
 import { prisma } from "@/lib/prisma";
 import { badRequest } from "@/lib/server/api/errors";
+import { deviceTokenWhereForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
 
 const DEFAULT_DIRECT_DEVICE_LIMIT = 500;
 const DEFAULT_QUEUE_BATCH_SIZE = 100;
@@ -66,12 +66,6 @@ function notificationQueueClaimLimit() {
 function stringArray(value: unknown) {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.map((item) => clean(item)).filter(Boolean)));
-}
-
-function uniqueSearchValues(values: unknown[]) {
-  return Array.from(
-    new Set(values.flatMap((value) => searchTextVariants(value)).map(clean).filter(Boolean)),
-  );
 }
 
 function jsonObject(value: unknown) {
@@ -137,31 +131,11 @@ function notificationAppId(payload: Record<string, unknown>) {
 }
 
 function buildDeviceWhere(payload: Record<string, unknown>): Prisma.DeviceTokenWhereInput {
-  const platform = clean(payload.platform) || "android";
-  const appId = firstAppId(payload.appId, payload.productAppId);
-  const appIds = uniqueSearchValues([appId]);
-  const packageName = clean(payload.packageName);
-  const bundleId = clean(payload.bundleId);
-  const or: Prisma.DeviceTokenWhereInput[] = [];
-
-  if (appIds.length) {
-    or.push({ appId: { in: appIds } }, { productAppId: { in: appIds } });
-  }
-  if (packageName) {
-    or.push({ packageName });
-  }
-  if (bundleId) {
-    or.push({ bundleId });
-  }
-  if (!or.length) {
+  if (!firstAppId(payload.appId, payload.productAppId) && !clean(payload.packageName) && !clean(payload.bundleId)) {
     throw badRequest("Device queue requires device ids, app id, package name, or bundle id.");
   }
 
-  return {
-    platform,
-    status: "active",
-    OR: or,
-  };
+  return deviceTokenWhereForNotificationTarget(payload, { activeOnly: true });
 }
 
 async function createBatchRows(input: {
