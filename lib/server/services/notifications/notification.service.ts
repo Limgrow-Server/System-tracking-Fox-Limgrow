@@ -51,6 +51,16 @@ type DeviceTokenPageOptions = {
   take?: number;
 };
 
+type NotificationRecordPageOptions = {
+  apps?: StoreMapping[];
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  skip?: number;
+  store?: string;
+  take?: number;
+};
+
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -165,10 +175,160 @@ function deviceTokenWhereForApps(
   return { AND: and };
 }
 
+function pageWindow(options: { page?: number; pageSize?: number; skip?: number; take?: number }) {
+  const pageSize = options.pageSize ?? options.take ?? 10;
+  const page = options.page ?? 1;
+  return {
+    page,
+    pageSize,
+    skip: options.skip ?? (page - 1) * pageSize,
+  };
+}
+
+function jobClausesForApp(app: StoreMapping): Prisma.NotificationJobWhereInput[] {
+  const appIds = uniqueSearchValues([app.app_id]);
+  const packageNames = uniqueSearchValues([app.package_name]);
+  const bundleIds = uniqueSearchValues([app.bundle_id]);
+  const clauses: Prisma.NotificationJobWhereInput[] = [
+    { appMappingId: app.id, platform: app.platform },
+  ];
+
+  if (appIds.length) clauses.push({ appId: { in: appIds }, platform: app.platform });
+  if (packageNames.length) clauses.push({ packageName: { in: packageNames }, platform: app.platform });
+  if (bundleIds.length) clauses.push({ bundleId: { in: bundleIds }, platform: app.platform });
+  if (app.app_name && app.store_account_name) {
+    clauses.push({
+      appName: app.app_name,
+      platform: app.platform,
+      storeAccountName: app.store_account_name,
+    });
+  }
+
+  return clauses;
+}
+
+function scheduleClausesForApp(app: StoreMapping): Prisma.NotificationScheduleWhereInput[] {
+  const appIds = uniqueSearchValues([app.app_id]);
+  const packageNames = uniqueSearchValues([app.package_name]);
+  const bundleIds = uniqueSearchValues([app.bundle_id]);
+  const clauses: Prisma.NotificationScheduleWhereInput[] = [
+    { appMappingId: app.id, platform: app.platform },
+  ];
+
+  if (appIds.length) clauses.push({ appId: { in: appIds }, platform: app.platform });
+  if (packageNames.length) clauses.push({ packageName: { in: packageNames }, platform: app.platform });
+  if (bundleIds.length) clauses.push({ bundleId: { in: bundleIds }, platform: app.platform });
+  if (app.app_name && app.store_account_name) {
+    clauses.push({
+      appName: app.app_name,
+      platform: app.platform,
+      storeAccountName: app.store_account_name,
+    });
+  }
+
+  return clauses;
+}
+
+function notificationJobWhere(options: NotificationRecordPageOptions = {}): Prisma.NotificationJobWhereInput {
+  const and: Prisma.NotificationJobWhereInput[] = [];
+
+  if (options.apps) {
+    const clauses = options.apps.flatMap(jobClausesForApp);
+    and.push(clauses.length ? { OR: clauses } : { id: { in: [] } });
+  }
+
+  const store = clean(options.store);
+  if (store) and.push({ storeAccountName: store });
+
+  const search = clean(options.search);
+  if (search) {
+    and.push({
+      OR: [
+        { appId: { contains: search, mode: "insensitive" } },
+        { appName: { contains: search, mode: "insensitive" } },
+        { bundleId: { contains: search, mode: "insensitive" } },
+        { message: { contains: search, mode: "insensitive" } },
+        { packageName: { contains: search, mode: "insensitive" } },
+        { platform: { contains: search, mode: "insensitive" } },
+        { status: { contains: search, mode: "insensitive" } },
+        { storeAccountName: { contains: search, mode: "insensitive" } },
+        { title: { contains: search, mode: "insensitive" } },
+        { topicBase: { contains: search, mode: "insensitive" } },
+      ],
+    });
+  }
+
+  return and.length ? { AND: and } : {};
+}
+
+function notificationScheduleWhere(options: NotificationRecordPageOptions = {}): Prisma.NotificationScheduleWhereInput {
+  const and: Prisma.NotificationScheduleWhereInput[] = [];
+
+  if (options.apps) {
+    const clauses = options.apps.flatMap(scheduleClausesForApp);
+    and.push(clauses.length ? { OR: clauses } : { id: { in: [] } });
+  }
+
+  const store = clean(options.store);
+  if (store) and.push({ storeAccountName: store });
+
+  const search = clean(options.search);
+  if (search) {
+    and.push({
+      OR: [
+        { appId: { contains: search, mode: "insensitive" } },
+        { appName: { contains: search, mode: "insensitive" } },
+        { bundleId: { contains: search, mode: "insensitive" } },
+        { lastStatus: { contains: search, mode: "insensitive" } },
+        { message: { contains: search, mode: "insensitive" } },
+        { name: { contains: search, mode: "insensitive" } },
+        { packageName: { contains: search, mode: "insensitive" } },
+        { scheduleType: { contains: search, mode: "insensitive" } },
+        { status: { contains: search, mode: "insensitive" } },
+        { storeAccountName: { contains: search, mode: "insensitive" } },
+        { title: { contains: search, mode: "insensitive" } },
+      ],
+    });
+  }
+
+  return and.length ? { AND: and } : {};
+}
+
 export async function getNotificationJobs(take = 50) {
   const jobs = await prisma.notificationJob.findMany({
     orderBy: { createdAt: "desc" },
     take,
+  });
+
+  return jobs.map(notificationJobToTracking);
+}
+
+export async function getNotificationJobPage(options: NotificationRecordPageOptions = {}) {
+  const page = pageWindow(options);
+  const where = notificationJobWhere(options);
+  const [total, jobs] = await prisma.$transaction([
+    prisma.notificationJob.count({ where }),
+    prisma.notificationJob.findMany({
+      orderBy: { createdAt: "desc" },
+      skip: page.skip,
+      take: page.pageSize,
+      where,
+    }),
+  ]);
+
+  return {
+    data: jobs.map(notificationJobToTracking),
+    total,
+  };
+}
+
+export async function getNotificationJobsForApps(apps: StoreMapping[], take = 50) {
+  if (!apps.length) return [];
+
+  const jobs = await prisma.notificationJob.findMany({
+    orderBy: { createdAt: "desc" },
+    take,
+    where: notificationJobWhere({ apps }),
   });
 
   return jobs.map(notificationJobToTracking);
@@ -191,6 +351,37 @@ export async function getNotificationSchedules(take = 50) {
   return schedules.map(notificationScheduleToTracking);
 }
 
+export async function getNotificationSchedulePage(options: NotificationRecordPageOptions = {}) {
+  const page = pageWindow(options);
+  const where = notificationScheduleWhere(options);
+  const [total, schedules] = await prisma.$transaction([
+    prisma.notificationSchedule.count({ where }),
+    prisma.notificationSchedule.findMany({
+      orderBy: { createdAt: "desc" },
+      skip: page.skip,
+      take: page.pageSize,
+      where,
+    }),
+  ]);
+
+  return {
+    data: schedules.map(notificationScheduleToTracking),
+    total,
+  };
+}
+
+export async function getNotificationSchedulesForApps(apps: StoreMapping[], take = 50) {
+  if (!apps.length) return [];
+
+  const schedules = await prisma.notificationSchedule.findMany({
+    orderBy: { createdAt: "desc" },
+    take,
+    where: notificationScheduleWhere({ apps }),
+  });
+
+  return schedules.map(notificationScheduleToTracking);
+}
+
 export async function getNotificationEvents(take = 80) {
   const events = await prisma.notificationEvent.findMany({
     orderBy: { createdAt: "desc" },
@@ -198,6 +389,28 @@ export async function getNotificationEvents(take = 80) {
   });
 
   return events.map(notificationEventToTracking);
+}
+
+export async function getNotificationEventPageForJob(
+  jobId: string,
+  options: { page?: number; pageSize?: number; skip?: number; take?: number } = {},
+) {
+  const page = pageWindow(options);
+  const where = { jobId };
+  const [total, events] = await prisma.$transaction([
+    prisma.notificationEvent.count({ where }),
+    prisma.notificationEvent.findMany({
+      orderBy: { createdAt: "desc" },
+      skip: page.skip,
+      take: page.pageSize,
+      where,
+    }),
+  ]);
+
+  return {
+    data: events.map(notificationEventToTracking),
+    total,
+  };
 }
 
 export async function getNotificationEventsForJob(jobId: string, take = 2000) {
@@ -229,6 +442,23 @@ export async function getDeviceTokens(take = 120) {
   });
 
   return devices.map(deviceTokenToTracking);
+}
+
+export async function getDeviceTokenSummariesForDeviceIds(
+  deviceIds: string[],
+  take = 200,
+) {
+  const ids = unique(deviceIds);
+  if (!ids.length) return [];
+
+  const devices = await prisma.deviceToken.findMany({
+    orderBy: { lastSeenAt: "desc" },
+    select: deviceTokenSummarySelect,
+    take,
+    where: { deviceId: { in: ids } },
+  });
+
+  return devices.map(deviceTokenSummaryToTracking);
 }
 
 export async function getDeviceTokenSummaries(

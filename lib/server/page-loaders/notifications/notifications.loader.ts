@@ -3,7 +3,7 @@ import "server-only";
 import {
   filterScopedRecordsForSession,
   filterStoreMappingsForSession,
-  recordMatchesStoreMapping,
+  hasAllAppAccess,
   scopedCredentialSecrets,
   scopedNotificationEvents,
   scopedNotificationSchedules,
@@ -14,15 +14,15 @@ import { getAndroidCredentialConfigs } from "@/lib/server/services/credentials/a
 import { getIosCredentialConfigs } from "@/lib/server/services/credentials/ios-credential.service";
 import {
   getDeviceTokenPageForApps,
-  getDeviceTokenSummaries,
+  getDeviceTokenSummariesForDeviceIds,
   getDeviceTokenSummariesForApps,
-  getDeviceTokens,
-  getNotificationEvents,
-  getNotificationEventsForJob,
+  getNotificationEventPageForJob,
   getNotificationEventsForJobs,
+  getNotificationJobPage,
   getNotificationJobById,
-  getNotificationJobs,
-  getNotificationSchedules,
+  getNotificationJobsForApps,
+  getNotificationSchedulePage,
+  getNotificationSchedulesForApps,
 } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
@@ -242,6 +242,21 @@ function routeAppMatches(app: StoreMapping, appId: string | null | undefined) {
   );
 }
 
+function appFilterForRoute(apps: StoreMapping[], appId: string | null | undefined) {
+  if (!normalizeFilter(appId)) return null;
+  return apps.find((app) => app.id === appId || routeAppMatches(app, appId)) ?? null;
+}
+
+function appsForRecordQuery(
+  session: ConsoleSession,
+  apps: StoreMapping[],
+  appId: string | null | undefined,
+) {
+  const filterApp = appFilterForRoute(apps, appId);
+  if (filterApp) return [filterApp];
+  return hasAllAppAccess(session) ? undefined : apps;
+}
+
 function notificationStoreOptions(mappings: StoreMapping[]) {
   return Array.from(
     new Set(
@@ -333,10 +348,6 @@ function filterSchedulesForApps(
   return filterRecordsForApps(schedules, apps);
 }
 
-function filterJobsForApps(jobs: NotificationJob[], apps: StoreMapping[]) {
-  return filterRecordsForApps(jobs, apps);
-}
-
 function notificationSummary(
   apps: StoreMapping[],
   tokens: DeviceToken[],
@@ -358,102 +369,30 @@ function notificationSummary(
   };
 }
 
-function filterJobs(
-  jobs: NotificationJob[],
-  apps: StoreMapping[],
-  options?: NotificationListOptions,
-) {
-  const filterApp = normalizeFilter(options?.appId)
-    ? apps.find((app) => app.id === options?.appId) ?? null
-    : null;
-  const store = normalizeFilter(options?.store);
-
-  return jobs.filter((job) => {
-    if (filterApp && !recordMatchesStoreMapping(job, filterApp)) return false;
-    if (store && job.store_account_name !== store) return false;
-
-    return valuesMatchSearch(
-      [
-        job.app_name,
-        job.app_id,
-        job.store_account_name,
-        job.package_name,
-        job.bundle_id,
-        job.platform,
-        job.status,
-        job.topic_base,
-        job.id,
-      ],
-      options?.search,
-    );
-  });
-}
-
-function filterSchedules(
-  schedules: NotificationSchedule[],
-  apps: StoreMapping[],
-  options?: NotificationListOptions,
-) {
-  const filterApp = normalizeFilter(options?.appId)
-    ? apps.find((app) => app.id === options?.appId) ?? null
-    : null;
-  const store = normalizeFilter(options?.store);
-
-  return schedules.filter((schedule) => {
-    if (filterApp && !recordMatchesStoreMapping(schedule, filterApp)) return false;
-    if (store && schedule.store_account_name !== store) return false;
-
-    return valuesMatchSearch(
-      [
-        schedule.app_name,
-        schedule.app_id,
-        schedule.store_account_name,
-        schedule.package_name,
-        schedule.bundle_id,
-        schedule.status,
-        schedule.schedule_type,
-        schedule.last_status,
-        schedule.name,
-        schedule.title,
-        schedule.message,
-      ],
-      options?.search,
-    );
-  });
-}
-
 export async function getNotificationOverviewPageData(
   session: ConsoleSession,
   options?: NotificationListOptions,
 ): Promise<NotificationsPageData> {
   const pagination = paginationFromOptions(options, DEFAULT_APP_PAGE_SIZE);
-  const [storeMappings, notificationSchedules] = await Promise.all([
-    getNotificationStoreMappings(session),
-    getNotificationSchedules(NOTIFICATION_SCAN_LIMIT),
-  ]);
-  const scopedBase = scopedNotificationsData(
-    session,
-    notificationData({
-      notificationSchedules,
-      storeMappings,
-    }),
-  );
-  const filteredMappings = filterMappings(scopedBase.storeMappings, options);
+  const storeMappings = await getNotificationStoreMappings(session);
+  const filteredMappings = filterMappings(storeMappings, options);
   const appPage = paginatedResult(
     filteredMappings.slice(pagination.skip, pagination.skip + pagination.take),
     filteredMappings.length,
     pagination,
   );
-  const [summaryTokens, pageTokens] = await Promise.all([
+  const [summaryTokens, pageTokens, summarySchedules, pageSchedules] = await Promise.all([
     getDeviceTokenSummariesForApps(filteredMappings, NOTIFICATION_SCAN_LIMIT),
     getDeviceTokenSummariesForApps(appPage.data, NOTIFICATION_SCAN_LIMIT),
+    getNotificationSchedulesForApps(filteredMappings, NOTIFICATION_SCAN_LIMIT),
+    getNotificationSchedulesForApps(appPage.data, NOTIFICATION_SCAN_LIMIT),
   ]);
   const scoped = scopedNotificationsData(
     session,
     notificationData({
       deviceTokens: pageTokens,
-      notificationSchedules: scopedBase.notificationSchedules,
-      storeMappings: scopedBase.storeMappings,
+      notificationSchedules: pageSchedules,
+      storeMappings,
     }),
   );
 
@@ -463,15 +402,12 @@ export async function getNotificationOverviewPageData(
       ...scoped.notificationPagination,
       overviewApps: metaFromResult(appPage),
     },
-    notificationSchedules: filterSchedulesForApps(
-      scoped.notificationSchedules,
-      appPage.data,
-    ),
+    notificationSchedules: scoped.notificationSchedules,
     notificationStoreOptions: notificationStoreOptions(scoped.storeMappings),
     notificationSummary: notificationSummary(
       filteredMappings,
       summaryTokens,
-      scoped.notificationSchedules,
+      summarySchedules,
     ),
     storeMappings: appPage.data,
   };
@@ -502,12 +438,8 @@ export async function getNotificationTokenDetailPageData(
         pageSize: pagination.pageSize,
         search: options?.search,
       }),
-      getNotificationSchedules(NOTIFICATION_SCAN_LIMIT).then((schedules) =>
-        filterSchedulesForApps(schedules, [selectedApp]),
-      ),
-      getNotificationJobs(NOTIFICATION_SCAN_LIMIT).then((jobs) =>
-        filterJobsForApps(jobs, [selectedApp]),
-      ),
+      getNotificationSchedulesForApps([selectedApp], NOTIFICATION_SCAN_LIMIT),
+      getNotificationJobsForApps([selectedApp], NOTIFICATION_SCAN_LIMIT),
     ]);
   }
 
@@ -549,13 +481,14 @@ export async function getNotificationTokenDetailPageData(
 export async function getNotificationSendPageData(
   session: ConsoleSession,
 ): Promise<NotificationsPageData> {
-  const [storeMappings, credentialSecrets, notificationSchedules, deviceTokens] =
-    await Promise.all([
-      getNotificationStoreMappings(session),
-      getFirebaseCredentialSecrets(),
-      getNotificationSchedules(NOTIFICATION_SCAN_LIMIT),
-      getDeviceTokenSummaries(NOTIFICATION_SCAN_LIMIT, { activeOnly: true }),
-    ]);
+  const [storeMappings, credentialSecrets] = await Promise.all([
+    getNotificationStoreMappings(session),
+    getFirebaseCredentialSecrets(),
+  ]);
+  const [notificationSchedules, deviceTokens] = await Promise.all([
+    getNotificationSchedulesForApps(storeMappings, NOTIFICATION_SCAN_LIMIT),
+    getDeviceTokenSummariesForApps(storeMappings, NOTIFICATION_SCAN_LIMIT, { activeOnly: true }),
+  ]);
 
   return scopedNotificationsData(
     session,
@@ -573,26 +506,26 @@ export async function getNotificationSchedulesPageData(
   options?: NotificationListOptions,
 ): Promise<NotificationsPageData> {
   const pagination = paginationFromOptions(options, DEFAULT_PAGE_SIZE);
-  const [storeMappings, notificationSchedules] = await Promise.all([
-    getNotificationStoreMappings(session),
-    getNotificationSchedules(NOTIFICATION_SCAN_LIMIT),
-  ]);
+  const storeMappings = await getNotificationStoreMappings(session);
+  const queryApps = appsForRecordQuery(session, storeMappings, options?.appId);
+  const scheduleResult = await getNotificationSchedulePage({
+    apps: queryApps,
+    page: pagination.page,
+    pageSize: pagination.pageSize,
+    search: options?.search,
+    store: options?.store,
+  });
+  const schedulePage = paginatedResult(
+    scheduleResult.data,
+    scheduleResult.total,
+    pagination,
+  );
   const scoped = scopedNotificationsData(
     session,
     notificationData({
-      notificationSchedules,
+      notificationSchedules: schedulePage.data,
       storeMappings,
     }),
-  );
-  const filteredSchedules = filterSchedules(
-    scoped.notificationSchedules,
-    scoped.storeMappings,
-    options,
-  );
-  const schedulePage = paginatedResult(
-    filteredSchedules.slice(pagination.skip, pagination.skip + pagination.take),
-    filteredSchedules.length,
-    pagination,
   );
 
   return {
@@ -611,36 +544,36 @@ export async function getNotificationHistoryPageData(
   options?: NotificationListOptions,
 ): Promise<NotificationsPageData> {
   const pagination = paginationFromOptions(options, DEFAULT_PAGE_SIZE);
-  const [storeMappings, notificationJobs] = await Promise.all([
-    getNotificationStoreMappings(session),
-    getNotificationJobs(NOTIFICATION_SCAN_LIMIT),
-  ]);
+  const storeMappings = await getNotificationStoreMappings(session);
+  const queryApps = appsForRecordQuery(session, storeMappings, options?.appId);
+  const jobResult = await getNotificationJobPage({
+    apps: queryApps,
+    page: pagination.page,
+    pageSize: pagination.pageSize,
+    search: options?.search,
+    store: options?.store,
+  });
+  const jobPage = paginatedResult(
+    jobResult.data,
+    jobResult.total,
+    pagination,
+  );
   const scoped = scopedNotificationsData(
     session,
     notificationData({
-      notificationJobs,
+      notificationJobs: jobPage.data,
       storeMappings,
     }),
   );
-  const filteredJobs = filterJobs(
-    scoped.notificationJobs,
-    scoped.storeMappings,
-    options,
-  );
-  const jobPage = paginatedResult(
-    filteredJobs.slice(pagination.skip, pagination.skip + pagination.take),
-    filteredJobs.length,
-    pagination,
-  );
   const notificationEvents = await getNotificationEventsForJobs(
-    jobPage.data.map((job) => job.id),
+    scoped.notificationJobs.map((job) => job.id),
     EVENT_SCAN_LIMIT,
   );
   const scopedPage = scopedNotificationsData(
     session,
     notificationData({
       notificationEvents,
-      notificationJobs: jobPage.data,
+      notificationJobs: scoped.notificationJobs,
       storeMappings: scoped.storeMappings,
     }),
   );
@@ -664,46 +597,31 @@ export async function getNotificationHistoryDetailPageData(
     options,
     DEFAULT_HISTORY_EVENT_PAGE_SIZE,
   );
-  const [
-    storeMappings,
-    notificationJobs,
-    detailJob,
-    recentEvents,
-    detailEvents,
-    deviceTokens,
-  ] = await Promise.all([
+  const [storeMappings, detailJob] = await Promise.all([
     getNotificationStoreMappings(session),
-    getNotificationJobs(NOTIFICATION_SCAN_LIMIT),
     getNotificationJobById(jobId),
-    getNotificationEvents(EVENT_SCAN_LIMIT),
-    getNotificationEventsForJob(jobId, EVENT_SCAN_LIMIT),
-    getDeviceTokens(NOTIFICATION_SCAN_LIMIT),
   ]);
-  const jobs =
-    detailJob && !notificationJobs.some((job) => job.id === detailJob.id)
-      ? [detailJob, ...notificationJobs]
-      : notificationJobs;
   const scoped = scopedNotificationsData(
     session,
     notificationData({
-      deviceTokens,
-      notificationEvents: recentEvents,
-      notificationJobs: jobs,
+      notificationJobs: detailJob ? [detailJob] : [],
       storeMappings,
     }),
   );
   const historyDetailJob =
     scoped.notificationJobs.find((job) => job.id === jobId) ?? null;
-  const allowedDetailEvents = historyDetailJob
-    ? detailEvents.filter((event) => event.job_id === historyDetailJob.id)
-    : [];
-  const deliveryPage = paginatedResult(
-    allowedDetailEvents.slice(pagination.skip, pagination.skip + pagination.take),
-    allowedDetailEvents.length,
-    pagination,
-  );
-  const recentEventsById = new Map(
-    [...recentEvents, ...allowedDetailEvents].map((event) => [event.id, event]),
+  const eventResult = historyDetailJob
+    ? await getNotificationEventPageForJob(jobId, {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+    })
+    : { data: [], total: 0 };
+  const deliveryPage = paginatedResult(eventResult.data, eventResult.total, pagination);
+  const deviceTokens = await getDeviceTokenSummariesForDeviceIds(
+    deliveryPage.data
+      .flatMap((event) => [event.device_id, event.target_value])
+      .filter((value): value is string => Boolean(value)),
+    Math.max(deliveryPage.data.length * 2, DEFAULT_HISTORY_EVENT_PAGE_SIZE),
   );
 
   return scopedNotificationsData(
@@ -711,8 +629,8 @@ export async function getNotificationHistoryDetailPageData(
     notificationData({
       deviceTokens,
       notificationDeliveryEvents: deliveryPage.data,
-      notificationEvents: Array.from(recentEventsById.values()),
-      notificationJobs: jobs,
+      notificationEvents: deliveryPage.data,
+      notificationJobs: historyDetailJob ? [historyDetailJob] : [],
       notificationPagination: {
         deliveryEvents: metaFromResult(deliveryPage),
       },
@@ -724,21 +642,28 @@ export async function getNotificationHistoryDetailPageData(
 export async function getNotificationsPageData(
   session: ConsoleSession,
 ): Promise<NotificationsPageData> {
-  const [
-    storeMappings,
-    credentialSecrets,
-    notificationJobs,
-    notificationSchedules,
-    notificationEvents,
-    deviceTokens,
-  ] = await Promise.all([
+  const [storeMappings, credentialSecrets] = await Promise.all([
     getNotificationStoreMappings(session),
     getFirebaseCredentialSecrets(),
-    getNotificationJobs(NOTIFICATION_SCAN_LIMIT),
-    getNotificationSchedules(NOTIFICATION_SCAN_LIMIT),
-    getNotificationEvents(EVENT_SCAN_LIMIT),
-    getDeviceTokens(NOTIFICATION_SCAN_LIMIT),
   ]);
+  const apps = hasAllAppAccess(session) ? undefined : storeMappings;
+  const [jobResult, scheduleResult, deviceTokens] = await Promise.all([
+    getNotificationJobPage({
+      apps,
+      page: 1,
+      pageSize: NOTIFICATION_SCAN_LIMIT,
+    }),
+    getNotificationSchedulePage({
+      apps,
+      page: 1,
+      pageSize: NOTIFICATION_SCAN_LIMIT,
+    }),
+    getDeviceTokenSummariesForApps(storeMappings, NOTIFICATION_SCAN_LIMIT),
+  ]);
+  const notificationEvents = await getNotificationEventsForJobs(
+    jobResult.data.map((job) => job.id),
+    EVENT_SCAN_LIMIT,
+  );
 
   return scopedNotificationsData(
     session,
@@ -746,8 +671,8 @@ export async function getNotificationsPageData(
       credentialSecrets,
       deviceTokens,
       notificationEvents,
-      notificationJobs,
-      notificationSchedules,
+      notificationJobs: jobResult.data,
+      notificationSchedules: scheduleResult.data,
       storeMappings,
     }),
   );
