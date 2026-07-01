@@ -19,6 +19,7 @@ import {
   enqueueNotificationDeviceJob,
   notificationDirectDeviceLimit,
 } from "@/lib/server/services/notifications/notification-batch-queue.service";
+import { getActiveDeviceIdsForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import { createClient } from "@/lib/supabase/server";
@@ -51,6 +52,7 @@ const LANGUAGES = [
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
 const HCM_OFFSET_MINUTES = 7 * 60;
+const SCHEDULE_DEVICE_TARGET_LIMIT = 5000;
 const notificationManageRoles = ["Admin"] as const;
 
 function supabaseFunctionUrl(functionName: string) {
@@ -365,13 +367,60 @@ export async function handleAdminNotificationSendPost(request: Request) {
       payload.queueByApp === true ||
       clean(payload.queueMode).toLowerCase() === "app" ||
       clean(payload.queueMode).toLowerCase() === "app_filter";
+    const directDeviceLimit = notificationDirectDeviceLimit();
 
-    if (targetType === "device" && (queueByApp || deviceIds.length > notificationDirectDeviceLimit())) {
+    if (targetType === "device" && (queueByApp || !deviceIds.length)) {
+      const resolvedDeviceIds = await getActiveDeviceIdsForNotificationTarget(payload, directDeviceLimit + 1);
+      if (!resolvedDeviceIds.length) throw badRequest("No active FCM tokens matched this notification target.");
+
+      if (resolvedDeviceIds.length <= directDeviceLimit) {
+        const result = await callEdgeFunction("send-notification", {
+          ...payload,
+          deviceIds: resolvedDeviceIds,
+          queueByApp: false,
+          targetType,
+        });
+        revalidateCacheTags([
+          CACHE_TAGS.notificationEvents,
+          CACHE_TAGS.notificationJobs,
+          CACHE_TAGS.deviceTokens,
+        ]);
+
+        return okJson({
+          message: "Notification sent.",
+          result,
+        });
+      }
+
       const queued = await enqueueNotificationDeviceJob(
         {
           ...payload,
-          deviceIds: queueByApp ? [] : deviceIds,
-          queueByApp,
+          deviceIds: [],
+          queueByApp: true,
+          targetType,
+        },
+        session.email,
+      );
+
+      revalidateCacheTags([
+        CACHE_TAGS.notificationJobs,
+      ]);
+
+      return okJson({
+        message: `Notification queued into ${queued.batchCount} batch(es).`,
+        result: {
+          ...queued,
+          job: notificationJobToTracking(queued.job),
+        },
+      });
+    }
+
+    if (targetType === "device" && deviceIds.length > directDeviceLimit) {
+      const queued = await enqueueNotificationDeviceJob(
+        {
+          ...payload,
+          deviceIds,
+          queueByApp: false,
           targetType,
         },
         session.email,
@@ -673,9 +722,20 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
     }
 
     const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
-    const targetValues = targetType === "device"
+    let targetValues = targetType === "device"
       ? stringArray(payload.deviceIds || payload.targetValues)
       : notifications.map((item) => `${topicSegment(payload.topicBase)}-${item.topicCode}`);
+    if (
+      targetType === "device" &&
+      !targetValues.length &&
+      (payload.resolveByApp === true || payload.queueByApp === true || clean(payload.queueMode).toLowerCase() === "app")
+    ) {
+      const resolvedDeviceIds = await getActiveDeviceIdsForNotificationTarget(payload, SCHEDULE_DEVICE_TARGET_LIMIT + 1);
+      if (resolvedDeviceIds.length > SCHEDULE_DEVICE_TARGET_LIMIT) {
+        throw badRequest(`Scheduled device targeting supports up to ${SCHEDULE_DEVICE_TARGET_LIMIT} device(s). Use immediate queued send for larger audiences.`);
+      }
+      targetValues = resolvedDeviceIds;
+    }
     if (targetType === "device" && !targetValues.length) {
       throw badRequest("At least one device id is required for device targeting.");
     }

@@ -17,7 +17,6 @@ import {
 
 import { TableEmptyState } from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -964,11 +963,9 @@ export function AppSelectionTable({
   deviceCounts,
   devices,
   fillHeight = false,
-  loadingDeviceAppIds,
   schedules,
   search,
   selectedAppIdSet,
-  onLoadMoreDevices,
   updateAppSelection,
   onSearchChange,
 }: {
@@ -977,11 +974,9 @@ export function AppSelectionTable({
   deviceCounts?: Record<string, number>;
   devices: DeviceToken[];
   fillHeight?: boolean;
-  loadingDeviceAppIds?: Set<string>;
   schedules: NotificationSchedule[];
   search: string;
   selectedAppIdSet: Set<string>;
-  onLoadMoreDevices?: (app: StoreMapping) => void;
   updateAppSelection: (appId: string, checked?: boolean) => void;
   onSearchChange: (value: string) => void;
 }) {
@@ -996,7 +991,6 @@ export function AppSelectionTable({
         .map((app) => ({
           app,
           credentials: matchingFirebaseCredentials(app, credentials),
-          loadedTokens: tokensForApp(app, devices, { activeOnly: true }).length,
           schedules: schedules.filter((schedule) => scheduleMatchesApp(schedule, app)),
           totalTokens: deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length,
         })),
@@ -1039,10 +1033,8 @@ export function AppSelectionTable({
             </TableHeader>
             <TableBody>
               {filteredApps.length ? (
-                filteredApps.map(({ app, credentials: appCredentials, loadedTokens, schedules: appSchedules, totalTokens }) => {
+                filteredApps.map(({ app, credentials: appCredentials, schedules: appSchedules, totalTokens }) => {
                   const selected = selectedAppIdSet.has(app.id);
-                  const loadingDevices = loadingDeviceAppIds?.has(app.id) ?? false;
-                  const canLoadMoreDevices = Boolean(onLoadMoreDevices) && loadedTokens < totalTokens;
 
                   return (
                     <TableRow
@@ -1078,24 +1070,7 @@ export function AppSelectionTable({
                       </TableCell>
                       <TableCell>
                         <div className="text-sm font-medium">{totalTokens}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {loadedTokens ? `${loadedTokens} loaded` : "active"}
-                        </div>
-                        {canLoadMoreDevices ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="mt-1 h-7 px-2 text-[11px]"
-                            disabled={loadingDevices}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onLoadMoreDevices?.(app);
-                            }}
-                          >
-                            {loadingDevices ? "Loading" : loadedTokens ? "Load more" : "Load tokens"}
-                          </Button>
-                        ) : null}
+                        <div className="text-xs text-muted-foreground">active</div>
                       </TableCell>
                       <TableCell>
                         <Badge
