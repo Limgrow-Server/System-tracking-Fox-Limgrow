@@ -32,11 +32,17 @@ export async function handleAdminIapAppsGet(request: Request) {
       defaultPageSize: 12,
       maxPageSize: 12,
     });
+    const platform =
+      clean(url.searchParams.get("platform")) === "android" ||
+      clean(url.searchParams.get("platform")) === "ios"
+        ? clean(url.searchParams.get("platform"))
+        : "all";
     const search = clean(url.searchParams.get("search"));
     const storeAccountName = clean(url.searchParams.get("store"));
     const [allApps, matchingApps] = await Promise.all([
-      getIapAppCards(),
+      getIapAppCards({ platform }),
       getIapAppCards({
+        platform,
         search: search || undefined,
         storeAccountName: storeAccountName || undefined,
       }),
@@ -52,6 +58,11 @@ export async function handleAdminIapAppsGet(request: Request) {
     ).sort();
 
     return paginatedJson(getIapAppCardsPage(scopedApps, pagination), {
+      filters: {
+        platform,
+        search,
+        storeAccountName,
+      },
       storeNames,
     });
   } catch (error) {

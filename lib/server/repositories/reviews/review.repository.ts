@@ -1,12 +1,14 @@
 import "server-only";
 
 import type {
+  Prisma,
   ReviewFetchRunStatus,
   ReviewFetchScheduleStatus,
   ReviewReplyTemplate,
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { firstAppleAppStoreId } from "@/lib/tracking/identity";
 
 const REVIEW_FETCH_GLOBAL_SCOPE = "global";
 
@@ -38,6 +40,206 @@ export type ReviewReplyTemplateTargetInput =
       storeMappingId: string;
     };
 
+async function ensureReviewSyncState(
+  tx: Prisma.TransactionClient,
+  reviewAppTargetId: string,
+) {
+  await tx.reviewSyncState.upsert({
+    where: { reviewAppTargetId },
+    create: { reviewAppTargetId },
+    update: {},
+  });
+}
+
+async function ensureAndroidReviewTargetsQuery(
+  tx: Prisma.TransactionClient,
+  storeMappingId: string,
+) {
+  const mapping = await tx.androidStoreMapping.findUnique({
+    where: { id: storeMappingId },
+    select: {
+      appName: true,
+      id: true,
+      packageName: true,
+      status: true,
+      storeProfileId: true,
+      storeProfile: {
+        select: {
+          contactEmail: true,
+          id: true,
+          status: true,
+          storeAccountName: true,
+          supportPhone: true,
+          websiteUrl: true,
+        },
+      },
+    },
+  });
+
+  if (!mapping) {
+    throw new Error(`Android store mapping was not found: ${storeMappingId}.`);
+  }
+
+  const storeTarget = await tx.reviewStoreTarget.upsert({
+    where: { androidStoreProfileId: mapping.storeProfileId },
+    create: {
+      androidStoreProfileId: mapping.storeProfileId,
+      contactEmail: mapping.storeProfile.contactEmail,
+      platform: "ANDROID",
+      status: mapping.storeProfile.status,
+      storeAccountName: mapping.storeProfile.storeAccountName,
+      supportPhone: mapping.storeProfile.supportPhone,
+      websiteUrl: mapping.storeProfile.websiteUrl,
+    },
+    update: {
+      status: mapping.storeProfile.status,
+      storeAccountName: mapping.storeProfile.storeAccountName,
+    },
+    select: { id: true },
+  });
+
+  const appTarget = await tx.reviewAppTarget.upsert({
+    where: { androidStoreMappingId: mapping.id },
+    create: {
+      androidStoreMappingId: mapping.id,
+      appIdentifier: mapping.packageName,
+      appName: mapping.appName,
+      platform: "ANDROID",
+      reviewStoreTargetId: storeTarget.id,
+      status: mapping.status,
+    },
+    update: {
+      appIdentifier: mapping.packageName,
+      appName: mapping.appName,
+      reviewStoreTargetId: storeTarget.id,
+      status: mapping.status,
+    },
+    select: { id: true },
+  });
+
+  await ensureReviewSyncState(tx, appTarget.id);
+
+  return appTarget.id;
+}
+
+async function ensureIosReviewTargetsQuery(
+  tx: Prisma.TransactionClient,
+  storeMappingId: string,
+) {
+  const mapping = await tx.iosStoreMapping.findUnique({
+    where: { id: storeMappingId },
+    select: {
+      appId: true,
+      appName: true,
+      appleAppId: true,
+      appLink: true,
+      bundleId: true,
+      id: true,
+      status: true,
+      storeProfileId: true,
+      storeProfile: {
+        select: {
+          id: true,
+          status: true,
+          storeAccountName: true,
+        },
+      },
+    },
+  });
+
+  if (!mapping) {
+    throw new Error(`iOS store mapping was not found: ${storeMappingId}.`);
+  }
+
+  const appleAppId = firstAppleAppStoreId(
+    mapping.appleAppId,
+    mapping.appLink,
+  );
+  const appIdentifier = appleAppId ?? mapping.bundleId;
+
+  if (appleAppId && mapping.appleAppId !== appleAppId) {
+    await tx.iosStoreMapping.update({
+      where: { id: mapping.id },
+      data: { appleAppId },
+      select: { id: true },
+    });
+  }
+
+  const storeTarget = await tx.reviewStoreTarget.upsert({
+    where: { iosStoreProfileId: mapping.storeProfileId },
+    create: {
+      iosStoreProfileId: mapping.storeProfileId,
+      platform: "IOS",
+      status: mapping.storeProfile.status,
+      storeAccountName: mapping.storeProfile.storeAccountName,
+    },
+    update: {
+      status: mapping.storeProfile.status,
+      storeAccountName: mapping.storeProfile.storeAccountName,
+    },
+    select: { id: true },
+  });
+
+  const appTarget = await tx.reviewAppTarget.upsert({
+    where: { iosStoreMappingId: mapping.id },
+    create: {
+      appIdentifier,
+      appName: mapping.appName,
+      iosStoreMappingId: mapping.id,
+      platform: "IOS",
+      reviewStoreTargetId: storeTarget.id,
+      status: mapping.status,
+    },
+    update: {
+      appIdentifier,
+      appName: mapping.appName,
+      reviewStoreTargetId: storeTarget.id,
+      status: mapping.status,
+    },
+    select: { id: true },
+  });
+
+  await ensureReviewSyncState(tx, appTarget.id);
+
+  return appTarget.id;
+}
+
+export function ensureAndroidReviewTargetsForMapping(
+  storeMappingId: string,
+  tx?: Prisma.TransactionClient,
+) {
+  if (tx) {
+    return ensureAndroidReviewTargetsQuery(tx, storeMappingId);
+  }
+
+  return prisma.$transaction((transaction) =>
+    ensureAndroidReviewTargetsQuery(transaction, storeMappingId),
+  );
+}
+
+export function ensureIosReviewTargetsForMapping(
+  storeMappingId: string,
+  tx?: Prisma.TransactionClient,
+) {
+  if (tx) {
+    return ensureIosReviewTargetsQuery(tx, storeMappingId);
+  }
+
+  return prisma.$transaction((transaction) =>
+    ensureIosReviewTargetsQuery(transaction, storeMappingId),
+  );
+}
+
+export function ensureReviewTargetsForMapping(
+  storeMappingId: string,
+  platform: "android" | "ios",
+  tx?: Prisma.TransactionClient,
+) {
+  return platform === "ios"
+    ? ensureIosReviewTargetsForMapping(storeMappingId, tx)
+    : ensureAndroidReviewTargetsForMapping(storeMappingId, tx);
+}
+
 async function reviewAppTargetIdForMapping(
   storeMappingId: string,
   platform: "android" | "ios",
@@ -51,9 +253,7 @@ async function reviewAppTargetIdForMapping(
   });
 
   if (!target) {
-    throw new Error(
-      `Review app target was not found for ${platform} mapping ${storeMappingId}.`,
-    );
+    return ensureReviewTargetsForMapping(storeMappingId, platform);
   }
 
   return target.id;
@@ -347,16 +547,32 @@ export async function updateReviewStoreTargetReplyInfo(
   },
 ) {
   if (platform === "android") {
-    const [store] = await prisma.$transaction([
-      prisma.androidStoreProfile.update({
+    const store = await prisma.$transaction(async (tx) => {
+      const updatedStore = await tx.androidStoreProfile.update({
         where: { id: storeProfileId },
         data,
-      }),
-      prisma.reviewStoreTarget.updateMany({
+      });
+
+      await tx.reviewStoreTarget.upsert({
         where: { androidStoreProfileId: storeProfileId },
-        data,
-      }),
-    ]);
+        create: {
+          androidStoreProfileId: storeProfileId,
+          contactEmail: updatedStore.contactEmail,
+          platform: "ANDROID",
+          status: updatedStore.status,
+          storeAccountName: updatedStore.storeAccountName,
+          supportPhone: updatedStore.supportPhone,
+          websiteUrl: updatedStore.websiteUrl,
+        },
+        update: {
+          contactEmail: updatedStore.contactEmail,
+          supportPhone: updatedStore.supportPhone,
+          websiteUrl: updatedStore.websiteUrl,
+        },
+      });
+
+      return updatedStore;
+    });
 
     return {
       contactEmail: store.contactEmail,
@@ -367,17 +583,37 @@ export async function updateReviewStoreTargetReplyInfo(
     };
   }
 
-  const target = await prisma.reviewStoreTarget.update({
-    where: { iosStoreProfileId: storeProfileId },
-    data,
-    include: {
-      iosStoreProfile: {
-        select: {
-          id: true,
-          storeAccountName: true,
+  const target = await prisma.$transaction(async (tx) => {
+    const store = await tx.iosStoreProfile.findUniqueOrThrow({
+      where: { id: storeProfileId },
+      select: {
+        id: true,
+        status: true,
+        storeAccountName: true,
+      },
+    });
+
+    return tx.reviewStoreTarget.upsert({
+      where: { iosStoreProfileId: storeProfileId },
+      create: {
+        contactEmail: data.contactEmail,
+        iosStoreProfileId: storeProfileId,
+        platform: "IOS",
+        status: store.status,
+        storeAccountName: store.storeAccountName,
+        supportPhone: data.supportPhone,
+        websiteUrl: data.websiteUrl,
+      },
+      update: data,
+      include: {
+        iosStoreProfile: {
+          select: {
+            id: true,
+            storeAccountName: true,
+          },
         },
       },
-    },
+    });
   });
 
   return {

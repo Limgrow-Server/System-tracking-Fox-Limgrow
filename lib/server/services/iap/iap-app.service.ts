@@ -24,6 +24,7 @@ import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
 import { iosIapTransactionToSummary } from "@/lib/tracking/mappers/ios";
 
 type IapAppCardOptions = {
+  platform?: string;
   search?: string;
   storeAccountName?: string;
 };
@@ -46,10 +47,15 @@ function toPublicIapAppCard(app: CachedIapAppCard): IapAppCard {
 }
 
 function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions) {
+  const platform =
+    options?.platform === "android" || options?.platform === "ios"
+      ? options.platform
+      : "";
   const search = options?.search?.trim().toLowerCase();
   const storeAccountName = options?.storeAccountName?.trim().toLowerCase();
 
   return apps.filter((app) => {
+    const matchesPlatform = !platform || app.platform === platform;
     const matchesStore =
       !storeAccountName ||
       app.storeAccountName.toLowerCase() === storeAccountName;
@@ -60,7 +66,7 @@ function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions
       app.storeAccountName.toLowerCase().includes(search) ||
       Boolean(app.appId?.toLowerCase().includes(search));
 
-    return matchesStore && matchesSearch;
+    return matchesPlatform && matchesStore && matchesSearch;
   });
 }
 

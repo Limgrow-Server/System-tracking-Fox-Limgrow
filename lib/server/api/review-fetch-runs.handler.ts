@@ -29,6 +29,21 @@ type FetchReviewsPayload = FetchAndroidReviewsPayload &
     platform?: unknown;
   };
 
+type ReviewFullScanResult = Awaited<
+  ReturnType<typeof enqueueAndroidReviewFullScanRuns>
+>;
+
+function emptyFullScanResult(): ReviewFullScanResult {
+  return {
+    enqueued: 0,
+    requested: 0,
+    scanMode: "full",
+    skipped: 0,
+    skippedStoreMappingIds: [],
+    status: "empty",
+  };
+}
+
 function isFullScan(payload: FetchReviewsPayload) {
   return clean(payload.scanMode).toLowerCase() === "full";
 }
@@ -78,12 +93,16 @@ export async function handleReviewFetchRunsPost(request: Request) {
               }),
             );
         const [androidResult, iosResult] = await Promise.all([
-          enqueueAndroidReviewFullScanRuns({
-            storeMappingIds: scopedAndroidMappings.map((mapping) => mapping.id),
-          }),
-          enqueueIosReviewFullScanRuns({
-            storeMappingIds: scopedIosMappings.map((mapping) => mapping.id),
-          }),
+          scopedAndroidMappings.length
+            ? enqueueAndroidReviewFullScanRuns({
+                storeMappingIds: scopedAndroidMappings.map((mapping) => mapping.id),
+              })
+            : Promise.resolve(emptyFullScanResult()),
+          scopedIosMappings.length
+            ? enqueueIosReviewFullScanRuns({
+                storeMappingIds: scopedIosMappings.map((mapping) => mapping.id),
+              })
+            : Promise.resolve(emptyFullScanResult()),
         ]);
 
         return okJson({

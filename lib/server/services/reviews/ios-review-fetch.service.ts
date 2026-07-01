@@ -30,8 +30,10 @@ import {
   getIosReviewMappingById,
   getIosReviewSyncState,
   markIosReviewSyncRunning,
+  updateIosReviewMappingAppleAppId,
   upsertIosReviews,
 } from "@/lib/server/repositories/reviews/ios-review.repository";
+import { firstAppleAppStoreId } from "@/lib/tracking/identity";
 
 const DEFAULT_MAX_RESULTS = 100;
 const DEFAULT_MAX_PAGES = 2;
@@ -392,9 +394,18 @@ async function executeIosStoreReviewFetch(
     throw badRequest("iOS app mapping must be active before fetching reviews.");
   }
 
-  const appStoreId = cleanText(mapping.appleAppId) || cleanText(mapping.appId);
+  const appStoreId = firstAppleAppStoreId(
+    mapping.appleAppId,
+    mapping.appLink,
+  );
   if (!appStoreId) {
-    throw badRequest("Apple App Store app id is required before fetching iOS reviews.");
+    throw badRequest(
+      "Apple App Store app id or App Store URL is required before fetching iOS reviews.",
+    );
+  }
+
+  if (mapping.appleAppId !== appStoreId) {
+    await updateIosReviewMappingAppleAppId(mapping.id, appStoreId);
   }
 
   const credential = await resolveAppleAscCredential(

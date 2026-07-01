@@ -62,6 +62,7 @@ export type IapAppGridPageData = {
   apps: IapAppCard[];
   appPagination: PaginationMeta;
   filters: {
+    platform: "all" | "android" | "ios";
     search: string;
     storeAccountName: string;
   };
@@ -110,6 +111,7 @@ export type ReviewAppGridPageData = {
   appPagination: PaginationMeta;
   apps: ReviewAppCard[];
   filters: {
+    platform: "all" | "android" | "ios";
     search: string;
     storeProfileId: string;
   };

@@ -13,6 +13,7 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { ensureIosReviewTargetsForMapping } from "@/lib/server/repositories/reviews/review.repository";
 
 export type IosReviewUpsertInput = {
   appVersion: string | null;
@@ -69,7 +70,7 @@ export async function iosReviewAppTargetId(storeMappingId: string) {
   });
 
   if (!target) {
-    throw new Error(`Review app target was not found for iOS mapping ${storeMappingId}.`);
+    return ensureIosReviewTargetsForMapping(storeMappingId);
   }
 
   return target.id;
@@ -90,11 +91,32 @@ async function iosReviewAppTargetIdByMappingId(storeMappingIds: string[]) {
     },
   });
 
-  return new Map(
+  const targetIdByMappingId = new Map(
     targets
       .filter((target) => target.iosStoreMappingId)
       .map((target) => [target.iosStoreMappingId!, target.id]),
   );
+
+  const missingStoreMappingIds = uniqueStoreMappingIds.filter(
+    (storeMappingId) => !targetIdByMappingId.has(storeMappingId),
+  );
+
+  if (!missingStoreMappingIds.length) {
+    return targetIdByMappingId;
+  }
+
+  const ensuredTargets = await Promise.all(
+    missingStoreMappingIds.map(async (storeMappingId) => ({
+      id: await ensureIosReviewTargetsForMapping(storeMappingId),
+      storeMappingId,
+    })),
+  );
+
+  for (const target of ensuredTargets) {
+    targetIdByMappingId.set(target.storeMappingId, target.id);
+  }
+
+  return targetIdByMappingId;
 }
 
 async function iosReviewTargetByMappingId(storeMappingIds: string[]) {
@@ -146,6 +168,26 @@ export function getIosReviewMappingById(mappingId: string) {
       },
       storeProfile: true,
     },
+  });
+}
+
+export function updateIosReviewMappingAppleAppId(
+  storeMappingId: string,
+  appleAppId: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    const mapping = await tx.iosStoreMapping.update({
+      where: { id: storeMappingId },
+      data: { appleAppId },
+      select: { id: true },
+    });
+
+    await tx.reviewAppTarget.updateMany({
+      where: { iosStoreMappingId: storeMappingId },
+      data: { appIdentifier: appleAppId },
+    });
+
+    return mapping;
   });
 }
 

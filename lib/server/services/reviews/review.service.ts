@@ -317,13 +317,19 @@ export function reviewStoreOptions(apps: ReviewAppCard[]) {
 export function filterReviewAppCards<T extends ReviewAppCard>(
   apps: T[],
   filters: {
+    platform?: string;
     search?: string;
     storeProfileId?: string;
   },
 ) {
+  const platform =
+    filters.platform === "android" || filters.platform === "ios"
+      ? filters.platform
+      : "";
   const search = filters.search?.trim().toLowerCase();
 
   return apps.filter((app) => {
+    const matchesPlatform = !platform || app.platform === platform;
     const matchesSearch =
       !search ||
       app.appName.toLowerCase().includes(search) ||
@@ -334,7 +340,7 @@ export function filterReviewAppCards<T extends ReviewAppCard>(
       filters.storeProfileId === "all" ||
       app.storeProfileId === filters.storeProfileId;
 
-    return matchesSearch && matchesStore;
+    return matchesPlatform && matchesSearch && matchesStore;
   });
 }
 

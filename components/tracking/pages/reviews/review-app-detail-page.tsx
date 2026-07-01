@@ -396,6 +396,7 @@ function SyncPanel({
   toDate: string;
 }) {
   const syncRunning = data.syncState?.status === "running";
+  const supportsDateRange = data.app.platform === "android";
   const windowStartDate = defaultFetchFromDate();
   const windowEndDate = defaultFetchToDate();
   const fromMinDate = latestInputValue(
@@ -408,7 +409,9 @@ function SyncPanel({
     windowEndDate,
     addDaysToInputValue(fromDate, GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS - 1),
   );
-  const dateRangeError = fetchDateRangeError(fromDate, toDate);
+  const dateRangeError = supportsDateRange
+    ? fetchDateRangeError(fromDate, toDate)
+    : null;
 
   return (
     <Card className="rounded-lg">
@@ -426,22 +429,24 @@ function SyncPanel({
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <FetchDatePicker
-            label="From"
-            maxDate={fromMaxDate}
-            minDate={fromMinDate}
-            onChange={onFromDateChange}
-            value={fromDate}
-          />
-          <FetchDatePicker
-            label="To"
-            maxDate={toMaxDate}
-            minDate={toMinDate}
-            onChange={onToDateChange}
-            value={toDate}
-          />
-        </div>
+        {supportsDateRange ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <FetchDatePicker
+              label="From"
+              maxDate={fromMaxDate}
+              minDate={fromMinDate}
+              onChange={onFromDateChange}
+              value={fromDate}
+            />
+            <FetchDatePicker
+              label="To"
+              maxDate={toMaxDate}
+              minDate={toMinDate}
+              onChange={onToDateChange}
+              value={toDate}
+            />
+          </div>
+        ) : null}
         {dateRangeError ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
             {dateRangeError}
@@ -925,17 +930,25 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     setFetchingReviews(true);
 
     try {
+      const requestBody =
+        data.app.platform === "android"
+          ? {
+              fromDate: fetchFromDate || undefined,
+              platform: data.app.platform,
+              storeMappingId: data.app.mappingId,
+              timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+              toDate: fetchToDate || undefined,
+              triggerType: "manual",
+            }
+          : {
+              platform: data.app.platform,
+              storeMappingId: data.app.mappingId,
+              triggerType: "manual",
+            };
       const response = await fetch("/api/review-fetch-runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fromDate: fetchFromDate || undefined,
-          platform: data.app.platform,
-          storeMappingId: data.app.mappingId,
-          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
-          toDate: fetchToDate || undefined,
-          triggerType: "manual",
-        }),
+        body: JSON.stringify(requestBody),
       });
       const payload = (await response.json()) as {
         error?: string;

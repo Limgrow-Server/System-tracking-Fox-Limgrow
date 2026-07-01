@@ -12,6 +12,7 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { ensureAndroidReviewTargetsForMapping } from "@/lib/server/repositories/reviews/review.repository";
 
 export type AndroidReviewUpsertInput = {
   androidOsVersion: number | null;
@@ -61,7 +62,7 @@ async function androidReviewAppTargetId(storeMappingId: string) {
   });
 
   if (!target) {
-    throw new Error(`Review app target was not found for Android mapping ${storeMappingId}.`);
+    return ensureAndroidReviewTargetsForMapping(storeMappingId);
   }
 
   return target.id;
@@ -82,11 +83,32 @@ async function androidReviewAppTargetIdByMappingId(storeMappingIds: string[]) {
     },
   });
 
-  return new Map(
+  const targetIdByMappingId = new Map(
     targets
       .filter((target) => target.androidStoreMappingId)
       .map((target) => [target.androidStoreMappingId!, target.id]),
   );
+
+  const missingStoreMappingIds = uniqueStoreMappingIds.filter(
+    (storeMappingId) => !targetIdByMappingId.has(storeMappingId),
+  );
+
+  if (!missingStoreMappingIds.length) {
+    return targetIdByMappingId;
+  }
+
+  const ensuredTargets = await Promise.all(
+    missingStoreMappingIds.map(async (storeMappingId) => ({
+      id: await ensureAndroidReviewTargetsForMapping(storeMappingId),
+      storeMappingId,
+    })),
+  );
+
+  for (const target of ensuredTargets) {
+    targetIdByMappingId.set(target.storeMappingId, target.id);
+  }
+
+  return targetIdByMappingId;
 }
 
 export function getActiveAndroidReviewMappings() {

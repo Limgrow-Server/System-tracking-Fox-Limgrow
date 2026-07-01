@@ -30,6 +30,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { PageHeader, TablePaginationFooter } from "@/components/tracking/primitives";
 import { cn } from "@/lib/utils";
 import type { IapAppCard, IapAppGridPageData } from "@/lib/tracking/page-data";
@@ -48,11 +55,16 @@ type IapAppListResponse = {
   totalPages?: number;
 };
 
+type PlatformFilter = IapAppGridPageData["filters"]["platform"];
+
 export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [apps, setApps] = useState(data.apps);
   const [pagination, setPagination] = useState(data.appPagination);
+  const [selectedPlatform, setSelectedPlatform] = useState<PlatformFilter>(
+    data.filters.platform,
+  );
   const [searchQuery, setSearchQuery] = useState(data.filters.search);
   const [selectedStore, setSelectedStore] = useState<string>(
     data.filters.storeAccountName || "All Stores",
@@ -65,8 +77,14 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
 
   async function loadAppsPage(
     page: number,
-    overrides?: { searchQuery?: string; selectedStore?: string },
+    overrides?: {
+      searchQuery?: string;
+      selectedPlatform?: PlatformFilter;
+      selectedStore?: string;
+    },
   ) {
+    const nextSelectedPlatform =
+      overrides?.selectedPlatform ?? selectedPlatform;
     const nextSearchQuery = overrides?.searchQuery ?? searchQuery;
     const nextSelectedStore = overrides?.selectedStore ?? selectedStore;
     const params = new URLSearchParams({
@@ -75,6 +93,9 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
     });
     const search = nextSearchQuery.trim();
 
+    if (nextSelectedPlatform !== "all") {
+      params.set("platform", nextSelectedPlatform);
+    }
     if (search) params.set("search", search);
     if (nextSelectedStore !== "All Stores") {
       params.set("store", nextSelectedStore);
@@ -112,6 +133,17 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
     void loadAppsPage(1, { searchQuery: nextValue });
   }
 
+  function updateSelectedPlatform(value: string) {
+    const nextValue: PlatformFilter =
+      value === "android" || value === "ios" ? value : "all";
+    setSelectedPlatform(nextValue);
+    setSelectedStore("All Stores");
+    void loadAppsPage(1, {
+      selectedPlatform: nextValue,
+      selectedStore: "All Stores",
+    });
+  }
+
   function updateSelectedStore(nextValue: string) {
     setSelectedStore(nextValue);
     setOpenStoreCombobox(false);
@@ -147,6 +179,17 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
             onChange={(e) => updateSearchQuery(e.target.value)}
           />
         </div>
+
+        <Select value={selectedPlatform} onValueChange={updateSelectedPlatform}>
+          <SelectTrigger className="w-full sm:w-[180px]">
+            <SelectValue placeholder="All platforms" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Platforms</SelectItem>
+            <SelectItem value="android">Android</SelectItem>
+            <SelectItem value="ios">iOS</SelectItem>
+          </SelectContent>
+        </Select>
 
         <Popover open={openStoreCombobox} onOpenChange={setOpenStoreCombobox}>
           <PopoverTrigger asChild>
