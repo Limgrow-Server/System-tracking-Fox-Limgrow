@@ -1,12 +1,169 @@
 import "server-only";
 
+import type { Prisma } from "@prisma/client";
+
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 import {
   deviceTokenToTracking,
   notificationEventToTracking,
   notificationJobToTracking,
   notificationScheduleToTracking,
 } from "@/lib/tracking/mappers/notification";
+import type { DeviceToken, StoreMapping } from "@/lib/tracking/types";
+
+const deviceTokenSummarySelect = {
+  appId: true,
+  appIdentifier: true,
+  appVersion: true,
+  bundleId: true,
+  createdAt: true,
+  deviceId: true,
+  deviceManufacturer: true,
+  deviceModel: true,
+  deviceType: true,
+  firebaseAppId: true,
+  firebaseProjectId: true,
+  id: true,
+  lastSeenAt: true,
+  locale: true,
+  osVersion: true,
+  packageName: true,
+  platform: true,
+  productAppId: true,
+  status: true,
+  storeAccountName: true,
+  storePlatform: true,
+  updatedAt: true,
+  userId: true,
+} satisfies Prisma.DeviceTokenSelect;
+
+type DeviceTokenSummaryRecord = Prisma.DeviceTokenGetPayload<{
+  select: typeof deviceTokenSummarySelect;
+}>;
+
+type DeviceTokenPageOptions = {
+  activeOnly?: boolean;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  skip?: number;
+  take?: number;
+};
+
+function clean(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function unique(values: unknown[]) {
+  return Array.from(
+    new Set(values.map(clean).filter(Boolean)),
+  );
+}
+
+function uniqueSearchValues(values: unknown[]) {
+  return unique(values.flatMap((value) => searchTextVariants(value)));
+}
+
+function deviceTokenSummaryToTracking(device: DeviceTokenSummaryRecord): DeviceToken {
+  return {
+    id: device.id,
+    user_id: device.userId,
+    app_id: device.appId,
+    device_id: device.deviceId,
+    platform: device.platform,
+    firebase_app_id: device.firebaseAppId,
+    firebase_project_id: device.firebaseProjectId,
+    app_identifier: device.appIdentifier,
+    fcm_token: "",
+    app_version: device.appVersion,
+    os_version: device.osVersion,
+    locale: device.locale,
+    status: device.status,
+    last_seen_at: device.lastSeenAt.toISOString(),
+    store_platform: device.storePlatform,
+    store_account_name: device.storeAccountName,
+    product_app_id: device.productAppId,
+    package_name: device.packageName,
+    bundle_id: device.bundleId,
+    device_type: device.deviceType,
+    device_model: device.deviceModel,
+    device_manufacturer: device.deviceManufacturer,
+    created_at: device.createdAt.toISOString(),
+    updated_at: device.updatedAt.toISOString(),
+  };
+}
+
+function deviceTokenClausesForApp(app: StoreMapping): Prisma.DeviceTokenWhereInput[] {
+  const appIds = uniqueSearchValues([app.app_id]);
+  const packageNames = uniqueSearchValues([app.package_name]);
+  const bundleIds = uniqueSearchValues([app.bundle_id]);
+  const identifiers = app.platform === "android" ? packageNames : bundleIds;
+  const clauses: Prisma.DeviceTokenWhereInput[] = [];
+
+  if (identifiers.length) {
+    clauses.push({ appIdentifier: { in: identifiers }, platform: app.platform });
+  }
+  if (packageNames.length) {
+    clauses.push({ packageName: { in: packageNames }, platform: app.platform });
+  }
+  if (bundleIds.length) {
+    clauses.push({ bundleId: { in: bundleIds }, platform: app.platform });
+  }
+  if (appIds.length) {
+    clauses.push(
+      { appId: { in: appIds }, platform: app.platform },
+      { platform: app.platform, productAppId: { in: appIds } },
+    );
+  }
+
+  if (!clauses.length && app.store_account_name) {
+    clauses.push({
+      appId: null,
+      appIdentifier: null,
+      bundleId: null,
+      packageName: null,
+      platform: app.platform,
+      productAppId: null,
+      storeAccountName: app.store_account_name,
+    });
+  }
+
+  return clauses;
+}
+
+function deviceTokenWhereForApps(
+  apps: StoreMapping[],
+  options?: { activeOnly?: boolean; search?: string },
+): Prisma.DeviceTokenWhereInput {
+  const appClauses = apps.flatMap(deviceTokenClausesForApp);
+  if (!appClauses.length) return { id: { in: [] } };
+
+  const and: Prisma.DeviceTokenWhereInput[] = [{ OR: appClauses }];
+  if (options?.activeOnly) and.push({ status: "active" });
+
+  const search = clean(options?.search);
+  if (search) {
+    and.push({
+      OR: [
+        { appId: { contains: search, mode: "insensitive" } },
+        { appIdentifier: { contains: search, mode: "insensitive" } },
+        { appVersion: { contains: search, mode: "insensitive" } },
+        { bundleId: { contains: search, mode: "insensitive" } },
+        { deviceId: { contains: search, mode: "insensitive" } },
+        { deviceType: { contains: search, mode: "insensitive" } },
+        { fcmToken: { contains: search, mode: "insensitive" } },
+        { locale: { contains: search, mode: "insensitive" } },
+        { osVersion: { contains: search, mode: "insensitive" } },
+        { packageName: { contains: search, mode: "insensitive" } },
+        { productAppId: { contains: search, mode: "insensitive" } },
+        { status: { contains: search, mode: "insensitive" } },
+      ],
+    });
+  }
+
+  return { AND: and };
+}
 
 export async function getNotificationJobs(take = 50) {
   const jobs = await prisma.notificationJob.findMany({
@@ -53,6 +210,18 @@ export async function getNotificationEventsForJob(jobId: string, take = 2000) {
   return events.map(notificationEventToTracking);
 }
 
+export async function getNotificationEventsForJobs(jobIds: string[], take = 2000) {
+  if (!jobIds.length) return [];
+
+  const events = await prisma.notificationEvent.findMany({
+    orderBy: { createdAt: "desc" },
+    take,
+    where: { jobId: { in: jobIds } },
+  });
+
+  return events.map(notificationEventToTracking);
+}
+
 export async function getDeviceTokens(take = 120) {
   const devices = await prisma.deviceToken.findMany({
     orderBy: { lastSeenAt: "desc" },
@@ -60,4 +229,72 @@ export async function getDeviceTokens(take = 120) {
   });
 
   return devices.map(deviceTokenToTracking);
+}
+
+export async function getDeviceTokenSummaries(
+  take = 120,
+  options?: { activeOnly?: boolean },
+) {
+  const devices = await prisma.deviceToken.findMany({
+    orderBy: { lastSeenAt: "desc" },
+    select: deviceTokenSummarySelect,
+    take,
+    where: options?.activeOnly ? { status: "active" } : undefined,
+  });
+
+  return devices.map(deviceTokenSummaryToTracking);
+}
+
+export async function getDeviceTokenSummariesForApps(
+  apps: StoreMapping[],
+  take = 120,
+  options?: { activeOnly?: boolean },
+) {
+  if (!apps.length) return [];
+
+  const devices = await prisma.deviceToken.findMany({
+    orderBy: { lastSeenAt: "desc" },
+    select: deviceTokenSummarySelect,
+    take,
+    where: deviceTokenWhereForApps(apps, options),
+  });
+
+  return devices.map(deviceTokenSummaryToTracking);
+}
+
+export async function getDeviceTokenPageForApps(
+  apps: StoreMapping[],
+  options: DeviceTokenPageOptions = {},
+) {
+  if (!apps.length) {
+    return { activeTotal: 0, data: [], total: 0 };
+  }
+
+  const pageSize = options.pageSize ?? options.take ?? 10;
+  const page = options.page ?? 1;
+  const skip = options.skip ?? (page - 1) * pageSize;
+  const where = deviceTokenWhereForApps(apps, {
+    activeOnly: options.activeOnly,
+    search: options.search,
+  });
+  const activeWhere = deviceTokenWhereForApps(apps, {
+    activeOnly: true,
+    search: options.search,
+  });
+  const [total, activeTotal, devices] = await prisma.$transaction([
+    prisma.deviceToken.count({ where }),
+    prisma.deviceToken.count({ where: activeWhere }),
+    prisma.deviceToken.findMany({
+      orderBy: { lastSeenAt: "desc" },
+      skip,
+      take: pageSize,
+      where,
+    }),
+  ]);
+
+  return {
+    activeTotal,
+    data: devices.map(deviceTokenToTracking),
+    total,
+  };
 }
