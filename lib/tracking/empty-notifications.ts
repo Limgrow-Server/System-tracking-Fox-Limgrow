@@ -4,6 +4,7 @@ export function emptyNotificationsPageData(): NotificationsPageData {
   return {
     credentialSecrets: [],
     deviceTokens: [],
+    notificationDeviceCounts: {},
     notificationDeliveryEvents: [],
     notificationEvents: [],
     notificationJobs: [],

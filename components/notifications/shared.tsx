@@ -17,6 +17,7 @@ import {
 
 import { TableEmptyState } from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -960,27 +961,33 @@ function AppStatusDot({ status }: { status: string | null | undefined }) {
 export function AppSelectionTable({
   apps,
   credentials,
+  deviceCounts,
   devices,
   fillHeight = false,
+  loadingDeviceAppIds,
   schedules,
   search,
   selectedAppIdSet,
+  onLoadMoreDevices,
   updateAppSelection,
   onSearchChange,
 }: {
   apps: StoreMapping[];
   credentials: NotificationsPageData["credentialSecrets"];
+  deviceCounts?: Record<string, number>;
   devices: DeviceToken[];
   fillHeight?: boolean;
+  loadingDeviceAppIds?: Set<string>;
   schedules: NotificationSchedule[];
   search: string;
   selectedAppIdSet: Set<string>;
+  onLoadMoreDevices?: (app: StoreMapping) => void;
   updateAppSelection: (appId: string, checked?: boolean) => void;
   onSearchChange: (value: string) => void;
 }) {
   const totalDeviceCount = useMemo(
-    () => apps.reduce((total, app) => total + devicesForApp(app, devices).length, 0),
-    [apps, devices],
+    () => apps.reduce((total, app) => total + (deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length), 0),
+    [apps, deviceCounts, devices],
   );
   const filteredApps = useMemo(
     () =>
@@ -989,10 +996,11 @@ export function AppSelectionTable({
         .map((app) => ({
           app,
           credentials: matchingFirebaseCredentials(app, credentials),
-          devices: devicesForApp(app, devices),
+          loadedTokens: tokensForApp(app, devices, { activeOnly: true }).length,
           schedules: schedules.filter((schedule) => scheduleMatchesApp(schedule, app)),
+          totalTokens: deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length,
         })),
-    [apps, credentials, devices, schedules, search],
+    [apps, credentials, deviceCounts, devices, schedules, search],
   );
 
   return (
@@ -1024,15 +1032,17 @@ export function AppSelectionTable({
                 <TableHead className="h-9 w-[30%] min-w-56">App</TableHead>
                 <TableHead className="h-9 w-28">Platform</TableHead>
                 <TableHead className="h-9 w-[32%] min-w-56">Identifier</TableHead>
-                <TableHead className="h-9 w-24">Tokens</TableHead>
+                <TableHead className="h-9 w-32">Tokens</TableHead>
                 <TableHead className="h-9 w-24">Config</TableHead>
                 <TableHead className="h-9 w-24">Schedules</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredApps.length ? (
-                filteredApps.map(({ app, credentials: appCredentials, devices: appDevices, schedules: appSchedules }) => {
+                filteredApps.map(({ app, credentials: appCredentials, loadedTokens, schedules: appSchedules, totalTokens }) => {
                   const selected = selectedAppIdSet.has(app.id);
+                  const loadingDevices = loadingDeviceAppIds?.has(app.id) ?? false;
+                  const canLoadMoreDevices = Boolean(onLoadMoreDevices) && loadedTokens < totalTokens;
 
                   return (
                     <TableRow
@@ -1067,8 +1077,25 @@ export function AppSelectionTable({
                         <div className="max-w-full truncate rounded-md bg-muted px-2 py-1 font-mono text-xs">{compactIdentifier(app)}</div>
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm font-medium">{appDevices.length}</div>
-                        <div className="text-xs text-muted-foreground">active</div>
+                        <div className="text-sm font-medium">{totalTokens}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {loadedTokens ? `${loadedTokens} loaded` : "active"}
+                        </div>
+                        {canLoadMoreDevices ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="mt-1 h-7 px-2 text-[11px]"
+                            disabled={loadingDevices}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onLoadMoreDevices?.(app);
+                            }}
+                          >
+                            {loadingDevices ? "Loading" : loadedTokens ? "Load more" : "Load tokens"}
+                          </Button>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         <Badge
