@@ -22,6 +22,7 @@ import {
 } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
+import { valuesMatchSearch as fuzzyValuesMatchSearch } from "@/lib/search";
 import type {
   NotificationOverviewSummary,
   NotificationsPageData,
@@ -185,10 +186,7 @@ function normalizeFilter(value: string | null | undefined) {
 }
 
 function valuesMatchSearch(values: Array<string | null | undefined>, search?: string) {
-  const query = search?.trim().toLowerCase();
-  if (!query) return true;
-
-  return values.some((value) => value?.toLowerCase().includes(query));
+  return fuzzyValuesMatchSearch(values, search);
 }
 
 function uniqueClean(values: Array<string | null | undefined>) {

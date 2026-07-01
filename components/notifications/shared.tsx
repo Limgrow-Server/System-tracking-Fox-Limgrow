@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { valuesMatchSearch as fuzzyValuesMatchSearch } from "@/lib/search";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData } from "@/lib/tracking/page-data";
 import type {
@@ -74,10 +75,13 @@ export type SendResponse = {
   ok?: boolean;
   error?: string;
   result?: {
+    batchCount?: number;
     errorCount?: number;
     job?: NotificationJob;
+    queued?: boolean;
     results?: SendResult[];
     sentCount?: number;
+    targetCount?: number;
   };
 };
 
@@ -107,6 +111,8 @@ export type AppSendSummary = {
   errorCount: number;
   jobId?: string;
   platform: PlatformFilter | string;
+  queued?: boolean;
+  batchCount?: number;
   results: SendResult[];
   sentCount: number;
   totalCount: number;
@@ -291,10 +297,7 @@ export function matchingFirebaseCredentials(app: StoreMapping, credentials: Cred
 }
 
 export function appMatchesSearch(app: StoreMapping, search: string) {
-  const query = search.trim().toLowerCase();
-  if (!query) return true;
-
-  return [
+  return fuzzyValuesMatchSearch([
     app.app_name,
     app.app_id,
     app.store_account_name,
@@ -302,7 +305,7 @@ export function appMatchesSearch(app: StoreMapping, search: string) {
     app.bundle_id,
     app.platform,
     app.status,
-  ].some((value) => value?.toLowerCase().includes(query));
+  ], search);
 }
 
 function normalizedValue(value: string | null | undefined) {
@@ -614,9 +617,7 @@ export function notificationJobBadgeStatus(job: NotificationJob) {
 }
 
 export function valuesMatchSearch(values: Array<string | null | undefined>, search: string) {
-  const query = search.trim().toLowerCase();
-  if (!query) return true;
-  return values.some((value) => value?.toLowerCase().includes(query));
+  return fuzzyValuesMatchSearch(values, search);
 }
 
 function notificationEventText(event: NotificationEvent) {

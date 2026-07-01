@@ -2,6 +2,7 @@ import "server-only";
 
 import { canAccessReviewApp } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
+import { valuesMatchSearch } from "@/lib/search";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { getReplyConfigPageData } from "@/lib/server/services/reviews/android-review.service";
 import type {
@@ -65,28 +66,20 @@ function buildStoreSummaries(data: ReplyConfigRows) {
 }
 
 function filterReplyStores(stores: ReplyStoreSummary[], search?: string) {
-  const query = search?.trim().toLowerCase();
-  if (!query) return stores;
-
   return stores.filter((store) =>
-    [
+    valuesMatchSearch([
       store.storeAccountName,
       store.contactEmail,
       store.supportPhone,
       store.websiteUrl,
       ...store.apps.flatMap((app) => [app.appName, app.identifier]),
-    ].some((value) => value?.toLowerCase().includes(query)),
+    ], search),
   );
 }
 
 function filterReplyApps(apps: ReviewAppCard[], search?: string) {
-  const query = search?.trim().toLowerCase();
-  if (!query) return apps;
-
   return apps.filter((app) =>
-    [app.appName, app.identifier, app.storeAccountName].some((value) =>
-      value.toLowerCase().includes(query),
-    ),
+    valuesMatchSearch([app.appName, app.identifier, app.storeAccountName], search),
   );
 }
 

@@ -1,9 +1,10 @@
 import "server-only";
 
-import type { MappingStatus, Prisma } from "@prisma/client";
+import { CredentialStatus, type MappingStatus, type Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { upsertAndroidStoreProfile } from "@/lib/server/repositories/android/store-profile.repository";
+import { searchTextVariants } from "@/lib/search";
 import { nullableAppId } from "@/lib/tracking/identity";
 
 type SaveAndroidStoreMappingInput = {
@@ -50,15 +51,17 @@ function androidStoreMappingWhere(options: AndroidStoreMappingPageOptions): Pris
   }
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
 
-    where.OR = [
-      { appName: contains },
-      { appId: contains },
-      { packageName: contains },
-      { storeAccountName: contains },
-      { storeProfile: { storeAccountName: contains } },
-    ];
+      return [
+        { appName: contains },
+        { appId: contains },
+        { packageName: contains },
+        { storeAccountName: contains },
+        { storeProfile: { storeAccountName: contains } },
+      ];
+    });
   }
 
   return where;
@@ -92,6 +95,23 @@ export async function getAndroidStoreMappingId(id: string) {
   });
 
   return mapping?.id ?? null;
+}
+
+export function getAndroidStoreMappingForListingUpload(id: string) {
+  return prisma.androidStoreMapping.findUnique({
+    where: { id },
+    include: {
+      storeProfile: {
+        include: {
+          credentials: {
+            where: { status: CredentialStatus.ACTIVE },
+            orderBy: { updatedAt: "desc" },
+            take: 1,
+          },
+        },
+      },
+    },
+  });
 }
 
 export async function saveAndroidStoreMapping(
