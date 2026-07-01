@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { valuesMatchSearch } from "@/lib/search";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
 import type {
@@ -55,7 +56,8 @@ function appMatchesRouteId(app: StoreMapping, appId: string) {
     app.id === appId ||
     app.app_id?.toLowerCase() === normalizedAppId ||
     app.package_name?.toLowerCase() === normalizedAppId ||
-    app.bundle_id?.toLowerCase() === normalizedAppId
+    app.bundle_id?.toLowerCase() === normalizedAppId ||
+    valuesMatchSearch([app.id, app.app_id, app.package_name, app.bundle_id], appId)
   );
 }
 
