@@ -342,6 +342,8 @@ export function deviceTokenMatchesApp(
   const appIdentifier = app.platform === "android" ? app.package_name : app.bundle_id;
   const deviceIdentifiers = normalizedValues([device.app_identifier]);
   if (sameValue(appIdentifier, device.app_identifier)) return true;
+  if (sameValue(app.package_name, device.package_name)) return true;
+  if (sameValue(app.bundle_id, device.bundle_id)) return true;
 
   const appIds = normalizedValues([app.app_id]);
   const deviceIds = normalizedValues([device.app_id, device.product_app_id]);
@@ -349,8 +351,6 @@ export function deviceTokenMatchesApp(
     return valuesOverlap(appIds, deviceIds);
   }
 
-  if (sameValue(app.package_name, device.package_name)) return true;
-  if (sameValue(app.bundle_id, device.bundle_id)) return true;
   return !deviceIds.length && !deviceIdentifiers.length && sameValue(device.store_account_name, app.store_account_name);
 }
 
@@ -485,6 +485,7 @@ export function AppSearchDropdown({
     () => apps.filter((app) => appMatchesSearch(app, query)).slice(0, 8),
     [apps, query],
   );
+  const cleanQuery = query.trim();
 
   function applyValue(nextValue: string) {
     const cleanValue = nextValue.trim();
@@ -559,10 +560,23 @@ export function AppSearchDropdown({
               </button>
             ))}
           </div>
+        ) : cleanQuery ? (
+          <button
+            type="button"
+            onClick={() => applyValue(cleanQuery)}
+            onMouseDown={(event) => event.preventDefault()}
+            className="flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground">
+              <Search size={15} />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">Search all apps</div>
+              <div className="truncate font-mono text-[11px] text-muted-foreground">{cleanQuery}</div>
+            </div>
+          </button>
         ) : (
-          <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-            No matching apps
-          </div>
+          <div className="px-3 py-6 text-center text-sm text-muted-foreground">No apps available</div>
         )}
       </PopoverContent>
     </Popover>
