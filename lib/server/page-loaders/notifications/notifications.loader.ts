@@ -13,9 +13,11 @@ import { paginatedResult, type PaginationQuery } from "@/lib/server/api/paginati
 import { getAndroidCredentialConfigs } from "@/lib/server/services/credentials/android-credential.service";
 import { getIosCredentialConfigs } from "@/lib/server/services/credentials/ios-credential.service";
 import {
+  getActiveDeviceTokenCountsForApps,
   getDeviceTokenPageForApps,
-  getDeviceTokenSummariesForDeviceIds,
   getDeviceTokenSummariesForApps,
+  getDeviceTokenSummariesForDeviceIds,
+  getDeviceTokenSummaryPageForApps,
   getNotificationEventPageForJob,
   getNotificationEventsForJobs,
   getNotificationJobPage,
@@ -96,6 +98,7 @@ function emptyNotificationsData(): NotificationsPageData {
   return {
     credentialSecrets: [],
     deviceTokens: [],
+    notificationDeviceCounts: {},
     notificationDeliveryEvents: [],
     notificationEvents: [],
     notificationJobs: [],
@@ -167,6 +170,7 @@ function scopedNotificationsData(
       data.storeMappings,
     ),
     deviceTokens,
+    notificationDeviceCounts: data.notificationDeviceCounts,
     notificationDeliveryEvents: scopedNotificationEvents(
       data.notificationDeliveryEvents,
       notificationJobs,
@@ -485,20 +489,73 @@ export async function getNotificationSendPageData(
     getNotificationStoreMappings(session),
     getFirebaseCredentialSecrets(),
   ]);
-  const [notificationSchedules, deviceTokens] = await Promise.all([
+  const [notificationSchedules, deviceCounts] = await Promise.all([
     getNotificationSchedulesForApps(storeMappings, NOTIFICATION_SCAN_LIMIT),
-    getDeviceTokenSummariesForApps(storeMappings, NOTIFICATION_SCAN_LIMIT, { activeOnly: true }),
+    getActiveDeviceTokenCountsForApps(storeMappings),
   ]);
 
   return scopedNotificationsData(
     session,
     notificationData({
       credentialSecrets,
-      deviceTokens,
+      notificationDeviceCounts: deviceCounts,
       notificationSchedules,
       storeMappings,
     }),
   );
+}
+
+export async function getNotificationSendDevicePageData(
+  session: ConsoleSession,
+  appId: string,
+  options?: NotificationListOptions,
+): Promise<NotificationsPageData> {
+  const pagination = paginationFromOptions(options, 100);
+  const storeMappings = await getNotificationStoreMappings(session);
+  const selectedApp = appFilterForRoute(storeMappings, appId);
+  let tokenResult: Awaited<ReturnType<typeof getDeviceTokenSummaryPageForApps>> = {
+    activeTotal: 0,
+    data: [],
+    total: 0,
+  };
+
+  if (selectedApp) {
+    tokenResult = await getDeviceTokenSummaryPageForApps([selectedApp], {
+      activeOnly: true,
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      search: options?.search,
+    });
+  }
+
+  const tokenPage = paginatedResult(
+    tokenResult.data,
+    tokenResult.total,
+    pagination,
+  );
+  const scoped = scopedNotificationsData(
+    session,
+    notificationData({
+      deviceTokens: tokenResult.data,
+      notificationDeviceCounts: selectedApp ? { [selectedApp.id]: tokenResult.total } : {},
+      storeMappings,
+    }),
+  );
+
+  return {
+    ...scoped,
+    notificationPagination: {
+      ...scoped.notificationPagination,
+      tokens: metaFromResult(tokenPage),
+    },
+    notificationSummary: {
+      ...emptySummary,
+      activeTokens: tokenResult.activeTotal,
+      appCount: selectedApp ? 1 : 0,
+      totalTokens: tokenResult.total,
+    },
+    storeMappings: selectedApp ? [selectedApp] : [],
+  };
 }
 
 export async function getNotificationSchedulesPageData(

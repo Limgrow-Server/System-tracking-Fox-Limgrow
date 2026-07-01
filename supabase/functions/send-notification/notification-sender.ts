@@ -25,11 +25,13 @@ export type SendNotificationRequest = {
   data?: unknown;
   deviceIds?: string[];
   imageUrl?: string;
+  jobId?: string;
   message?: string;
   notifications?: LocaleNotificationInput[];
   packageName?: string;
   platform?: MobilePlatform;
   productAppId?: string;
+  queuedBatchId?: string;
   scheduleId?: string;
   storeAccountName?: string;
   storeProfileId?: string;
@@ -134,7 +136,49 @@ function primaryLocale(locales: LocaleNotification[]) {
 
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
+const MAX_DEVICE_TARGETS = 1000;
+const DEVICE_TOKEN_QUERY_BATCH_SIZE = 50;
+const DB_WRITE_BATCH_SIZE = 100;
+const DEFAULT_FCM_SEND_CONCURRENCY = 10;
 const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
+
+function chunks<T>(items: T[], size: number) {
+  const groups: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    groups.push(items.slice(index, index + size));
+  }
+  return groups;
+}
+
+function intDenoEnv(name: string, fallback: number, min: number, max: number) {
+  const parsed = Number(Deno.env.get(name));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+}
+
+function fcmSendConcurrency() {
+  return intDenoEnv("FCM_SEND_CONCURRENCY", DEFAULT_FCM_SEND_CONCURRENCY, 1, 50);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }));
+
+  return results;
+}
 
 function base64Url(input: string | ArrayBuffer) {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : new Uint8Array(input);
@@ -222,6 +266,21 @@ export async function requireAdminCaller(supabase: SupabaseAdminClient, request:
   };
 }
 
+export async function requireAdminOrInternalCaller(supabase: SupabaseAdminClient, request: Request): Promise<Caller> {
+  const expectedSecret = clean(Deno.env.get("NOTIFICATION_DISPATCH_SECRET")) || clean(Deno.env.get("NOTIFICATION_QUEUE_SECRET"));
+  const providedSecret = clean(request.headers.get("x-dispatch-secret")) || clean(request.headers.get("x-notification-queue-secret"));
+
+  if (expectedSecret && providedSecret && expectedSecret === providedSecret) {
+    return {
+      authUserId: "notification-worker",
+      email: "notification-worker@system.local",
+      memberId: "notification-worker",
+    };
+  }
+
+  return requireAdminCaller(supabase, request);
+}
+
 function inferPlatform(payload: SendNotificationRequest): MobilePlatform {
   if (payload.platform === "android" || payload.platform === "ios") return payload.platform;
   if (clean(payload.bundleId)) return "ios";
@@ -243,7 +302,7 @@ function normalizeTargetType(value: unknown): TargetType {
 
 function normalizeDeviceIds(value: unknown) {
   const rawItems = Array.isArray(value) ? value : [];
-  return Array.from(new Set(rawItems.map((item) => clean(item)).filter(Boolean))).slice(0, 500);
+  return Array.from(new Set(rawItems.map((item) => clean(item)).filter(Boolean))).slice(0, MAX_DEVICE_TARGETS);
 }
 
 function notificationAppId(payload: SendNotificationRequest) {
@@ -615,16 +674,19 @@ async function getDeviceTargets(
 ) {
   if (!input.deviceIds.length) return [];
 
-  const query = supabase
-    .from("device_tokens")
-    .select("id,app_id,app_identifier,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,firebase_project_id,status")
-    .eq("platform", input.platform)
-    .eq("status", "active")
-    .in("device_id", input.deviceIds);
+  const rows: Record<string, unknown>[] = [];
 
-  const { data, error } = await query;
+  for (const deviceIdBatch of chunks(input.deviceIds, DEVICE_TOKEN_QUERY_BATCH_SIZE)) {
+    const { data, error } = await supabase
+      .from("device_tokens")
+      .select("id,app_id,app_identifier,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,firebase_project_id,status")
+      .eq("platform", input.platform)
+      .eq("status", "active")
+      .in("device_id", deviceIdBatch);
 
-  if (error) throw error;
+    if (error) throw error;
+    rows.push(...((data ?? []) as Record<string, unknown>[]));
+  }
 
   const appId = normalizeAppId(input.appId);
   const appName = clean(input.appName);
@@ -640,8 +702,7 @@ async function getDeviceTargets(
   });
   const requestedAppKeys = Array.from(new Set([appId, productAppId, appId || productAppId ? "" : appName].filter(Boolean)));
 
-  return (data ?? []).map((row) => {
-    const record = row as Record<string, unknown>;
+  return rows.map((record) => {
     return {
       appIdentifier: stringValue(record.app_identifier),
       appId: stringValue(record.app_id),
@@ -719,6 +780,21 @@ async function insertJob(
   return data as Record<string, unknown>;
 }
 
+async function getExistingJob(
+  supabase: SupabaseAdminClient,
+  jobId: string,
+) {
+  const { data, error } = await supabase
+    .from("notification_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) throw new Error("notification_job_not_found");
+  return data as Record<string, unknown>;
+}
+
 async function writeEvents(
   supabase: SupabaseAdminClient,
   input: {
@@ -756,8 +832,11 @@ async function writeEvents(
   }));
 
   if (!rows.length) return;
-  const { error } = await supabase.from("notification_events").insert(rows);
-  if (error) throw error;
+
+  for (const rowBatch of chunks(rows, DB_WRITE_BATCH_SIZE)) {
+    const { error } = await supabase.from("notification_events").insert(rowBatch);
+    if (error) throw error;
+  }
 }
 
 async function markInvalidDeviceTokens(
@@ -774,16 +853,18 @@ async function markInvalidDeviceTokens(
 
   if (!invalidDeviceTokenIds.length) return;
 
-  const { error } = await supabase
-    .from("device_tokens")
-    .update({
-      last_seen_at: new Date().toISOString(),
-      status: "invalid",
-    })
-    .eq("platform", input.platform)
-    .in("id", invalidDeviceTokenIds);
+  for (const tokenIdBatch of chunks(invalidDeviceTokenIds, DB_WRITE_BATCH_SIZE)) {
+    const { error } = await supabase
+      .from("device_tokens")
+      .update({
+        last_seen_at: new Date().toISOString(),
+        status: "invalid",
+      })
+      .eq("platform", input.platform)
+      .in("id", tokenIdBatch);
 
-  if (error) throw error;
+    if (error) throw error;
+  }
 }
 
 async function updateJob(
@@ -898,17 +979,22 @@ export async function sendNotificationPayload(
   if (targetType === "device" && !deviceIds.length) throw new Error("device_ids_required");
   if (targetType === "topic" && !topicBase) throw new Error("topic_base_required");
 
-  const job = await insertJob(supabase, {
-    actorEmail,
-    dataPayload,
-    imageUrl,
-    locales,
-    payload,
-    platform,
-    targetType,
-    targetValues: initialTargetValues,
-    topicBase,
-  });
+  const queuedJobId = clean(payload.jobId);
+  const queuedBatchId = clean(payload.queuedBatchId);
+  const usesExistingJob = Boolean(queuedJobId && queuedBatchId);
+  const job = usesExistingJob
+    ? await getExistingJob(supabase, queuedJobId)
+    : await insertJob(supabase, {
+      actorEmail,
+      dataPayload,
+      imageUrl,
+      locales,
+      payload,
+      platform,
+      targetType,
+      targetValues: initialTargetValues,
+      topicBase,
+    });
   const jobId = clean(job.id);
 
   try {
@@ -981,7 +1067,7 @@ export async function sendNotificationPayload(
       });
       const devicesById = new Map(devices.map((device) => [device.deviceId, device]));
 
-      for (const deviceId of deviceIds) {
+      results.push(...await mapWithConcurrency(deviceIds, fcmSendConcurrency(), async (deviceId) => {
         const device = devicesById.get(deviceId);
         if (!device) {
           logSendFailure("No active FCM token found for requested device", {
@@ -993,18 +1079,17 @@ export async function sendNotificationPayload(
             targetType,
           });
 
-          results.push(failedResult({
+          return failedResult({
             deviceId,
             error: `No active ${platform} FCM token found for device_id ${deviceId}`,
             status: 404,
             targetType,
             targetValue: deviceId,
-          }));
-          continue;
+          });
         }
 
         const locale = localeForDevice(device, locales);
-        results.push(await sendFcm({
+        return sendFcm({
           accessToken,
           body: locale.body,
           clientEmail,
@@ -1028,8 +1113,8 @@ export async function sendNotificationPayload(
           targetValue: device.fcmToken,
           title: locale.title,
           topicCode: locale.topicCode,
-        }));
-      }
+        });
+      }));
     }
 
     const sentCount = results.filter((result) => result.ok).length;
@@ -1070,16 +1155,18 @@ export async function sendNotificationPayload(
 
     await writeEvents(supabase, { jobId, platform, results });
     await markInvalidDeviceTokens(supabase, { platform, results });
-    const updatedJob = await updateJob(supabase, {
-      credentialRef: config.firebaseAdmin.credential.credentialRef,
-      errorCount,
-      jobId,
-      platform,
-      projectId,
-      resolvedPayload,
-      sentCount,
-      targetValues: targetType === "device" ? deviceIds : results.map((result) => result.targetValue),
-    });
+    const updatedJob = usesExistingJob
+      ? job
+      : await updateJob(supabase, {
+        credentialRef: config.firebaseAdmin.credential.credentialRef,
+        errorCount,
+        jobId,
+        platform,
+        projectId,
+        resolvedPayload,
+        sentCount,
+        targetValues: targetType === "device" ? deviceIds : results.map((result) => result.targetValue),
+      });
 
     return {
       app: config.app,
@@ -1115,15 +1202,17 @@ export async function sendNotificationPayload(
       })
     );
     await writeEvents(supabase, { jobId, platform, results });
-    const updatedJob = await updateJob(supabase, {
-      credentialRef: clean(payload.credentialRef) || null,
-      errorCount: results.length,
-      jobId,
-      platform,
-      projectId: null,
-      sentCount: 0,
-      targetValues: initialTargetValues,
-    });
+    const updatedJob = usesExistingJob
+      ? job
+      : await updateJob(supabase, {
+        credentialRef: clean(payload.credentialRef) || null,
+        errorCount: results.length,
+        jobId,
+        platform,
+        projectId: null,
+        sentCount: 0,
+        targetValues: initialTargetValues,
+      });
 
     return {
       app: null,

@@ -51,6 +51,29 @@ type DeviceTokenPageOptions = {
   take?: number;
 };
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  callback: (item: T) => Promise<R>,
+) {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await callback(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(limit, 1), items.length) }, () => worker()),
+  );
+
+  return results;
+}
+
 type NotificationRecordPageOptions = {
   apps?: StoreMapping[];
   page?: number;
@@ -490,6 +513,58 @@ export async function getDeviceTokenSummariesForApps(
   });
 
   return devices.map(deviceTokenSummaryToTracking);
+}
+
+export async function getActiveDeviceTokenCountsForApps(apps: StoreMapping[]) {
+  if (!apps.length) return {};
+
+  const entries = await mapWithConcurrency(apps, 8, async (app) => {
+    const count = await prisma.deviceToken.count({
+      where: deviceTokenWhereForApps([app], { activeOnly: true }),
+    });
+
+    return [app.id, count] as const;
+  });
+
+  return Object.fromEntries(entries) as Record<string, number>;
+}
+
+export async function getDeviceTokenSummaryPageForApps(
+  apps: StoreMapping[],
+  options: DeviceTokenPageOptions = {},
+) {
+  if (!apps.length) {
+    return { activeTotal: 0, data: [], total: 0 };
+  }
+
+  const pageSize = options.pageSize ?? options.take ?? 10;
+  const page = options.page ?? 1;
+  const skip = options.skip ?? (page - 1) * pageSize;
+  const where = deviceTokenWhereForApps(apps, {
+    activeOnly: options.activeOnly,
+    search: options.search,
+  });
+  const activeWhere = deviceTokenWhereForApps(apps, {
+    activeOnly: true,
+    search: options.search,
+  });
+  const [total, activeTotal, devices] = await prisma.$transaction([
+    prisma.deviceToken.count({ where }),
+    prisma.deviceToken.count({ where: activeWhere }),
+    prisma.deviceToken.findMany({
+      orderBy: { lastSeenAt: "desc" },
+      select: deviceTokenSummarySelect,
+      skip,
+      take: pageSize,
+      where,
+    }),
+  ]);
+
+  return {
+    activeTotal,
+    data: devices.map(deviceTokenSummaryToTracking),
+    total,
+  };
 }
 
 export async function getDeviceTokenPageForApps(

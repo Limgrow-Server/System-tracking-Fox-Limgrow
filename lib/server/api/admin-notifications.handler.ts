@@ -15,11 +15,16 @@ import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, ApiError, forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
+import {
+  enqueueNotificationDeviceJob,
+  notificationDirectDeviceLimit,
+} from "@/lib/server/services/notifications/notification-batch-queue.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import { createClient } from "@/lib/supabase/server";
 import {
   deviceTokenToTracking,
+  notificationJobToTracking,
   notificationScheduleToTracking,
 } from "@/lib/tracking/mappers/notification";
 import { firstAppId } from "@/lib/tracking/identity";
@@ -354,6 +359,37 @@ export async function handleAdminNotificationSendPost(request: Request) {
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     await assertNotificationAccess(session, payload);
+    const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
+    const deviceIds = stringArray(payload.deviceIds || payload.targetValues);
+    const queueByApp =
+      payload.queueByApp === true ||
+      clean(payload.queueMode).toLowerCase() === "app" ||
+      clean(payload.queueMode).toLowerCase() === "app_filter";
+
+    if (targetType === "device" && (queueByApp || deviceIds.length > notificationDirectDeviceLimit())) {
+      const queued = await enqueueNotificationDeviceJob(
+        {
+          ...payload,
+          deviceIds: queueByApp ? [] : deviceIds,
+          queueByApp,
+          targetType,
+        },
+        session.email,
+      );
+
+      revalidateCacheTags([
+        CACHE_TAGS.notificationJobs,
+      ]);
+
+      return okJson({
+        message: `Notification queued into ${queued.batchCount} batch(es).`,
+        result: {
+          ...queued,
+          job: notificationJobToTracking(queued.job),
+        },
+      });
+    }
+
     const result = await callEdgeFunction("send-notification", payload);
     revalidateCacheTags([
       CACHE_TAGS.notificationEvents,

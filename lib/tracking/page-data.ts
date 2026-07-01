@@ -36,6 +36,7 @@ export type ConfigsPageData = {
 
 export type NotificationsPageData = {
   credentialSecrets: CredentialSecretMetadata[];
+  notificationDeviceCounts: Record<string, number>;
   deviceTokens: DeviceToken[];
   notificationDeliveryEvents: NotificationEvent[];
   notificationEvents: NotificationEvent[];

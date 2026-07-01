@@ -65,6 +65,7 @@ model NotificationJob {
   createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   schedule         NotificationSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  batches          NotificationJobBatch[]
   events           NotificationEvent[]
 
   @@index([scheduleId, createdAt], map: "notification_jobs_schedule_created_idx")
@@ -73,6 +74,34 @@ model NotificationJob {
   @@index([appId, platform, createdAt], map: "notification_jobs_app_id_platform_created_idx")
   @@index([appName, platform, createdAt], map: "notification_jobs_app_platform_created_idx")
   @@map("notification_jobs")
+}
+
+model NotificationJobBatch {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId         String          @map("job_id") @db.Uuid
+  batchIndex    Int             @map("batch_index")
+  targetValues  String[]        @default([]) @map("target_values")
+  status        String          @default("queued")
+  attemptCount  Int             @default(0) @map("attempt_count")
+  maxAttempts   Int             @default(3) @map("max_attempts")
+  lockedAt      DateTime?       @map("locked_at") @db.Timestamptz(6)
+  lockedBy      String?         @map("locked_by")
+  nextAttemptAt DateTime        @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  startedAt     DateTime?       @map("started_at") @db.Timestamptz(6)
+  finishedAt    DateTime?       @map("finished_at") @db.Timestamptz(6)
+  sentCount     Int             @default(0) @map("sent_count")
+  errorCount    Int             @default(0) @map("error_count")
+  lastError     String?         @map("last_error") @db.Text
+  resultPayload Json            @default("{}") @map("result_payload")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  job           NotificationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, batchIndex], map: "notification_job_batches_job_batch_key")
+  @@index([jobId, status], map: "notification_job_batches_job_status_idx")
+  @@index([status, nextAttemptAt], map: "notification_job_batches_status_next_idx")
+  @@index([lockedAt], map: "notification_job_batches_locked_idx")
+  @@map("notification_job_batches")
 }
 
 model NotificationSchedule {
