@@ -639,6 +639,20 @@ export async function getActiveDeviceIdsForNotificationTarget(
   return rows.map((row) => row.deviceId).filter(Boolean);
 }
 
+export async function getActiveDeviceTokenIdsForNotificationTarget(
+  input: NotificationDeviceTargetInput,
+  take: number,
+) {
+  const devices = await prisma.deviceToken.findMany({
+    orderBy: { lastSeenAt: "desc" },
+    select: { id: true },
+    take,
+    where: deviceTokenWhereForNotificationTarget(input, { activeOnly: true }),
+  });
+
+  return devices.map((device) => device.id).filter(Boolean);
+}
+
 export async function getDeviceTokenSummaryPageForApps(
   apps: StoreMapping[],
   options: DeviceTokenPageOptions = {},

@@ -16,6 +16,7 @@ const DEFAULT_QUEUE_MAX_ATTEMPTS = 3;
 const DEVICE_SCAN_PAGE_SIZE = 5000;
 const BATCH_CREATE_PAGE_SIZE = 100;
 const LOCK_TTL_MS = 10 * 60_000;
+const QUEUE_TARGET_KIND_KEY = "__notificationQueueTargetKind";
 
 type LocaleNotification = {
   message: string;
@@ -181,7 +182,6 @@ async function materializeDatabaseDeviceBatches(input: {
 }) {
   const batchSize = notificationQueueBatchSize();
   const where = buildDeviceWhere(input.payload);
-  const seen = new Set<string>();
   let cursor: { id: string } | undefined;
   let currentBatch: string[] = [];
   let pendingRows: Array<{ batchIndex: number; targetValues: string[] }> = [];
@@ -197,7 +197,7 @@ async function materializeDatabaseDeviceBatches(input: {
   while (true) {
     const rows = await prisma.deviceToken.findMany({
       where,
-      select: { deviceId: true, id: true },
+      select: { id: true },
       orderBy: { id: "asc" },
       take: DEVICE_SCAN_PAGE_SIZE,
       ...(cursor ? { cursor, skip: 1 } : {}),
@@ -207,11 +207,10 @@ async function materializeDatabaseDeviceBatches(input: {
     cursor = { id: rows[rows.length - 1].id };
 
     for (const row of rows) {
-      const deviceId = clean(row.deviceId);
-      if (!deviceId || seen.has(deviceId)) continue;
+      const tokenId = clean(row.id);
+      if (!tokenId) continue;
 
-      seen.add(deviceId);
-      currentBatch.push(deviceId);
+      currentBatch.push(tokenId);
       targetCount += 1;
 
       if (currentBatch.length >= batchSize) {
@@ -245,6 +244,12 @@ export async function enqueueNotificationDeviceJob(
   const notifications = normalizedNotifications(payload.notifications);
   const firstNotification = primaryNotification(notifications);
   const appId = notificationAppId(payload);
+  const deviceIds = stringArray(payload.deviceIds || payload.targetValues);
+  const queueTargetKind = deviceIds.length ? "device_id" : "device_token_id";
+  const dataPayload = {
+    ...jsonObject(payload.data),
+    [QUEUE_TARGET_KIND_KEY]: queueTargetKind,
+  };
   const topicBase =
     topicSegment(payload.topicBase) ||
     appId ||
@@ -252,15 +257,13 @@ export async function enqueueNotificationDeviceJob(
     clean(payload.productAppId) ||
     (clean(payload.platform) === "ios" ? clean(payload.bundleId) : clean(payload.packageName)) ||
     "notification";
-  const deviceIds = stringArray(payload.deviceIds || payload.targetValues);
-
   const job = await prisma.notificationJob.create({
     data: {
       appId,
       appName: clean(payload.appName) || clean(payload.productAppId) || "unknown_app",
       bundleId: clean(payload.bundleId) || null,
       credentialRef: clean(payload.credentialRef) || null,
-      dataPayload: jsonObject(payload.data) as Prisma.InputJsonValue,
+      dataPayload: dataPayload as Prisma.InputJsonValue,
       imageUrl: clean(payload.imageUrl) || null,
       localePayload: notifications as Prisma.InputJsonValue,
       message: firstNotification.message,
@@ -366,13 +369,20 @@ async function recoverStaleNotificationBatches(now: Date) {
 }
 
 function edgePayloadFromJob(job: NotificationJob, batch: NotificationBatchRow) {
+  const dataPayload = jsonObject(job.dataPayload);
+  const targetKind = clean(dataPayload[QUEUE_TARGET_KIND_KEY]) === "device_token_id"
+    ? "device_token_id"
+    : "device_id";
+  delete dataPayload[QUEUE_TARGET_KIND_KEY];
+
   return {
     appId: job.appId,
     appName: job.appName,
     bundleId: job.bundleId,
     credentialRef: job.credentialRef,
-    data: jsonObject(job.dataPayload),
-    deviceIds: batch.target_values,
+    data: dataPayload,
+    deviceIds: targetKind === "device_id" ? batch.target_values : [],
+    deviceTokenIds: targetKind === "device_token_id" ? batch.target_values : [],
     imageUrl: job.imageUrl,
     jobId: job.id,
     notifications: Array.isArray(job.localePayload) ? job.localePayload : [],
