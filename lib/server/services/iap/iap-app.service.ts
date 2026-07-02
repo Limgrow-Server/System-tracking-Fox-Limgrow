@@ -21,6 +21,7 @@ import {
 } from "@/lib/server/api/pagination";
 import type { IapAppCard, IapAppTransaction } from "@/lib/tracking/page-data";
 import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
+import { getIosTrialConversionAnalytics } from "@/lib/server/services/iap/ios-iap-analytics.service";
 import { iosIapTransactionToSummary } from "@/lib/tracking/mappers/ios";
 
 type IapAppCardOptions = {
@@ -134,12 +135,13 @@ export async function getIapAppDetail(
   platform: string,
   options: PaginationQuery & {
     kind?: string;
-    search?: string;
     state?: string;
+    trial?: string;
   },
 ): Promise<{
   appCard: IapAppCard;
   metricTransactions: IapAppTransaction[];
+  trialAnalytics: Awaited<ReturnType<typeof getIosTrialConversionAnalytics>> | null;
   transactionStates: string[];
   transactions: PaginatedResult<IapAppTransaction>;
 }> {
@@ -180,6 +182,7 @@ export async function getIapAppDetail(
     return {
       appCard,
       metricTransactions: metricTransactions.map(iapAndroidToDto),
+      trialAnalytics: null,
       transactionStates,
       transactions: paginatedResult(
         rawTransactions.map(iapAndroidToDto),
@@ -203,8 +206,12 @@ export async function getIapAppDetail(
       storeProfileId: mapping.storeProfileId,
     };
 
-    const [[rawTransactions, total], metricTransactions, transactionStates] =
-      await Promise.all([
+    const [
+      [rawTransactions, total],
+      metricTransactions,
+      transactionStates,
+      trialAnalytics,
+    ] = await Promise.all([
         getIosTransactionsByBundleIdPage(
           mapping.bundleId,
           mapping.storeProfileId,
@@ -219,11 +226,13 @@ export async function getIapAppDetail(
           mapping.bundleId,
           mapping.storeProfileId,
         ),
+        getIosTrialConversionAnalytics(mapping.bundleId, mapping.storeProfileId),
       ]);
 
     return {
       appCard,
       metricTransactions: metricTransactions.map(iosIapTransactionToSummary),
+      trialAnalytics,
       transactionStates,
       transactions: paginatedResult(
         rawTransactions.map(iosIapTransactionToSummary),

@@ -74,14 +74,70 @@ export type IapAppGridPageData = {
 
 export type IapAppTransaction = IapAndroidDto | IosIapTransactionSummary;
 
+export type IapTrialConversionCohort = {
+  label: string;
+  trialStarted: number;
+  converted: number;
+  refunded: number;
+  renewalRevenueMicros: string;
+  conversionRate: number;
+};
+
+export type IapTrialConversionGranularity = "day" | "week" | "month";
+
+export type IapNotificationEventDto = {
+  id: string;
+  notificationUuid: string;
+  notificationType: string;
+  subtype: string | null;
+  environment: string | null;
+  status: string;
+  bundleId: string | null;
+  appAppleId: string | null;
+  originalTransactionId: string | null;
+  transactionId: string | null;
+  signedDate: string | null;
+  receivedAt: string;
+  processedAt: string | null;
+  errorMessage: string | null;
+  rawPayload: unknown;
+  decodedPayload: unknown;
+};
+
+export type IapTrialConversionAnalytics = {
+  activeAfterTrialCount: number;
+  avgDaysToConversion: number | null;
+  cohorts: IapTrialConversionCohort[];
+  cohortsByGranularity: Record<
+    IapTrialConversionGranularity,
+    IapTrialConversionCohort[]
+  >;
+  conversionRate: number;
+  convertedCount: number;
+  ignoredNotificationCount: number;
+  lastNotificationAt: string | null;
+  notConvertedCount: number;
+  pendingCount: number;
+  processedNotificationCount: number;
+  recentNotificationEvents: IapNotificationEventDto[];
+  refundedCount: number;
+  refundRate: number;
+  revokedCount: number;
+  trialStartedCount: number;
+  failedNotificationCount: number;
+  trialRevenueMicros: string;
+  renewalRevenueMicros: string;
+};
+
 export type IapAppDetailPageData = {
   app: IapAppCard;
   filters: {
     kind: string;
-    search: string;
     state: string;
+    trial: string;
   };
   metricTransactions: IapAppTransaction[];
+  trialAnalytics: IapTrialConversionAnalytics | null;
   transactionPagination: PaginationMeta;
   transactionStates: string[];
   transactions: IapAppTransaction[];

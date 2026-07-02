@@ -241,11 +241,25 @@ export async function getIosTransactionsByBundleId(
 type IosTransactionPageOptions = {
   page: number;
   pageSize: number;
-  search?: string;
   skip: number;
   state?: string;
   take: number;
+  trial?: string;
 };
+
+function iosFreeTrialWhere(): Prisma.IosIapTransactionWhereInput {
+  return {
+    OR: [
+      { isTrial: true },
+      { offerDiscountType: { equals: "free_trial", mode: "insensitive" } },
+      {
+        offerType: 1,
+        priceMilliunits: BigInt(0),
+        revenueMicros: BigInt(0),
+      },
+    ],
+  };
+}
 
 function iosTransactionWhere(
   bundleId: string,
@@ -258,27 +272,25 @@ function iosTransactionWhere(
       ? { OR: [{ storeProfileId }, { storeProfileId: null }] }
       : {}),
   };
-  const search = options?.search?.trim();
   const state = options?.state?.trim();
-
-  if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
-    where.AND = [
-      ...(where.AND instanceof Array ? where.AND : []),
-      {
-        OR: [
-          { transactionId: contains },
-          { originalTransactionId: contains },
-          { productId: contains },
-          { bundleId: contains },
-          { userId: contains },
-        ],
-      },
-    ];
-  }
+  const trial = options?.trial?.trim();
 
   if (state && state !== "all") {
     where.state = { equals: state, mode: "insensitive" };
+  }
+
+  if (trial === "trial") {
+    where.AND = [
+      ...(where.AND instanceof Array ? where.AND : []),
+      iosFreeTrialWhere(),
+    ];
+  }
+
+  if (trial === "non_trial") {
+    where.AND = [
+      ...(where.AND instanceof Array ? where.AND : []),
+      { NOT: iosFreeTrialWhere() },
+    ];
   }
 
   return where;
@@ -311,6 +323,59 @@ export function getIosTransactionsByBundleIdMetrics(
     where: iosTransactionWhere(bundleId, storeProfileId, options),
     orderBy: { verifiedAt: "desc" },
   });
+}
+
+export function getIosTrialAnalyticsTransactions(
+  bundleId: string,
+  storeProfileId: string | undefined,
+) {
+  return prisma.iosIapTransaction.findMany({
+    where: iosTransactionWhere(bundleId, storeProfileId),
+    orderBy: [
+      { originalTransactionId: "asc" },
+      { purchaseDate: "asc" },
+      { verifiedAt: "asc" },
+    ],
+  });
+}
+
+export function getIosIapNotificationEventsByBundleId(
+  bundleId: string,
+  storeProfileId: string | undefined,
+  take = 8,
+) {
+  return prisma.iosIapNotificationEvent.findMany({
+    where: {
+      bundleId,
+      ...(storeProfileId ? { storeProfileId } : {}),
+    },
+    orderBy: { receivedAt: "desc" },
+    take,
+  });
+}
+
+export async function getIosIapNotificationEventSummaryByBundleId(
+  bundleId: string,
+  storeProfileId: string | undefined,
+) {
+  const where: Prisma.IosIapNotificationEventWhereInput = {
+    bundleId,
+    ...(storeProfileId ? { storeProfileId } : {}),
+  };
+  const [counts, latest] = await Promise.all([
+    prisma.iosIapNotificationEvent.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true },
+    }),
+    prisma.iosIapNotificationEvent.findFirst({
+      where,
+      orderBy: { receivedAt: "desc" },
+      select: { receivedAt: true },
+    }),
+  ]);
+
+  return { counts, latest };
 }
 
 export async function getIosTransactionStatesByBundleId(

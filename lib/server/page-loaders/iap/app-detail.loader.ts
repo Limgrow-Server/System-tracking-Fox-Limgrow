@@ -10,8 +10,8 @@ const IAP_TRANSACTION_PAGE_SIZE = 10;
 type IapAppDetailOptions = {
   kind?: string;
   page?: number;
-  search?: string;
   state?: string;
+  trial?: string;
 };
 
 function clean(value: string | undefined) {
@@ -29,18 +29,24 @@ export async function getIapAppDetailPageData(
   options?: IapAppDetailOptions,
 ): Promise<IapAppDetailPageData | null> {
   const page = pageNumber(options?.page);
-  const search = clean(options?.search);
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
-  const { appCard, metricTransactions, transactions, transactionStates } =
+  const trial = clean(options?.trial) || "all";
+  const {
+    appCard,
+    metricTransactions,
+    transactions,
+    transactionStates,
+    trialAnalytics,
+  } =
     await getIapAppDetail(mappingId, platform, {
       kind,
       page,
       pageSize: IAP_TRANSACTION_PAGE_SIZE,
-      search: search || undefined,
       skip: (page - 1) * IAP_TRANSACTION_PAGE_SIZE,
       state,
       take: IAP_TRANSACTION_PAGE_SIZE,
+      trial,
     });
   if (!canAccessIapApp(session, appCard)) return null;
 
@@ -48,10 +54,11 @@ export async function getIapAppDetailPageData(
     app: appCard,
     filters: {
       kind,
-      search,
       state,
+      trial,
     },
     metricTransactions,
+    trialAnalytics,
     transactionPagination: {
       page: transactions.page,
       pageSize: transactions.pageSize,

@@ -165,6 +165,12 @@ export function markIosIapNotificationEventFailed(
   });
 }
 
+export function getIosIapNotificationEventById(eventId: string) {
+  return prisma.iosIapNotificationEvent.findUnique({
+    where: { id: eventId },
+  });
+}
+
 export function upsertIosIapTransactionFromNotification(
   input: IosIapTransactionWebhookInput,
 ) {

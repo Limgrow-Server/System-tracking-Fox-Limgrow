@@ -81,6 +81,12 @@ export type IosIapTransactionSummary = {
   price_milliunits: string | null;
   currency: string | null;
   is_trial: boolean | null;
+  offer_discount_type: string | null;
+  offer_period: string | null;
+  billing_plan_type: string | null;
+  transaction_reason: string | null;
+  storefront: string | null;
+  revocation_date: string | null;
   environment: string;
   raw_receipt: unknown;
   verified_at: string;

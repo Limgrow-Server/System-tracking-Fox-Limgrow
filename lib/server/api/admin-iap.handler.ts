@@ -90,8 +90,8 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
     const detail = await getIapAppDetail(mappingId, platform, {
       ...pagination,
       kind: clean(url.searchParams.get("kind")) || "all",
-      search: clean(url.searchParams.get("search")) || undefined,
       state: clean(url.searchParams.get("state")) || "all",
+      trial: clean(url.searchParams.get("trial")) || "all",
     });
 
     if (!canAccessIapApp(session, detail.appCard)) {

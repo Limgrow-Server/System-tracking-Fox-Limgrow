@@ -15,6 +15,7 @@ import { Prisma } from "@prisma/client";
 
 import { ApiError, badRequest } from "@/lib/server/api/errors";
 import {
+  getIosIapNotificationEventById,
   getIosStoreMappingForNotification,
   markIosIapNotificationEventFailed,
   markIosIapNotificationEventProcessed,
@@ -125,6 +126,11 @@ function decodeNotificationPayloadUnsafe(signedPayload: string) {
 function notificationData(value: unknown) {
   const data = isRecord(value) ? value.data : null;
   return isRecord(data) ? data : {};
+}
+
+function signedPayloadFromRawPayload(value: unknown) {
+  if (!isRecord(value)) return "";
+  return clean(value.signedPayload);
 }
 
 function numberString(value: unknown) {
@@ -413,4 +419,19 @@ export async function processAppStoreServerNotification(
     }
     throw error;
   }
+}
+
+export async function retryFailedAppStoreServerNotification(eventId: string) {
+  const event = await getIosIapNotificationEventById(eventId);
+  if (!event) throw badRequest("App Store notification event not found.");
+  if (event.status !== "failed") {
+    throw badRequest("Only failed App Store notification events can be retried.");
+  }
+
+  const signedPayload = signedPayloadFromRawPayload(event.rawPayload);
+  if (!signedPayload) {
+    throw badRequest("Stored App Store notification signedPayload is missing.");
+  }
+
+  return processAppStoreServerNotification({ signedPayload });
 }
