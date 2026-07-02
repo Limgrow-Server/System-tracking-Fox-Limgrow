@@ -32,6 +32,7 @@ import type { NotificationsPageData } from "@/lib/tracking/page-data";
 import type {
   CredentialSecretMetadata,
   DeviceToken,
+  BackgroundJob,
   NotificationEvent,
   NotificationJob,
   NotificationSchedule,
@@ -79,6 +80,7 @@ export type SendResponse = {
   error?: string;
   result?: {
     batchCount?: number;
+    backgroundJob?: BackgroundJob | null;
     errorCount?: number;
     job?: NotificationJob;
     queued?: boolean;

@@ -3,6 +3,29 @@ export type NumberLike = number | string | null;
 export type StaffRole = "Admin" | "Dev" | "Marketing";
 export type Platform = "google_play" | "apple_app_store";
 
+export type BackgroundJob = {
+  id: string;
+  app_id: string | null;
+  app_name: string | null;
+  created_at: string;
+  created_by: string;
+  description: string | null;
+  finished_at: string | null;
+  last_error: string | null;
+  metadata: unknown;
+  platform: string | null;
+  progress_current: number;
+  progress_total: number | null;
+  source_job_id: string | null;
+  source_run_ids: string[];
+  started_at: string | null;
+  status: "queued" | "running" | "succeeded" | "failed" | "partial";
+  store_account_name: string | null;
+  title: string;
+  type: "notification_send" | "review_fetch";
+  updated_at: string;
+};
+
 export type TeamMember = {
   id: string;
   auth_user_id: string | null;

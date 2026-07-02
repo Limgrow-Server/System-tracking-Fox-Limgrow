@@ -33,6 +33,7 @@ import { ReactNode, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { BackgroundJobTray } from "@/components/tracking/background-job-tray";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import { showToast } from "@/lib/client/toast";
 import { cn } from "@/lib/utils";
@@ -646,6 +647,7 @@ export function AppShell({
           </header>
 
           <main className="flex-1 p-4 sm:p-6">{children}</main>
+          <BackgroundJobTray />
         </div>
       </div>
     </div>

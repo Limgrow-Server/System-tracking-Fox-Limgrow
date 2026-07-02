@@ -15,11 +15,8 @@ import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, ApiError, forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
-import {
-  enqueueNotificationDeviceJob,
-  notificationDirectDeviceLimit,
-} from "@/lib/server/services/notifications/notification-batch-queue.service";
-import { getActiveDeviceIdsForNotificationTarget, getActiveDeviceTokenIdsForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
+import { enqueueNotificationDeviceJob } from "@/lib/server/services/notifications/notification-batch-queue.service";
+import { getActiveDeviceIdsForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import { createClient } from "@/lib/supabase/server";
@@ -52,7 +49,6 @@ const LANGUAGES = [
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
 const HCM_OFFSET_MINUTES = 7 * 60;
-const EDGE_DIRECT_DEVICE_TARGET_LIMIT = 1000;
 const SCHEDULE_DEVICE_TARGET_LIMIT = 5000;
 const notificationManageRoles = ["Admin"] as const;
 
@@ -477,68 +473,18 @@ export async function handleAdminNotificationSendPost(request: Request) {
     canPersistFailedAttempt = true;
     const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
     const deviceIds = stringArray(payload.deviceIds || payload.targetValues);
-    const queueByApp =
-      payload.queueByApp === true ||
-      clean(payload.queueMode).toLowerCase() === "app" ||
-      clean(payload.queueMode).toLowerCase() === "app_filter";
-    const directDeviceLimit = Math.min(notificationDirectDeviceLimit(), EDGE_DIRECT_DEVICE_TARGET_LIMIT);
-
-    if (targetType === "device" && (queueByApp || !deviceIds.length)) {
-      const resolvedTokenIds = await getActiveDeviceTokenIdsForNotificationTarget(payload, directDeviceLimit + 1);
-      if (!resolvedTokenIds.length) throw badRequest("No active FCM tokens matched this notification target.");
-
-      if (resolvedTokenIds.length <= directDeviceLimit) {
-        const result = await callEdgeFunction("send-notification", {
-          ...payload,
-          deviceIds: [],
-          deviceTokenIds: resolvedTokenIds,
-          queueByApp: false,
-          targetType,
-        });
-        revalidateCacheTags([
-          CACHE_TAGS.notificationEvents,
-          CACHE_TAGS.notificationJobs,
-          CACHE_TAGS.deviceTokens,
-        ]);
-
-        return okJson({
-          message: "Notification sent.",
-          result,
-        });
-      }
-
-      const queued = await enqueueNotificationDeviceJob(
-        {
-          ...payload,
-          deviceIds: [],
-          queueByApp: true,
-          targetType,
-        },
-        session.email,
-      );
-
-      revalidateCacheTags([
-        CACHE_TAGS.notificationJobs,
-      ]);
-
-      return okJson({
-        message: `Notification queued into ${queued.batchCount} batch(es).`,
-        result: {
-          ...queued,
-          job: notificationJobToTracking(queued.job),
-        },
-      });
-    }
-
-    if (targetType === "device" && deviceIds.length > directDeviceLimit) {
+    if (targetType === "device") {
       const queued = await enqueueNotificationDeviceJob(
         {
           ...payload,
           deviceIds,
-          queueByApp: false,
+          queueByApp: Boolean(payload.queueByApp),
           targetType,
         },
-        session.email,
+        {
+          email: session.email,
+          memberId: session.memberId,
+        },
       );
 
       revalidateCacheTags([
@@ -546,9 +492,12 @@ export async function handleAdminNotificationSendPost(request: Request) {
       ]);
 
       return okJson({
-        message: `Notification queued into ${queued.batchCount} batch(es).`,
+        message: queued.targetCount
+          ? `Notification queued with ${queued.targetCount} selected target(s).`
+          : "Notification queued. Token batches will be prepared in the background.",
         result: {
           ...queued,
+          backgroundJob: queued.backgroundJob,
           job: notificationJobToTracking(queued.job),
         },
       });

@@ -7,6 +7,10 @@ import type { NotificationJob, Prisma } from "@prisma/client";
 import { firstAppId } from "@/lib/tracking/identity";
 import { prisma } from "@/lib/prisma";
 import { badRequest } from "@/lib/server/api/errors";
+import {
+  createBackgroundJob,
+  updateBackgroundJobBySourceJob,
+} from "@/lib/server/services/background-jobs/background-job.service";
 import { deviceTokenWhereForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
 
 const DEFAULT_DIRECT_DEVICE_LIMIT = 500;
@@ -17,6 +21,14 @@ const DEVICE_SCAN_PAGE_SIZE = 5000;
 const BATCH_CREATE_PAGE_SIZE = 100;
 const LOCK_TTL_MS = 10 * 60_000;
 const QUEUE_TARGET_KIND_KEY = "__notificationQueueTargetKind";
+const QUEUE_MATERIALIZED_KEY = "__notificationQueueMaterialized";
+
+type QueueActor =
+  | string
+  | {
+      email: string;
+      memberId?: string | null;
+    };
 
 type LocaleNotification = {
   message: string;
@@ -62,6 +74,17 @@ function notificationQueueBatchSize() {
 
 function notificationQueueClaimLimit() {
   return intEnv("NOTIFICATION_QUEUE_CLAIM_LIMIT", DEFAULT_QUEUE_CLAIM_LIMIT, 1, 20);
+}
+
+function normalizeActor(actor: QueueActor) {
+  if (typeof actor === "string") {
+    return { email: actor, memberId: null };
+  }
+
+  return {
+    email: clean(actor.email),
+    memberId: clean(actor.memberId),
+  };
 }
 
 function stringArray(value: unknown) {
@@ -239,8 +262,9 @@ async function materializeDatabaseDeviceBatches(input: {
 
 export async function enqueueNotificationDeviceJob(
   payload: Record<string, unknown>,
-  actorEmail: string,
+  actor: QueueActor,
 ) {
+  const normalizedActor = normalizeActor(actor);
   const notifications = normalizedNotifications(payload.notifications);
   const firstNotification = primaryNotification(notifications);
   const appId = notificationAppId(payload);
@@ -248,6 +272,7 @@ export async function enqueueNotificationDeviceJob(
   const queueTargetKind = deviceIds.length ? "device_id" : "device_token_id";
   const dataPayload = {
     ...jsonObject(payload.data),
+    [QUEUE_MATERIALIZED_KEY]: false,
     [QUEUE_TARGET_KIND_KEY]: queueTargetKind,
   };
   const topicBase =
@@ -269,54 +294,217 @@ export async function enqueueNotificationDeviceJob(
       message: firstNotification.message,
       packageName: clean(payload.packageName) || null,
       platform: clean(payload.platform) || "android",
-      requestedBy: actorEmail,
+      requestedBy: normalizedActor.email,
       scheduleId: clean(payload.scheduleId) || null,
       status: "queued",
       storeAccountName: clean(payload.storeAccountName) || null,
       storePlatform: clean(payload.storePlatform) || null,
       storeProfileId: clean(payload.storeProfileId) || null,
       targetType: "device",
-      targetValues: [],
+      targetValues: deviceIds,
       title: firstNotification.title,
       topicBase,
     },
   });
 
+  const estimatedBatchCount = deviceIds.length
+    ? Math.ceil(deviceIds.length / notificationQueueBatchSize())
+    : null;
+  const backgroundJob = normalizedActor.memberId
+    ? await createBackgroundJob({
+        appId,
+        appName: job.appName,
+        createdBy: normalizedActor.email,
+        description: deviceIds.length
+          ? `${deviceIds.length} selected target(s) will be sent in the background.`
+          : "Token batches will be prepared in the background before sending.",
+        memberId: normalizedActor.memberId,
+        metadata: {
+          batchSize: notificationQueueBatchSize(),
+          estimatedTargetCount: deviceIds.length || null,
+          notificationJobId: job.id,
+        },
+        platform: job.platform,
+        progressTotal: estimatedBatchCount,
+        sourceJobId: job.id,
+        status: "QUEUED",
+        storeAccountName: job.storeAccountName,
+        title: `Send notification · ${job.appName}`,
+        type: "NOTIFICATION_SEND",
+      })
+    : null;
+
+  return {
+    backgroundJob,
+    batchCount: estimatedBatchCount,
+    batchSize: notificationQueueBatchSize(),
+    job,
+    queued: true,
+    targetCount: deviceIds.length || null,
+  };
+}
+
+async function claimNotificationJobsForMaterialization(limit: number) {
+  const staleBefore = new Date(Date.now() - LOCK_TTL_MS);
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+    with candidates as (
+      select jobs.id
+      from notification_jobs as jobs
+      where (
+          jobs.status = 'queued'
+          or (jobs.status = 'materializing' and jobs.updated_at < ${staleBefore})
+        )
+        and jobs.target_type = 'device'
+        and not exists (
+          select 1
+          from notification_job_batches as batches
+          where batches.job_id = jobs.id
+        )
+      order by jobs.created_at asc
+      for update skip locked
+      limit ${limit}
+    )
+    update notification_jobs as jobs
+    set status = 'materializing',
+        updated_at = now()
+    from candidates
+    where jobs.id = candidates.id
+    returning jobs.id::text
+  `;
+  const ids = rows.map((row) => row.id);
+
+  if (!ids.length) return [];
+
+  return prisma.notificationJob.findMany({
+    where: { id: { in: ids } },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+function materializationPayloadFromJob(job: NotificationJob) {
+  const dataPayload = jsonObject(job.dataPayload);
+
+  return {
+    appId: job.appId,
+    appName: job.appName,
+    bundleId: job.bundleId,
+    credentialRef: job.credentialRef,
+    data: dataPayload,
+    deviceIds: job.targetValues,
+    imageUrl: job.imageUrl,
+    notifications: Array.isArray(job.localePayload) ? job.localePayload : [],
+    packageName: job.packageName,
+    platform: job.platform,
+    productAppId: job.appId,
+    scheduleId: job.scheduleId,
+    storeAccountName: job.storeAccountName,
+    storePlatform: job.storePlatform,
+    storeProfileId: job.storeProfileId,
+    targetType: "device",
+    topicBase: job.topicBase,
+  };
+}
+
+async function failMaterializedNotificationJob(jobId: string, message: string) {
+  const finishedAt = new Date();
+
+  await Promise.all([
+    prisma.notificationJob.update({
+      where: { id: jobId },
+      data: {
+        errorCount: 1,
+        sentAt: finishedAt,
+        status: "failed",
+        targetValues: [],
+      },
+    }),
+    updateBackgroundJobBySourceJob({
+      finishedAt,
+      lastError: message,
+      sourceJobId: jobId,
+      status: "FAILED",
+    }),
+  ]);
+}
+
+async function materializeNotificationJob(job: NotificationJob) {
+  await updateBackgroundJobBySourceJob({
+    sourceJobId: job.id,
+    status: "RUNNING",
+  });
+
   try {
-    const materialized = deviceIds.length
-      ? await materializeExplicitDeviceBatches({ deviceIds, jobId: job.id })
+    const payload = materializationPayloadFromJob(job);
+    const explicitDeviceIds = stringArray(job.targetValues);
+    const materialized = explicitDeviceIds.length
+      ? await materializeExplicitDeviceBatches({
+          deviceIds: explicitDeviceIds,
+          jobId: job.id,
+        })
       : await materializeDatabaseDeviceBatches({ jobId: job.id, payload });
 
     if (!materialized.targetCount) {
-      await prisma.notificationJob.update({
+      await failMaterializedNotificationJob(
+        job.id,
+        "No active FCM tokens matched this notification target.",
+      );
+
+      return {
+        error: "No active FCM tokens matched this notification target.",
+        jobId: job.id,
+        status: "failed",
+      };
+    }
+
+    const dataPayload = {
+      ...jsonObject(job.dataPayload),
+      [QUEUE_MATERIALIZED_KEY]: true,
+    };
+
+    await Promise.all([
+      prisma.notificationJob.update({
         where: { id: job.id },
         data: {
-          errorCount: 1,
-          status: "failed",
-          sentAt: new Date(),
+          dataPayload: dataPayload as Prisma.InputJsonValue,
+          status: "queued",
+          targetValues: [],
         },
-      });
-      throw badRequest("No active FCM tokens matched this notification target.");
-    }
+      }),
+      updateBackgroundJobBySourceJob({
+        progressCurrent: 0,
+        progressTotal: materialized.batchCount,
+        sourceJobId: job.id,
+        status: "RUNNING",
+      }),
+    ]);
 
     return {
       batchCount: materialized.batchCount,
-      batchSize: notificationQueueBatchSize(),
-      job,
-      queued: true,
+      jobId: job.id,
+      status: "materialized",
       targetCount: materialized.targetCount,
     };
   } catch (error) {
-    await prisma.notificationJob.update({
-      where: { id: job.id },
-      data: {
-        errorCount: 1,
-        status: "failed",
-        sentAt: new Date(),
-      },
-    });
-    throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    await failMaterializedNotificationJob(job.id, message);
+
+    return {
+      error: message,
+      jobId: job.id,
+      status: "failed",
+    };
   }
+}
+
+async function materializePendingNotificationJobs(limit: number) {
+  const jobs = await claimNotificationJobsForMaterialization(limit);
+  const materialized = [];
+
+  for (const job of jobs) {
+    materialized.push(await materializeNotificationJob(job));
+  }
+
+  return materialized;
 }
 
 async function claimNotificationBatches(limit: number) {
@@ -373,6 +561,7 @@ function edgePayloadFromJob(job: NotificationJob, batch: NotificationBatchRow) {
   const targetKind = clean(dataPayload[QUEUE_TARGET_KIND_KEY]) === "device_token_id"
     ? "device_token_id"
     : "device_id";
+  delete dataPayload[QUEUE_MATERIALIZED_KEY];
   delete dataPayload[QUEUE_TARGET_KIND_KEY];
 
   return {
@@ -566,6 +755,7 @@ export async function runNotificationBatchQueue(options?: { limit?: number }) {
   const now = new Date();
   const recovered = await recoverStaleNotificationBatches(now);
   const limit = Math.min(Math.max(options?.limit ?? notificationQueueClaimLimit(), 1), 20);
+  const materialized = await materializePendingNotificationJobs(limit);
   const batches = await claimNotificationBatches(limit);
   const processed = [];
 
@@ -576,6 +766,7 @@ export async function runNotificationBatchQueue(options?: { limit?: number }) {
   return {
     checkedAt: now.toISOString(),
     claimed: batches.length,
+    materialized,
     processed,
     recovered,
   };

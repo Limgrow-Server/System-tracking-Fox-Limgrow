@@ -792,10 +792,46 @@ export async function enqueueAndroidReviewFullScanRuns(input: {
   return {
     enqueued: result.count,
     requested: mappings.length,
+    runIds: result.runIds,
     scanMode: "full",
     skipped: result.skippedCount,
     skippedStoreMappingIds: result.skippedStoreMappingIds,
     status: "queued",
+  };
+}
+
+export async function enqueueAndroidReviewFetchRuns(input: {
+  fromDate?: string;
+  maxResults?: number;
+  scanMode?: string;
+  storeMappingId: string;
+  toDate?: string;
+}) {
+  const scheduledFor = new Date();
+  const result = await enqueueManualAndroidReviewFetchRuns([
+    {
+      maxAttempts: FULL_SCAN_MAX_ATTEMPTS,
+      maxResults: input.maxResults ?? DEFAULT_MAX_RESULTS,
+      nextAttemptAt: scheduledFor,
+      scanMode:
+        input.scanMode?.toLowerCase() === "full"
+          ? "FULL"
+          : input.scanMode?.toLowerCase() === "incremental"
+            ? "INCREMENTAL"
+            : "LIMITED",
+      scheduledFor,
+      storeMappingId: input.storeMappingId,
+    },
+  ]);
+
+  return {
+    enqueued: result.count,
+    requested: 1,
+    runIds: result.runIds,
+    scanMode: input.scanMode ?? "limited",
+    skipped: result.skippedCount,
+    skippedStoreMappingIds: result.skippedStoreMappingIds,
+    status: result.count ? "queued" : "empty",
   };
 }
 

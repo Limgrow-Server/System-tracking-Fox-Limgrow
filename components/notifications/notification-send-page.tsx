@@ -308,7 +308,7 @@ export function NotificationSendPage({
           const sentCount = queued ? 0 : payload.result?.sentCount ?? results.filter((result) => result.ok).length;
           const errorCount = queued ? 0 : payload.result?.errorCount ?? results.filter((result) => !result.ok).length;
           const totalCount = queued
-            ? Number(payload.result?.targetCount ?? 0)
+            ? Number(payload.result?.targetCount ?? activeTokenCountForApp(app) ?? 0)
             : Math.max(results.length, sentCount + errorCount);
           const resultJob = payload.result?.job;
 
