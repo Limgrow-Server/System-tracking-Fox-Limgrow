@@ -1,17 +1,18 @@
 import "server-only";
 
-import { getIosCredentialConfigs } from "@/lib/server/services/credentials/ios-credential.service";
-import { getSupabaseAuthUsersForStoreLink } from "@/lib/server/services/credentials/store-auth.service";
+import { getIosCredentialConfigsPage } from "@/lib/server/services/credentials/ios-credential.service";
 import type { ConfigsPageData } from "@/lib/tracking/page-data";
 
 export async function getIosConfigsPageData(): Promise<ConfigsPageData> {
-  const [credentialConfigs, supabaseAuthUsers] = await Promise.all([
-    getIosCredentialConfigs(),
-    getSupabaseAuthUsersForStoreLink(),
-  ]);
+  const credentialConfigs = await getIosCredentialConfigsPage({ page: 1, pageSize: 10, skip: 0, take: 10 });
 
   return {
-    credentialSecrets: credentialConfigs.credentials,
-    supabaseAuthUsers,
+    credentialPagination: {
+      page: credentialConfigs.page,
+      pageSize: credentialConfigs.pageSize,
+      total: credentialConfigs.total,
+      totalPages: credentialConfigs.totalPages,
+    },
+    credentialSecrets: credentialConfigs.data,
   };
 }

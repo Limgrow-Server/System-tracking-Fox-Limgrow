@@ -107,7 +107,7 @@ export type AppleIapRuntimeConfig = ResolvedRuntimeConfig & {
 
 export const corsHeaders = {
   "access-control-allow-origin": "*",
-  "access-control-allow-headers": "authorization, x-client-info, apikey, x-api-key, content-type, x-review-fetch-secret",
+  "access-control-allow-headers": "authorization, x-client-info, apikey, x-api-key, content-type, x-dispatch-secret, x-notification-queue-secret, x-review-fetch-secret",
   "access-control-allow-methods": "POST, OPTIONS",
 };
 
@@ -263,18 +263,23 @@ async function findMobileApp(
   const appId = appIdLookup(input);
   const appName = appNameLookup(input);
   const identifier = platform === "android" ? normalizePackageName(input.packageName) : normalizeBundleId(input.bundleId);
+  const identifierColumn = platform === "android" ? "package_name" : "bundle_id";
 
   let query = supabase.from(table).select(select).eq("status", "active").limit(1);
 
   if (clean(input.storeProfileId)) {
     query = query.eq("store_profile_id", clean(input.storeProfileId));
-    if (appId) {
+    if (identifier) {
+      query = query.eq(identifierColumn, identifier);
+    } else if (appId) {
       query = query.eq("app_id", appId);
-    } else if (identifier) {
-      query = query.eq(platform === "android" ? "package_name" : "bundle_id", identifier);
     } else if (appName) {
       query = query.eq("app_name", appName);
     }
+  } else if (clean(input.storeAccountName) && identifier) {
+    query = query.eq("store_account_name", clean(input.storeAccountName)).eq(identifierColumn, identifier);
+  } else if (identifier) {
+    query = query.eq(identifierColumn, identifier);
   } else if (clean(input.storeAccountName) && appId) {
     query = query.eq("store_account_name", clean(input.storeAccountName)).eq("app_id", appId);
   } else if (appId) {
@@ -293,7 +298,30 @@ async function findMobileApp(
 
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
-  return data ? normalizeApp(data as Record<string, unknown>, platform) : null;
+  if (data) return normalizeApp(data as Record<string, unknown>, platform);
+
+  if (appId && identifier) {
+    let fallbackQuery = supabase
+      .from(table)
+      .select(select)
+      .eq("status", "active")
+      .eq("app_id", appId)
+      .limit(1);
+
+    if (clean(input.storeProfileId)) {
+      fallbackQuery = fallbackQuery.eq("store_profile_id", clean(input.storeProfileId));
+    } else if (clean(input.storeAccountName)) {
+      fallbackQuery = fallbackQuery.eq("store_account_name", clean(input.storeAccountName));
+    }
+
+    const { data: fallbackData, error: fallbackError } = await fallbackQuery.maybeSingle();
+    if (fallbackError) throw fallbackError;
+    if (fallbackData) {
+      return normalizeApp(fallbackData as Record<string, unknown>, platform);
+    }
+  }
+
+  return null;
 }
 
 async function findStoreProfile(

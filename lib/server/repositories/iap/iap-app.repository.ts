@@ -1,13 +1,107 @@
 import "server-only";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
+import type { IapAppMetrics, IapRevenueBucket } from "@/lib/tracking/page-data";
 
-export async function getAllActiveStoreMappings() {
+type IapAppMappingOptions = {
+  search?: string;
+  storeAccountName?: string;
+};
+
+function androidMappingWhere(
+  options?: IapAppMappingOptions,
+): Prisma.AndroidStoreMappingWhereInput {
+  const where: Prisma.AndroidStoreMappingWhereInput = { status: "ACTIVE" };
+  const search = options?.search?.trim();
+  const storeAccountName = options?.storeAccountName?.trim();
+
+  if (storeAccountName) {
+    where.OR = [
+      { storeAccountName: { equals: storeAccountName, mode: "insensitive" } },
+      {
+        storeProfile: {
+          storeAccountName: { equals: storeAccountName, mode: "insensitive" },
+        },
+      },
+    ];
+  }
+
+  if (search) {
+    const searchOr: Prisma.AndroidStoreMappingWhereInput[] = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { appName: contains },
+        { appId: contains },
+        { packageName: contains },
+        { storeAccountName: contains },
+        { storeProfile: { storeAccountName: contains } },
+      ];
+    });
+
+    where.AND = [...(where.AND instanceof Array ? where.AND : []), { OR: searchOr }];
+  }
+
+  return where;
+}
+
+function iosMappingWhere(
+  options?: IapAppMappingOptions,
+): Prisma.IosStoreMappingWhereInput {
+  const where: Prisma.IosStoreMappingWhereInput = { status: "ACTIVE" };
+  const search = options?.search?.trim();
+  const storeAccountName = options?.storeAccountName?.trim();
+
+  if (storeAccountName) {
+    where.OR = [
+      { storeAccountName: { equals: storeAccountName, mode: "insensitive" } },
+      {
+        storeProfile: {
+          storeAccountName: { equals: storeAccountName, mode: "insensitive" },
+        },
+      },
+    ];
+  }
+
+  if (search) {
+    const searchOr: Prisma.IosStoreMappingWhereInput[] = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { appName: contains },
+        { appId: contains },
+        { bundleId: contains },
+        { storeAccountName: contains },
+        { storeProfile: { storeAccountName: contains } },
+      ];
+    });
+
+    where.AND = [...(where.AND instanceof Array ? where.AND : []), { OR: searchOr }];
+  }
+
+  return where;
+}
+
+export async function getAllActiveStoreMappings(options?: IapAppMappingOptions) {
   const [androidMappings, iosMappings] = await Promise.all([
     prisma.androidStoreMapping.findMany({
-      where: { status: "ACTIVE" },
+      where: androidMappingWhere(options),
+      include: {
+        storeProfile: {
+          select: { storeAccountName: true },
+        },
+      },
+      orderBy: { appName: "asc" },
     }),
     prisma.iosStoreMapping.findMany({
-      where: { status: "ACTIVE" },
+      where: iosMappingWhere(options),
+      include: {
+        storeProfile: {
+          select: { storeAccountName: true },
+        },
+      },
+      orderBy: { appName: "asc" },
     }),
   ]);
 
@@ -17,38 +111,477 @@ export async function getAllActiveStoreMappings() {
 export async function getAndroidMappingById(id: string) {
   return prisma.androidStoreMapping.findUnique({
     where: { id },
+    include: {
+      storeProfile: {
+        select: { storeAccountName: true },
+      },
+    },
   });
 }
 
 export async function getIosMappingById(id: string) {
   return prisma.iosStoreMapping.findUnique({
     where: { id },
+    include: {
+      storeProfile: {
+        select: { storeAccountName: true },
+      },
+    },
   });
 }
 
-export async function getAndroidTransactionsByPackageAndProfile(packageName: string, storeProfileId: string) {
-  return prisma.iapAndroid.findMany({
-    where: { packageName, storeProfileId },
+type AndroidTransactionPageOptions = {
+  includeTotal?: boolean;
+  kind?: string;
+  page: number;
+  pageSize: number;
+  skip: number;
+  state?: string;
+  take: number;
+};
+
+type IapMetricsRow = {
+  activeCount: number | bigint | null;
+  canceledCount: number | bigint | null;
+  latestTimestamp: number | string | null;
+  last7Orders: number | bigint | null;
+  last7Revenue: number | string | null;
+  previous7Orders: number | bigint | null;
+  previous7Revenue: number | string | null;
+  totalCount: number | bigint | null;
+  totalRevenue: number | string | null;
+};
+
+type IapRevenueBucketRow = {
+  label: string | null;
+  prod: number | string | null;
+  sand: number | string | null;
+};
+
+function numberValue(value: number | string | bigint | null | undefined) {
+  if (value === null || value === undefined) return 0;
+  const numeric = typeof value === "bigint" ? Number(value) : Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function joinSql(parts: Prisma.Sql[], separator: Prisma.Sql) {
+  if (!parts.length) return Prisma.empty;
+  return parts.slice(1).reduce(
+    (sql, part) => Prisma.sql`${sql} ${separator} ${part}`,
+    parts[0],
+  );
+}
+
+function iapMetricsFromRows(
+  rows: IapMetricsRow[],
+  bucketRows: IapRevenueBucketRow[],
+): IapAppMetrics {
+  const row = rows[0];
+  const revenueBuckets: IapRevenueBucket[] = bucketRows.map((bucket) => ({
+    label: bucket.label ?? "",
+    prod: numberValue(bucket.prod),
+    sand: numberValue(bucket.sand),
+  }));
+
+  return {
+    activeCount: numberValue(row?.activeCount),
+    canceledCount: numberValue(row?.canceledCount),
+    latestTimestamp: numberValue(row?.latestTimestamp),
+    last7Orders: numberValue(row?.last7Orders),
+    last7Revenue: numberValue(row?.last7Revenue),
+    previous7Orders: numberValue(row?.previous7Orders),
+    previous7Revenue: numberValue(row?.previous7Revenue),
+    revenueBuckets,
+    totalCount: numberValue(row?.totalCount),
+    totalRevenue: numberValue(row?.totalRevenue),
+  };
+}
+
+async function getIapMetrics(
+  sourceSql: Prisma.Sql,
+  whereSql: Prisma.Sql,
+  testExpression: Prisma.Sql,
+) {
+  const [metricsRows, bucketRows] = await Promise.all([
+    prisma.$queryRaw<IapMetricsRow[]>(Prisma.sql`
+      with filtered as (
+        select
+          state,
+          purchase_date,
+          revenue_micros,
+          ${testExpression} as is_test
+        from ${sourceSql}
+        ${whereSql}
+      ),
+      production as (
+        select *
+        from filtered
+        where not is_test
+      ),
+      anchor as (
+        select max(purchase_date) as latest from production
+      )
+      select
+        count(*)::int as "totalCount",
+        count(*) filter (where lower(state) in ('active', 'purchased'))::int as "activeCount",
+        count(*) filter (where lower(state) in ('canceled', 'expired'))::int as "canceledCount",
+        coalesce(extract(epoch from (select latest from anchor)) * 1000, 0)::float8 as "latestTimestamp",
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where coalesce(revenue_micros, 0) > 0
+        ), 0)::float8 as "totalRevenue",
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '7 days'
+        ), 0)::float8 as "last7Revenue",
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '14 days'
+            and purchase_date < (select latest from anchor) - interval '7 days'
+        ), 0)::float8 as "previous7Revenue",
+        count(*) filter (
+          where coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '7 days'
+        )::int as "last7Orders",
+        count(*) filter (
+          where coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '14 days'
+            and purchase_date < (select latest from anchor) - interval '7 days'
+        )::int as "previous7Orders"
+      from production
+    `),
+    prisma.$queryRaw<IapRevenueBucketRow[]>(Prisma.sql`
+      with filtered as (
+        select
+          purchase_date,
+          revenue_micros,
+          ${testExpression} as is_test
+        from ${sourceSql}
+        ${whereSql}
+      ),
+      production as (
+        select *
+        from filtered
+        where not is_test
+      ),
+      anchor as (
+        select date_trunc('month', coalesce(max(purchase_date), '2026-06-01'::timestamptz)) as chart_end
+        from production
+      ),
+      months as (
+        select generate_series(
+          (select chart_end from anchor) - interval '11 months',
+          (select chart_end from anchor),
+          interval '1 month'
+        ) as month_start
+      )
+      select
+        to_char(months.month_start, 'Mon') as label,
+        coalesce(sum((production.revenue_micros::numeric / 1000000.0)) filter (
+          where coalesce(production.revenue_micros, 0) > 0
+        ), 0)::float8 as prod,
+        0::float8 as sand
+      from months
+      left join production
+        on date_trunc('month', production.purchase_date) = months.month_start
+      group by months.month_start
+      order by months.month_start
+    `),
+  ]);
+
+  return iapMetricsFromRows(metricsRows, bucketRows);
+}
+
+function androidTransactionWhere(
+  packageName: string,
+  storeProfileId: string,
+  options?: Partial<AndroidTransactionPageOptions>,
+): Prisma.IapAndroidWhereInput {
+  const where: Prisma.IapAndroidWhereInput = {
+    packageName,
+    storeProfileId,
+    isTestPurchase: false,
+  };
+  const state = options?.state?.trim();
+  const kind = options?.kind?.trim();
+
+  if (state && state !== "all") {
+    where.state = { equals: state, mode: "insensitive" };
+  }
+
+  if (kind && kind !== "all") {
+    where.purchaseKind = { equals: kind, mode: "insensitive" };
+  }
+
+  return where;
+}
+
+export async function getAndroidTransactionsByPackageAndProfilePage(
+  packageName: string,
+  storeProfileId: string,
+  options: AndroidTransactionPageOptions,
+) {
+  const where = androidTransactionWhere(packageName, storeProfileId, options);
+  const rowsPromise = prisma.iapAndroid.findMany({
+    where,
     orderBy: { verifiedAt: "desc" },
-    take: 300,
+    skip: options.skip,
+    take: options.take,
     include: {
       storeProfile: true,
     },
   });
+
+  if (options.includeTotal === false) {
+    return [await rowsPromise, null] as const;
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    rowsPromise,
+    prisma.iapAndroid.count({ where }),
+  ]);
+
+  return [rows, total] as const;
 }
 
-export async function getIosTransactionsByBundleId(
+export function getAndroidTransactionsByPackageAndProfileMetrics(
+  packageName: string,
+  storeProfileId: string,
+  options: Partial<AndroidTransactionPageOptions>,
+) {
+  const conditions = [
+    Prisma.sql`package_name = ${packageName}`,
+    Prisma.sql`store_profile_id = ${storeProfileId}::uuid`,
+    Prisma.sql`not is_test_purchase`,
+  ];
+  const state = options.state?.trim();
+  const kind = options.kind?.trim();
+
+  if (state && state !== "all") {
+    conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
+  }
+  if (kind && kind !== "all") {
+    conditions.push(Prisma.sql`lower(purchase_kind) = ${kind.toLowerCase()}`);
+  }
+
+  return getIapMetrics(
+    Prisma.sql`public.iap_android`,
+    Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
+    Prisma.sql`is_test_purchase`,
+  );
+}
+
+export async function getAndroidTransactionStatesByPackageAndProfile(
+  packageName: string,
+  storeProfileId: string,
+) {
+  const rows = await prisma.iapAndroid.groupBy({
+    by: ["state"],
+    where: androidTransactionWhere(packageName, storeProfileId),
+    orderBy: { state: "asc" },
+  });
+
+  return rows.map((row) => row.state);
+}
+
+type IosTransactionPageOptions = {
+  includeTotal?: boolean;
+  page: number;
+  pageSize: number;
+  skip: number;
+  state?: string;
+  take: number;
+  trial?: string;
+};
+
+function iosFreeTrialWhere(): Prisma.IosIapTransactionWhereInput {
+  return {
+    OR: [
+      { isTrial: true },
+      { offerDiscountType: { equals: "free_trial", mode: "insensitive" } },
+      {
+        offerType: 1,
+        priceMilliunits: BigInt(0),
+        revenueMicros: BigInt(0),
+      },
+    ],
+  };
+}
+
+function iosTransactionWhere(
+  bundleId: string,
+  storeProfileId?: string,
+  options?: Partial<IosTransactionPageOptions>,
+): Prisma.IosIapTransactionWhereInput {
+  const where: Prisma.IosIapTransactionWhereInput = {
+    bundleId,
+    environment: { equals: "production", mode: "insensitive" },
+  };
+  const state = options?.state?.trim();
+  const trial = options?.trial?.trim();
+  const andConditions: Prisma.IosIapTransactionWhereInput[] = [];
+
+  if (storeProfileId) {
+    andConditions.push({ OR: [{ storeProfileId }, { storeProfileId: null }] });
+  }
+
+  if (state && state !== "all") {
+    where.state = { equals: state, mode: "insensitive" };
+  }
+
+  if (trial === "trial") {
+    andConditions.push(iosFreeTrialWhere());
+  }
+
+  if (trial === "non_trial") {
+    andConditions.push({ NOT: iosFreeTrialWhere() });
+  }
+
+  if (andConditions.length) {
+    where.AND = andConditions;
+  }
+
+  return where;
+}
+
+export async function getIosTransactionsByBundleIdPage(
+  bundleId: string,
+  storeProfileId: string | undefined,
+  options: IosTransactionPageOptions,
+) {
+  const where = iosTransactionWhere(bundleId, storeProfileId, options);
+  const rowsPromise = prisma.iosIapTransaction.findMany({
+    where,
+    orderBy: { verifiedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
+
+  if (options.includeTotal === false) {
+    return [await rowsPromise, null] as const;
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    rowsPromise,
+    prisma.iosIapTransaction.count({ where }),
+  ]);
+
+  return [rows, total] as const;
+}
+
+export function getIosTransactionsByBundleIdMetrics(
+  bundleId: string,
+  storeProfileId: string | undefined,
+  options: Partial<IosTransactionPageOptions>,
+) {
+  const conditions = [
+    Prisma.sql`bundle_id = ${bundleId}`,
+    Prisma.sql`lower(environment) = 'production'`,
+  ];
+  const state = options.state?.trim();
+  const trial = options.trial?.trim();
+
+  if (storeProfileId) {
+    conditions.push(
+      Prisma.sql`(store_profile_id = ${storeProfileId}::uuid or store_profile_id is null)`,
+    );
+  }
+  if (state && state !== "all") {
+    conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
+  }
+  if (trial === "trial") {
+    conditions.push(Prisma.sql`(
+      is_trial is true
+      or lower(coalesce(offer_discount_type, '')) = 'free_trial'
+      or (
+        offer_type = 1
+        and coalesce(price_milliunits, 0) = 0
+        and coalesce(revenue_micros, 0) = 0
+      )
+    )`);
+  }
+  if (trial === "non_trial") {
+    conditions.push(Prisma.sql`not (
+      is_trial is true
+      or lower(coalesce(offer_discount_type, '')) = 'free_trial'
+      or (
+        offer_type = 1
+        and coalesce(price_milliunits, 0) = 0
+        and coalesce(revenue_micros, 0) = 0
+      )
+    )`);
+  }
+
+  return getIapMetrics(
+    Prisma.sql`public.ios_iap_transactions`,
+    Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
+    Prisma.sql`lower(environment) = 'sandbox'`,
+  );
+}
+
+export function getIosTrialAnalyticsTransactions(
+  bundleId: string,
+  storeProfileId: string | undefined,
+) {
+  return prisma.iosIapTransaction.findMany({
+    where: iosTransactionWhere(bundleId, storeProfileId),
+    orderBy: [
+      { originalTransactionId: "asc" },
+      { purchaseDate: "asc" },
+      { verifiedAt: "asc" },
+    ],
+  });
+}
+
+export function getIosIapNotificationEventsByBundleId(
+  bundleId: string,
+  storeProfileId: string | undefined,
+  take = 8,
+) {
+  return prisma.iosIapNotificationEvent.findMany({
+    where: {
+      bundleId,
+      environment: { equals: "production", mode: "insensitive" },
+      ...(storeProfileId ? { storeProfileId } : {}),
+    },
+    orderBy: { receivedAt: "desc" },
+    take,
+  });
+}
+
+export async function getIosIapNotificationEventSummaryByBundleId(
+  bundleId: string,
+  storeProfileId: string | undefined,
+) {
+  const where: Prisma.IosIapNotificationEventWhereInput = {
+    bundleId,
+    environment: { equals: "production", mode: "insensitive" },
+    ...(storeProfileId ? { storeProfileId } : {}),
+  };
+  const [counts, latest] = await Promise.all([
+    prisma.iosIapNotificationEvent.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true },
+    }),
+    prisma.iosIapNotificationEvent.findFirst({
+      where,
+      orderBy: { receivedAt: "desc" },
+      select: { receivedAt: true },
+    }),
+  ]);
+
+  return { counts, latest };
+}
+
+export async function getIosTransactionStatesByBundleId(
   bundleId: string,
   storeProfileId?: string,
 ) {
-  return prisma.iosIapTransaction.findMany({
-    where: {
-      bundleId,
-      ...(storeProfileId
-        ? { OR: [{ storeProfileId }, { storeProfileId: null }] }
-        : {}),
-    },
-    orderBy: { verifiedAt: "desc" },
-    take: 300,
+  const rows = await prisma.iosIapTransaction.groupBy({
+    by: ["state"],
+    where: iosTransactionWhere(bundleId, storeProfileId),
+    orderBy: { state: "asc" },
   });
+
+  return rows.map((row) => row.state);
 }

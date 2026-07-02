@@ -1,16 +1,23 @@
 import "server-only";
 
 import { MappingStatus, Prisma } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
   deleteIosStoreMapping,
   getIosStoreMappingId,
   getIosStoreMappings,
+  getIosStoreMappingsPage,
   saveIosStoreMapping,
 } from "@/lib/server/repositories/ios/store-mapping.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
+import { getIosStoreProfileById } from "@/lib/server/repositories/ios/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
+import { ensureIosReviewTargetsForMapping } from "@/lib/server/repositories/reviews/review.repository";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
+import { nullableAppId } from "@/lib/tracking/identity";
 import { iosStoreMappingToTracking } from "@/lib/tracking/mappers/ios";
 
 function cleanText(value: unknown) {
@@ -30,18 +37,19 @@ const mappingStatusMap: Record<string, MappingStatus> = {
 
 function normalizeIosMappingPayload(payload: StoreMappingPayload) {
   return {
-    appId: nullableText(payload.appId),
+    appId: nullableAppId(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
     bundleId: nullableText(payload.bundleId),
     status: mappingStatusMap[cleanText(payload.status).toLowerCase()] ?? MappingStatus.ACTIVE,
     storeAccountName: cleanText(payload.storeAccountName),
+    storeProfileId: cleanText(payload.storeProfileId),
   };
 }
 
 function validateIosMapping(payload: ReturnType<typeof normalizeIosMappingPayload>) {
-  if (!payload.storeAccountName || !payload.appName) {
+  if ((!payload.storeProfileId && !payload.storeAccountName) || !payload.appName) {
     throw badRequest("Store ref and app name are required.");
   }
 
@@ -58,9 +66,40 @@ function mapIosStoreMappingError(error: unknown): never {
   throw error;
 }
 
+const getCachedIosStoreMappingDtos = unstable_cache(
+  async (take: number) => {
+    const mappings = await getIosStoreMappings({ take });
+    return mappings.map(iosStoreMappingToTracking);
+  },
+  ["ios-store-mapping-dtos"],
+  {
+    revalidate: 300,
+    tags: [CACHE_TAGS.iosStoreMappings],
+  },
+);
+
 export async function getIosStoreMappingDtos(options?: { take?: number }) {
-  const mappings = await getIosStoreMappings(options);
-  return mappings.map(iosStoreMappingToTracking);
+  return getCachedIosStoreMappingDtos(options?.take ?? 200);
+}
+
+export async function getIosStoreMappingPageResult(options: PaginationQuery & {
+  knownTotal?: number;
+  search?: string;
+  storeProfileId?: string;
+}) {
+  const [mappings, total] = await getIosStoreMappingsPage({
+    includeTotal: options.knownTotal === undefined,
+    search: options.search,
+    skip: options.skip,
+    storeProfileId: options.storeProfileId,
+    take: options.take,
+  });
+
+  return paginatedResult(
+    mappings.map(iosStoreMappingToTracking),
+    total ?? options.knownTotal ?? mappings.length,
+    options,
+  );
 }
 
 export async function getIosStoreMappingsResult() {
@@ -80,8 +119,27 @@ export async function saveIosStoreMappingDto(input: {
   id?: string;
   status: MappingStatus;
   storeAccountName: string;
+  storeProfileId?: string | null;
 }) {
-  const mapping = await runRepositoryTransaction((tx) => saveIosStoreMapping(tx, input));
+  let storeAccountName = input.storeAccountName;
+
+  if (input.storeProfileId) {
+    const profile = await getIosStoreProfileById(input.storeProfileId);
+    if (!profile) {
+      throw notFound("iOS store profile was not found.");
+    }
+
+    storeAccountName = profile.storeAccountName;
+  }
+
+  const mapping = await runRepositoryTransaction(async (tx) => {
+    const savedMapping = await saveIosStoreMapping(tx, {
+      ...input,
+      storeAccountName,
+    });
+    await ensureIosReviewTargetsForMapping(savedMapping.id, tx);
+    return savedMapping;
+  });
   return iosStoreMappingToTracking(mapping);
 }
 
@@ -106,6 +164,7 @@ export async function createIosStoreMapping(payload: StoreMappingPayload) {
       bundleId: row.bundleId!,
       status: row.status,
       storeAccountName: row.storeAccountName,
+      storeProfileId: row.storeProfileId,
     });
 
     return { mapping, message: `iOS app mapping for ${row.appName} has been saved.` };
@@ -138,6 +197,7 @@ export async function updateIosStoreMapping(payload: StoreMappingPayload) {
       id,
       status: row.status,
       storeAccountName: row.storeAccountName,
+      storeProfileId: row.storeProfileId,
     });
 
     return { mapping, message: `iOS app mapping for ${row.appName} has been updated.` };

@@ -4,19 +4,19 @@ import type {
   StoreMapping,
 } from "@/lib/tracking/types";
 
-import type { AndroidCredential, AndroidStoreMapping, AndroidStoreProfile } from "@prisma/client";
+import type { AndroidCredential, AndroidStoreMapping } from "@prisma/client";
 
-export type AndroidStoreMappingRecord = AndroidStoreMapping;
-export type AndroidCredentialRecord = AndroidCredential & {
-  storeProfile?: Pick<AndroidStoreProfile, "supabaseUserId"> | null;
+export type AndroidStoreMappingRecord = AndroidStoreMapping & {
+  storeProfile?: { storeAccountName: string } | null;
 };
+export type AndroidCredentialRecord = AndroidCredential;
 
 export function androidStoreMappingToTracking(mapping: AndroidStoreMappingRecord): StoreMapping {
   return {
     id: mapping.id,
     store_profile_id: mapping.storeProfileId,
     store_platform: "google_play",
-    store_account_name: mapping.storeAccountName,
+    store_account_name: mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
     app_id: mapping.appId,
     app_name: mapping.appName,
     app_icon_url: mapping.appIconUrl,
@@ -53,8 +53,6 @@ export function androidCredentialToMetadata(credential: AndroidCredentialRecord)
     status: enumValue(credential.status) as CredentialSecretMetadata["status"],
     description: credential.description,
     last_used_at: iso(credential.lastUsedAt),
-    supabase_user_id: credential.storeProfile?.supabaseUserId ?? null,
-    supabase_user_email: null,
     created_at: credential.createdAt.toISOString(),
     updated_at: credential.updatedAt.toISOString(),
   };

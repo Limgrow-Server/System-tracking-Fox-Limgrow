@@ -1,24 +1,28 @@
 "use client";
 
 import Image from "next/image";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, KeyRound, LockKeyhole, Mail, ShieldCheck } from "lucide-react";
-import { toast } from "sonner";
+import {
+  ArrowRight,
+  LockKeyhole,
+  Mail,
+  ShieldCheck,
+} from "lucide-react";
+import { showToast } from "@/lib/client/toast";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 
-export function LoginPage({ nextPath }: { nextPath: string }) {
+export function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
-  const safeNext = useMemo(() => (nextPath.startsWith("/") ? nextPath : "/dashboard"), [nextPath]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -36,103 +40,129 @@ export function LoginPage({ nextPath }: { nextPath: string }) {
         throw new Error(payload.error ?? "Login failed.");
       }
 
-      toast.success(payload.message ?? "Signed in.");
-      router.replace(safeNext);
+      void showToast("success", payload.message ?? "Signed in.");
+      router.replace("/dashboard");
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Login failed.");
+      void showToast("error", error instanceof Error ? error.message : "Login failed.");
     } finally {
       setPending(false);
     }
   }
 
   return (
-    <main className="grid min-h-svh bg-muted/30 text-foreground lg:grid-cols-[0.9fr_1.1fr]">
-      <section className="hidden border-r bg-sidebar p-8 lg:flex lg:flex-col lg:justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <Image
-              src="/company-logo.png"
-              alt="LimGrow logo"
-              width={44}
-              height={44}
-              priority
-              className="size-11 rounded-xl object-cover shadow-sm ring-1 ring-primary/10"
-            />
-            <div>
-              <div className="font-heading text-base font-semibold">LimGrow Tracking</div>
-              <div className="text-xs text-muted-foreground">Limgrow mobile operations</div>
-            </div>
-          </div>
-          <div className="mt-12 max-w-md">
-            <Badge variant="outline" className="rounded-md">
-              <ShieldCheck size={13} />
-              Role-based console
-            </Badge>
-            <h1 className="mt-4 font-heading text-3xl font-semibold tracking-tight">
-              App Mapping and Credential Config control.
-            </h1>
-            <div className="mt-5 grid gap-3 text-sm text-muted-foreground">
-              <div className="flex items-center gap-2">
-                <KeyRound size={15} />
-                Store keys are isolated in server-side Vault.
-              </div>
-              <div className="flex items-center gap-2">
-                <LockKeyhole size={15} />
-                Console access is enforced by Supabase Auth and Prisma RBAC.
+    <main className="min-h-svh bg-[#f4f5f7] text-foreground">
+      <div className="grid min-h-svh w-full lg:grid-cols-[minmax(0,1fr)_minmax(560px,0.72fr)]">
+        <section className="relative hidden min-h-svh overflow-hidden bg-[#0b0432] text-white lg:block">
+          <div className="absolute inset-0 opacity-[0.08] [background-image:linear-gradient(to_right,currentColor_1px,transparent_1px),linear-gradient(to_bottom,currentColor_1px,transparent_1px)] [background-size:42px_42px]" />
+          <div className="absolute left-1/2 top-1/2 size-[560px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/[0.035] blur-3xl" />
+          <div className="relative min-h-svh p-10">
+            <div className="flex items-center gap-3">
+              <Image
+                src="/company-logo.png"
+                alt="LimGrow logo"
+                width={46}
+                height={46}
+                priority
+                className="size-11 rounded-lg object-cover ring-1 ring-white/15"
+              />
+              <div>
+                <div className="font-heading text-base font-semibold">LimGrow Tracking</div>
+                <div className="text-xs text-white/60">Private workspace</div>
               </div>
             </div>
+
+            <div className="absolute inset-x-10 top-1/2 flex -translate-y-1/2 justify-center">
+              <div className="relative flex aspect-square w-full max-w-[460px] items-center justify-center">
+                <div className="absolute inset-0 rounded-[48px] border border-white/10 bg-white/[0.035] shadow-[0_30px_120px_rgb(0_0_0/0.28)]" />
+                <div className="absolute inset-12 rounded-[36px] border border-white/10" />
+                <div className="absolute inset-24 rounded-[28px] border border-white/10 bg-white/[0.035]" />
+                <Image
+                  src="/company-logo.png"
+                  alt="LimGrow logo"
+                  width={128}
+                  height={128}
+                  priority
+                  className="relative size-32 rounded-[30px] object-cover shadow-2xl ring-1 ring-white/20"
+                />
+              </div>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="flex items-center justify-center p-4 sm:p-6">
-        <Card className="w-full max-w-md rounded-lg">
-          <CardHeader className="border-b">
-            <CardTitle>Sign in</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form className="space-y-4" onSubmit={submit}>
-              <div className="grid gap-2">
-                <Label htmlFor="email">Email</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
-                  <Input
-                    id="email"
-                    type="email"
-                    className="pl-9"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    autoComplete="email"
-                    required
-                  />
+        <section className="flex min-h-svh items-center justify-center px-4 py-8 sm:px-8">
+          <Card className="w-full max-w-[500px] rounded-lg bg-background shadow-sm">
+            <CardHeader className="border-b pb-5">
+              <div className="mb-3 flex items-center gap-3 lg:hidden">
+                <Image
+                  src="/company-logo.png"
+                  alt="LimGrow logo"
+                  width={40}
+                  height={40}
+                  priority
+                  className="size-10 rounded-lg object-cover ring-1 ring-primary/10"
+                />
+                <div>
+                  <div className="font-heading text-sm font-semibold">LimGrow Tracking</div>
+                  <div className="text-xs text-muted-foreground">Private workspace</div>
                 </div>
               </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="password">Password</Label>
-                <div className="relative">
-                  <LockKeyhole className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
-                  <Input
-                    id="password"
-                    type="password"
-                    className="pl-9"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    autoComplete="current-password"
-                    required
-                  />
+              <Badge variant="outline" className="mb-2 w-fit rounded-md text-muted-foreground">
+                <ShieldCheck size={13} />
+                Team access
+              </Badge>
+              <CardTitle className="text-2xl">Welcome back</CardTitle>
+              <CardDescription>Sign in with your LimGrow account.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-4" onSubmit={submit}>
+                <div className="grid gap-2">
+                  <Label htmlFor="email">Email</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
+                    <Input
+                      id="email"
+                      type="email"
+                      className="h-10 pl-9"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      autoComplete="email"
+                      placeholder="name@company.com"
+                      required
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <Button className="w-full" disabled={pending}>
-                {pending ? <Spinner /> : <ArrowRight size={15} />}
-                Sign in
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      </section>
+                <div className="grid gap-2">
+                  <Label htmlFor="password">Password</Label>
+                  <div className="relative">
+                    <LockKeyhole className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
+                    <Input
+                      id="password"
+                      type="password"
+                      className="h-10 pl-9"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      autoComplete="current-password"
+                      placeholder="Enter password"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <Button className="h-10 w-full" disabled={pending}>
+                  {pending ? <Spinner /> : <ArrowRight size={15} />}
+                  Sign in
+                </Button>
+              </form>
+              <div className="mt-5 flex items-start gap-2 border-t pt-4 text-xs leading-5 text-muted-foreground">
+                <LockKeyhole size={14} className="mt-0.5 shrink-0" />
+                <span>Your session is created only after account verification succeeds.</span>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+      </div>
     </main>
   );
 }

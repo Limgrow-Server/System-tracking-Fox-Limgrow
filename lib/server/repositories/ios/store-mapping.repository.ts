@@ -4,6 +4,11 @@ import type { MappingStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { upsertIosStoreProfile } from "@/lib/server/repositories/ios/store-profile.repository";
+import { searchTextVariants } from "@/lib/search";
+import {
+  nullableAppId,
+  parseAppleAppStoreIdFromUrl,
+} from "@/lib/tracking/identity";
 
 type SaveIosStoreMappingInput = {
   appId: string | null;
@@ -14,15 +19,82 @@ type SaveIosStoreMappingInput = {
   id?: string | null;
   status: MappingStatus;
   storeAccountName: string;
+  storeProfileId?: string | null;
 };
 
 export function getIosStoreMappings(options?: { take?: number }) {
   const take = options?.take ?? 200;
 
   return prisma.iosStoreMapping.findMany({
+    include: {
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+    },
     orderBy: { updatedAt: "desc" },
     take,
   });
+}
+
+type IosStoreMappingPageOptions = {
+  includeTotal?: boolean;
+  search?: string;
+  skip: number;
+  storeProfileId?: string;
+  take: number;
+};
+
+function iosStoreMappingWhere(options: IosStoreMappingPageOptions): Prisma.IosStoreMappingWhereInput {
+  const where: Prisma.IosStoreMappingWhereInput = {};
+  const search = options.search?.trim();
+
+  if (options.storeProfileId) {
+    where.storeProfileId = options.storeProfileId;
+  }
+
+  if (search) {
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { appName: contains },
+        { appId: contains },
+        { bundleId: contains },
+        { storeAccountName: contains },
+        { storeProfile: { storeAccountName: contains } },
+      ];
+    });
+  }
+
+  return where;
+}
+
+export function getIosStoreMappingsPage(options: IosStoreMappingPageOptions) {
+  const where = iosStoreMappingWhere(options);
+  const rows = prisma.iosStoreMapping.findMany({
+    where,
+    include: {
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+    },
+    orderBy: { updatedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
+
+  if (options.includeTotal === false) {
+    return rows.then((mappings) => [mappings, null] as const);
+  }
+
+  return prisma.$transaction([
+    rows,
+    prisma.iosStoreMapping.count({ where }),
+  ]);
 }
 
 export async function getIosStoreMappingId(id: string) {
@@ -38,12 +110,18 @@ export async function saveIosStoreMapping(
   tx: Prisma.TransactionClient,
   input: SaveIosStoreMappingInput
 ) {
-  const profile = await upsertIosStoreProfile(tx, {
-    storeAccountName: input.storeAccountName,
-  });
+  const profile = input.storeProfileId
+    ? {
+        id: input.storeProfileId,
+        storeAccountName: input.storeAccountName,
+      }
+    : await upsertIosStoreProfile(tx, {
+        storeAccountName: input.storeAccountName,
+      });
 
+  const appleAppId = parseAppleAppStoreIdFromUrl(input.appLink);
   const data = {
-    appId: input.appId,
+    appId: nullableAppId(input.appId),
     appIconUrl: input.appIconUrl,
     appLink: input.appLink,
     appName: input.appName,
@@ -51,6 +129,7 @@ export async function saveIosStoreMapping(
     status: input.status,
     storeAccountName: profile.storeAccountName,
     storeProfileId: profile.id,
+    ...(appleAppId ? { appleAppId } : {}),
   };
 
   if (input.id) {

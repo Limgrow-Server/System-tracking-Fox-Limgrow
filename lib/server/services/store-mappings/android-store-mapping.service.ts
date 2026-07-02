@@ -1,16 +1,23 @@
 import "server-only";
 
 import { MappingStatus, Prisma } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
   deleteAndroidStoreMapping,
   getAndroidStoreMappingId,
   getAndroidStoreMappings,
+  getAndroidStoreMappingsPage,
   saveAndroidStoreMapping,
 } from "@/lib/server/repositories/android/store-mapping.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
+import { getAndroidStoreProfileById } from "@/lib/server/repositories/android/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
+import { ensureAndroidReviewTargetsForMapping } from "@/lib/server/repositories/reviews/review.repository";
 import { androidStoreMappingToTracking } from "@/lib/tracking/mappers/android";
+import { nullableAppId } from "@/lib/tracking/identity";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
 
 function cleanText(value: unknown) {
@@ -30,18 +37,19 @@ const mappingStatusMap: Record<string, MappingStatus> = {
 
 function normalizeAndroidMappingPayload(payload: StoreMappingPayload) {
   return {
-    appId: nullableText(payload.appId),
+    appId: nullableAppId(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
     packageName: nullableText(payload.packageName),
     status: mappingStatusMap[cleanText(payload.status).toLowerCase()] ?? MappingStatus.ACTIVE,
     storeAccountName: cleanText(payload.storeAccountName),
+    storeProfileId: cleanText(payload.storeProfileId),
   };
 }
 
 function validateAndroidMapping(payload: ReturnType<typeof normalizeAndroidMappingPayload>) {
-  if (!payload.storeAccountName || !payload.appName) {
+  if ((!payload.storeProfileId && !payload.storeAccountName) || !payload.appName) {
     throw badRequest("Store ref and app name are required.");
   }
 
@@ -58,9 +66,40 @@ function mapAndroidStoreMappingError(error: unknown): never {
   throw error;
 }
 
+const getCachedAndroidStoreMappingDtos = unstable_cache(
+  async (take: number) => {
+    const mappings = await getAndroidStoreMappings({ take });
+    return mappings.map(androidStoreMappingToTracking);
+  },
+  ["android-store-mapping-dtos"],
+  {
+    revalidate: 300,
+    tags: [CACHE_TAGS.androidStoreMappings],
+  },
+);
+
 export async function getAndroidStoreMappingDtos(options?: { take?: number }) {
-  const mappings = await getAndroidStoreMappings(options);
-  return mappings.map(androidStoreMappingToTracking);
+  return getCachedAndroidStoreMappingDtos(options?.take ?? 200);
+}
+
+export async function getAndroidStoreMappingPageResult(options: PaginationQuery & {
+  knownTotal?: number;
+  search?: string;
+  storeProfileId?: string;
+}) {
+  const [mappings, total] = await getAndroidStoreMappingsPage({
+    includeTotal: options.knownTotal === undefined,
+    search: options.search,
+    skip: options.skip,
+    storeProfileId: options.storeProfileId,
+    take: options.take,
+  });
+
+  return paginatedResult(
+    mappings.map(androidStoreMappingToTracking),
+    total ?? options.knownTotal ?? mappings.length,
+    options,
+  );
 }
 
 export async function getAndroidStoreMappingsResult() {
@@ -80,8 +119,27 @@ export async function saveAndroidStoreMappingDto(input: {
   packageName: string;
   status: MappingStatus;
   storeAccountName: string;
+  storeProfileId?: string | null;
 }) {
-  const mapping = await runRepositoryTransaction((tx) => saveAndroidStoreMapping(tx, input));
+  let storeAccountName = input.storeAccountName;
+
+  if (input.storeProfileId) {
+    const profile = await getAndroidStoreProfileById(input.storeProfileId);
+    if (!profile) {
+      throw notFound("Android store profile was not found.");
+    }
+
+    storeAccountName = profile.storeAccountName;
+  }
+
+  const mapping = await runRepositoryTransaction(async (tx) => {
+    const savedMapping = await saveAndroidStoreMapping(tx, {
+      ...input,
+      storeAccountName,
+    });
+    await ensureAndroidReviewTargetsForMapping(savedMapping.id, tx);
+    return savedMapping;
+  });
   return androidStoreMappingToTracking(mapping);
 }
 
@@ -106,6 +164,7 @@ export async function createAndroidStoreMapping(payload: StoreMappingPayload) {
       packageName: row.packageName!,
       status: row.status,
       storeAccountName: row.storeAccountName,
+      storeProfileId: row.storeProfileId,
     });
 
     return { mapping, message: `Android app mapping for ${row.appName} has been saved.` };
@@ -138,6 +197,7 @@ export async function updateAndroidStoreMapping(payload: StoreMappingPayload) {
       packageName: row.packageName!,
       status: row.status,
       storeAccountName: row.storeAccountName,
+      storeProfileId: row.storeProfileId,
     });
 
     return { mapping, message: `Android app mapping for ${row.appName} has been updated.` };

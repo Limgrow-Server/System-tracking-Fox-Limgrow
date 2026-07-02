@@ -10,9 +10,11 @@ import {
 import { requirePublicApiKey } from "../_shared/mobile-api-auth.ts";
 import { sha256Hex } from "../_shared/mobile-crypto.ts";
 import {
+  normalizeAppIdentifier,
   normalizeAppId,
   normalizeBundleId,
   normalizeDeviceId,
+  normalizeDeviceType,
   normalizeLocale,
   normalizePackageName,
   primaryLocaleCode,
@@ -25,6 +27,8 @@ type NotificationEventRequest = {
   appVersion?: string;
   bundleId?: string;
   deviceId?: string;
+  deviceType?: string;
+  device_type?: string;
   eventType?: string;
   fcmToken?: string;
   locale?: string;
@@ -43,7 +47,7 @@ type NotificationEventRequest = {
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const tokenColumns =
-  "id,device_id,platform,app_id,product_app_id,package_name,bundle_id,locale,status,fcm_token,token_hash";
+  "id,device_id,platform,app_id,product_app_id,app_identifier,package_name,bundle_id,device_type,locale,status,fcm_token,token_hash";
 
 function requestAppId(payload: NotificationEventRequest) {
   return normalizeAppId(payload.appId) || normalizeAppId(payload.app_id);
@@ -125,8 +129,15 @@ async function findDeviceToken(
   const appId = requestAppId(payload) || normalizeAppId(payload.productAppId);
   const packageName = normalizePackageName(payload.packageName);
   const bundleId = normalizeBundleId(payload.bundleId);
+  const appIdentifier = platform === "android" && packageName
+    ? packageName
+    : platform === "ios" && bundleId
+      ? bundleId
+      : "";
 
-  if (appId) {
+  if (appIdentifier) {
+    query = query.eq("app_identifier", appIdentifier);
+  } else if (appId) {
     query = query.or(`app_id.eq.${appId},product_app_id.eq.${appId}`);
   } else if (platform === "android" && packageName) {
     query = query.eq("package_name", packageName);
@@ -175,6 +186,14 @@ Deno.serve(async (request) => {
     const productAppId = normalizeAppId(payload.productAppId) || appId;
     const packageName = normalizePackageName(payload.packageName);
     const bundleId = normalizeBundleId(payload.bundleId);
+    const appIdentifier = normalizeAppIdentifier({
+      appId,
+      bundleId,
+      packageName,
+      platform,
+      productAppId,
+    });
+    const deviceType = normalizeDeviceType(payload.deviceType) || normalizeDeviceType(payload.device_type) || null;
     const locale = requestLocale(payload);
     const eventType = normalizeEventType(payload.eventType ?? payload.action);
     const providerMessageId = clean(payload.providerMessageId) || clean(payload.messageId) || null;
@@ -203,10 +222,14 @@ Deno.serve(async (request) => {
     const metadata = {
       ...objectMetadata(payload.metadata),
       appId: app?.appId ?? appId ?? null,
+      appIdentifier: appIdentifier || clean(device?.app_identifier) || null,
       appMappingId: app?.id ?? null,
       appName: app?.appName ?? null,
       appVersion: clean(payload.appVersion) || null,
       bundleId: app?.bundleId ?? bundleId ?? null,
+      deviceType: deviceType || clean(device?.device_type) || null,
+      deviceTokenId: clean(device?.id) || null,
+      fcmToken: fcmToken || clean(device?.fcm_token) || null,
       locale: locale || clean(device?.locale) || null,
       localeCode: primaryLocaleCode(locale || clean(device?.locale)),
       osVersion: clean(payload.osVersion) || null,

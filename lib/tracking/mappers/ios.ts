@@ -5,19 +5,19 @@ import type {
   StoreMapping,
 } from "@/lib/tracking/types";
 
-import type { IosCredential, IosIapTransaction, IosStoreMapping, IosStoreProfile } from "@prisma/client";
+import type { IosCredential, IosIapTransaction, IosStoreMapping } from "@prisma/client";
 
-export type IosStoreMappingRecord = IosStoreMapping;
-export type IosCredentialRecord = IosCredential & {
-  storeProfile?: Pick<IosStoreProfile, "supabaseUserId"> | null;
+export type IosStoreMappingRecord = IosStoreMapping & {
+  storeProfile?: { storeAccountName: string } | null;
 };
+export type IosCredentialRecord = IosCredential;
 
 export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): StoreMapping {
   return {
     id: mapping.id,
     store_profile_id: mapping.storeProfileId,
     store_platform: "apple_app_store",
-    store_account_name: mapping.storeAccountName,
+    store_account_name: mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
     app_id: mapping.appId,
     app_name: mapping.appName,
     app_icon_url: mapping.appIconUrl,
@@ -54,8 +54,6 @@ export function iosCredentialToMetadata(credential: IosCredentialRecord): Creden
     status: enumValue(credential.status) as CredentialSecretMetadata["status"],
     description: credential.description,
     last_used_at: iso(credential.lastUsedAt),
-    supabase_user_id: credential.storeProfile?.supabaseUserId ?? null,
-    supabase_user_email: null,
     created_at: credential.createdAt.toISOString(),
     updated_at: credential.updatedAt.toISOString(),
   };
@@ -76,6 +74,12 @@ export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosI
     price_milliunits: transaction.priceMilliunits?.toString() ?? null,
     currency: transaction.currency,
     is_trial: transaction.isTrial,
+    offer_discount_type: transaction.offerDiscountType,
+    offer_period: transaction.offerPeriod,
+    billing_plan_type: transaction.billingPlanType,
+    transaction_reason: transaction.transactionReason,
+    storefront: transaction.storefront,
+    revocation_date: iso(transaction.revocationDate),
     environment: transaction.environment,
     raw_receipt: transaction.rawReceipt,
     verified_at: transaction.verifiedAt.toISOString(),

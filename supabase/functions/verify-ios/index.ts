@@ -12,29 +12,14 @@ type VerifyIosRequest = {
   bundleId?: string;
   transactionId?: string;
   productId?: string;
-  environment?: "production" | "sandbox";
+  environment?: string;
   userId?: string;
   credentialRef?: string;
 };
 
-type StoreAuthContext = {
+type StoreConfigContext = {
   issuerId: string | null;
   storeAccountName: string;
-  storeProfileId: string;
-  userId: string;
-};
-
-type AuthorizedIosApp = {
-  id: string;
-  appIconUrl: string | null;
-  appLink: string | null;
-  appName: string;
-  bundleId: string;
-  packageName: null;
-  platform: "ios";
-  status: string;
-  storeAccountName: string;
-  storePlatform: "apple_app_store";
   storeProfileId: string;
 };
 
@@ -45,41 +30,51 @@ type AppleIapCredential = {
   privateKey: string;
 };
 
-function extractBearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization") ?? "";
-  if (!header.startsWith("Bearer ")) return null;
-  return header.slice(7).trim() || null;
-}
+type AppleEnvironment = "production" | "sandbox";
 
-async function authenticateStoreUser(
-  request: Request,
-  supabase: SupabaseAdminClient
-): Promise<StoreAuthContext> {
-  const token = extractBearerToken(request);
-  if (!token) {
-    throw Object.assign(new Error("missing_auth_token"), { httpStatus: 401 });
+type AppleVerifyAttempt = {
+  environment: AppleEnvironment;
+  provider: Record<string, unknown>;
+  response: Response;
+};
+
+async function resolveStoreConfigByBundle(
+  supabase: SupabaseAdminClient,
+  bundleId: string
+): Promise<StoreConfigContext> {
+  const { data: mapping, error: mappingError } = await supabase
+    .from("ios_store_mappings")
+    .select("id,store_profile_id,store_account_name,bundle_id,status")
+    .eq("bundle_id", bundleId)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+
+  if (mappingError) throw mappingError;
+  if (!mapping) {
+    throw Object.assign(new Error("bundle_not_configured"), {
+      httpStatus: 404,
+    });
   }
 
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser(token);
-
-  if (authError || !user) {
-    throw Object.assign(new Error(authError?.message ?? "invalid_auth_token"), {
-      httpStatus: 401,
+  const storeProfileId = clean(mapping.store_profile_id);
+  if (!storeProfileId) {
+    throw Object.assign(new Error("store_profile_not_configured"), {
+      httpStatus: 500,
     });
   }
 
   const { data: profile, error: profileError } = await supabase
     .from("ios_store_profiles")
     .select("id,store_account_name,status,issuer_id")
-    .eq("supabase_user_id", user.id)
+    .eq("id", storeProfileId)
     .maybeSingle();
 
   if (profileError) throw profileError;
   if (!profile) {
-    throw Object.assign(new Error("store_not_linked"), { httpStatus: 403 });
+    throw Object.assign(new Error("store_profile_not_found"), {
+      httpStatus: 404,
+    });
   }
 
   if (profile.status !== "active") {
@@ -88,9 +83,8 @@ async function authenticateStoreUser(
 
   return {
     issuerId: stringValue(profile.issuer_id),
-    storeAccountName: clean(profile.store_account_name),
-    storeProfileId: clean(profile.id),
-    userId: user.id,
+    storeAccountName: clean(mapping.store_account_name),
+    storeProfileId,
   };
 }
 
@@ -153,8 +147,29 @@ function applePriceMilliunits(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function finiteInt(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  return null;
+}
+
 function normalizeEnvironment(value: unknown) {
   return clean(value).toLowerCase() === "sandbox" ? "sandbox" : "production";
+}
+
+function appleApiBaseUrl(environment: AppleEnvironment) {
+  return environment === "sandbox"
+    ? "https://api.storekit-sandbox.itunes.apple.com"
+    : "https://api.storekit.itunes.apple.com";
+}
+
+function appleErrorCode(provider: Record<string, unknown>) {
+  const code = provider.errorCode ?? provider.code;
+  if (typeof code === "number" && Number.isFinite(code)) return String(code);
+  return stringValue(code);
+}
+
+function appleErrorMessage(provider: Record<string, unknown>) {
+  return stringValue(provider.errorMessage) ?? stringValue(provider.message);
 }
 
 function parseSecretText(secretText: string, secretFormat: string): Record<string, unknown> {
@@ -197,7 +212,7 @@ async function readVaultSecret(supabase: SupabaseAdminClient, vaultSecretId: str
 
 async function resolveAppleIapCredential(
   supabase: SupabaseAdminClient,
-  authCtx: StoreAuthContext
+  storeConfig: StoreConfigContext
 ): Promise<AppleIapCredential> {
   const select =
     "id,store_profile_id,credential_ref,secret_format,credential_purpose,vault_secret_id,vault_secret_name,vault_secret_version,store_account_name,key_id,issuer_id,status";
@@ -205,7 +220,7 @@ async function resolveAppleIapCredential(
   const { data, error } = await supabase
     .from("ios_credentials")
     .select(select)
-    .eq("store_profile_id", authCtx.storeProfileId)
+    .eq("store_profile_id", storeConfig.storeProfileId)
     .eq("credential_purpose", "iap")
     .eq("status", "active")
     .order("updated_at", { ascending: false })
@@ -223,7 +238,7 @@ async function resolveAppleIapCredential(
   const issuerId =
     stringValue(data.issuer_id) ??
     stringValue(secretPayload.issuer_id) ??
-    authCtx.issuerId ??
+    storeConfig.issuerId ??
     "";
 
   if (!privateKey || !keyId || !issuerId) {
@@ -243,42 +258,6 @@ async function resolveAppleIapCredential(
   };
 }
 
-async function verifyBundleAuthorization(
-  supabase: SupabaseAdminClient,
-  storeProfileId: string,
-  bundleId: string
-): Promise<AuthorizedIosApp> {
-  const { data, error } = await supabase
-    .from("ios_store_mappings")
-    .select("id,store_profile_id,store_account_name,app_name,app_icon_url,app_link,bundle_id,status")
-    .eq("store_profile_id", storeProfileId)
-    .eq("bundle_id", bundleId)
-    .eq("status", "active")
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!data) {
-    throw Object.assign(new Error("bundle_not_authorized"), {
-      httpStatus: 403,
-    });
-  }
-
-  return {
-    id: clean(data.id),
-    appIconUrl: stringValue(data.app_icon_url),
-    appLink: stringValue(data.app_link),
-    appName: clean(data.app_name),
-    bundleId: clean(data.bundle_id),
-    packageName: null,
-    platform: "ios",
-    status: clean(data.status),
-    storeAccountName: clean(data.store_account_name),
-    storePlatform: "apple_app_store",
-    storeProfileId: clean(data.store_profile_id),
-  };
-}
-
 async function appleServerToken(credential: AppleIapCredential, bundleId: string) {
   const now = Math.floor(Date.now() / 1000);
   return signAppleJwt(
@@ -294,9 +273,110 @@ async function appleServerToken(credential: AppleIapCredential, bundleId: string
   );
 }
 
+async function fetchAppleTransaction(
+  token: string,
+  transactionId: string,
+  environment: AppleEnvironment
+): Promise<AppleVerifyAttempt> {
+  const response = await fetch(`${appleApiBaseUrl(environment)}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`, {
+    headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+  });
+
+  let provider: Record<string, unknown> = {};
+  try {
+    const parsed = (await response.json()) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      provider = parsed as Record<string, unknown>;
+    }
+  } catch {
+    provider = {};
+  }
+
+  return { environment, provider, response };
+}
+
+async function fetchAppleTransactionWithFallback(
+  token: string,
+  transactionId: string,
+  requestedEnvironment: string
+) {
+  const requested = requestedEnvironment.toLowerCase();
+  const attempts: AppleVerifyAttempt[] = [];
+
+  const firstEnvironment: AppleEnvironment = requested === "sandbox" ? "sandbox" : "production";
+  let attempt = await fetchAppleTransaction(token, transactionId, firstEnvironment);
+  attempts.push(attempt);
+
+  const shouldTrySandbox =
+    firstEnvironment === "production" &&
+    requested !== "production" &&
+    !attempt.response.ok &&
+    (appleErrorCode(attempt.provider) === "4040010" || attempt.response.status === 401);
+
+  if (shouldTrySandbox) {
+    attempt = await fetchAppleTransaction(token, transactionId, "sandbox");
+    attempts.push(attempt);
+  }
+
+  return { attempt, attempts };
+}
+
+async function persistIosTransaction(
+  supabase: SupabaseAdminClient,
+  row: Record<string, unknown> & { transaction_id: string }
+) {
+  const updateExisting = async (id: string) => {
+    const { data, error } = await supabase
+      .from("ios_iap_transactions")
+      .update(row)
+      .eq("id", id)
+      .select("state")
+      .single();
+
+    if (error) throw error;
+    return data;
+  };
+
+  const { data: existing, error: lookupError } = await supabase
+    .from("ios_iap_transactions")
+    .select("id")
+    .eq("transaction_id", row.transaction_id)
+    .limit(1)
+    .maybeSingle();
+
+  if (lookupError) throw lookupError;
+
+  if (existing?.id) {
+    return updateExisting(existing.id);
+  }
+
+  const { data, error } = await supabase
+    .from("ios_iap_transactions")
+    .insert({ id: crypto.randomUUID(), ...row })
+    .select("state")
+    .single();
+
+  if (error) {
+    if (error.code === "23505") {
+      const { data: conflicted, error: conflictLookupError } = await supabase
+        .from("ios_iap_transactions")
+        .select("id")
+        .eq("transaction_id", row.transaction_id)
+        .limit(1)
+        .maybeSingle();
+
+      if (conflictLookupError) throw conflictLookupError;
+      if (conflicted?.id) return updateExisting(conflicted.id);
+    }
+
+    throw error;
+  }
+
+  return data;
+}
+
 async function verifyApple(
   supabase: SupabaseAdminClient,
-  authCtx: StoreAuthContext,
   payload: VerifyIosRequest
 ) {
   const bundleId = clean(payload.bundleId);
@@ -304,20 +384,30 @@ async function verifyApple(
 
   if (!bundleId || !transactionId) throw new Error("bundleId and transactionId are required");
 
-  const app = await verifyBundleAuthorization(supabase, authCtx.storeProfileId, bundleId);
-  const credential = await resolveAppleIapCredential(supabase, authCtx);
+  const storeConfig = await resolveStoreConfigByBundle(supabase, bundleId);
+  const credential = await resolveAppleIapCredential(supabase, storeConfig);
   const token = await appleServerToken(credential, bundleId);
-  const baseUrl =
-    payload.environment === "sandbox"
-      ? "https://api.storekit-sandbox.itunes.apple.com"
-      : "https://api.storekit.itunes.apple.com";
+  const { attempt, attempts } = await fetchAppleTransactionWithFallback(
+    token,
+    transactionId,
+    clean(payload.environment)
+  );
+  const { environment: verifiedEnvironment, provider, response } = attempt;
 
-  const response = await fetch(`${baseUrl}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`, {
-    headers: { authorization: `Bearer ${token}`, accept: "application/json" },
-  });
-  const provider = (await response.json()) as Record<string, unknown>;
   if (!response.ok) {
-    throw new Error(`Apple transaction verify failed: ${JSON.stringify(provider)}`);
+    console.error("Apple transaction verify failed", {
+      bundleId,
+      requestedEnvironment: clean(payload.environment) || null,
+      attempts: attempts.map((item) => ({
+        environment: item.environment,
+        errorCode: appleErrorCode(item.provider),
+        errorMessage: appleErrorMessage(item.provider),
+        status: item.response.status,
+      })),
+    });
+    throw Object.assign(new Error("purchase_verification_failed"), {
+      httpStatus: response.status >= 400 && response.status < 500 ? 400 : 502,
+    });
   }
 
   const signedTransactionInfo = stringValue(provider.signedTransactionInfo);
@@ -328,38 +418,53 @@ async function verifyApple(
   }
 
   const priceMilliunits = applePriceMilliunits(decoded?.price);
-  const state = decoded?.revocationDate ? "revoked" : "purchased";
+  const expiresDate = timestampFromMillis(decoded?.expiresDate);
+  const expiresAt = expiresDate ? new Date(expiresDate).getTime() : null;
+  const state = decoded?.revocationDate
+    ? "revoked"
+    : expiresAt !== null && Number.isFinite(expiresAt) && expiresAt <= Date.now()
+      ? "expired"
+      : "purchased";
+  const resolvedTransactionId = stringValue(decoded?.transactionId) ?? transactionId;
 
   const row = {
-    store_profile_id: authCtx.storeProfileId,
-    transaction_id: stringValue(decoded?.transactionId) ?? transactionId,
+    store_profile_id: storeConfig.storeProfileId,
+    transaction_id: resolvedTransactionId,
     original_transaction_id: stringValue(decoded?.originalTransactionId),
     product_id: (stringValue(decoded?.productId) ?? clean(payload.productId)) || "unknown_product",
-    user_id: clean(payload.userId) || null,
+    user_id: stringValue(decoded?.appAccountToken),
     bundle_id: bundleId,
     purchase_date: timestampFromMillis(decoded?.purchaseDate),
-    expires_date: timestampFromMillis(decoded?.expiresDate),
+    expires_date: expiresDate,
     state,
     revenue_micros: priceMilliunits === null ? null : priceMilliunits * 1000,
     price_milliunits: priceMilliunits,
     currency: stringValue(decoded?.currency),
-    is_trial: decoded?.offerType === 1,
-    environment: normalizeEnvironment(decoded?.environment ?? payload.environment),
+    is_trial: decoded?.offerType === 1 || stringValue(decoded?.offerDiscountType)?.toUpperCase() === "FREE_TRIAL",
+    environment: normalizeEnvironment(decoded?.environment ?? verifiedEnvironment),
     raw_receipt: provider,
     verified_at: new Date().toISOString(),
+    offer_discount_type: stringValue(decoded?.offerDiscountType) || null,
+    offer_type: finiteInt(decoded?.offerType),
+    offer_period: stringValue(decoded?.offerPeriod) || null,
+    transaction_reason: stringValue(decoded?.transactionReason) || null,
+    storefront: stringValue(decoded?.storefront) || null,
+    storefront_id: stringValue(decoded?.storefrontId) || null,
+    subscription_group_id: stringValue(decoded?.subscriptionGroupIdentifier) || null,
+    billing_plan_type: stringValue(decoded?.billingPlanType) || null,
+    app_transaction_id: stringValue(decoded?.appTransactionId) || null,
+    web_order_line_item_id: stringValue(decoded?.webOrderLineItemId) || null,
+    revocation_date: timestampFromMillis(decoded?.revocationDate),
+    revocation_reason: finiteInt(decoded?.revocationReason),
+    revocation_percentage: finiteInt(decoded?.revocationPercentage),
+    revocation_type: stringValue(decoded?.revocationType) || null,
   };
 
-  const { data, error } = await supabase
-    .from("ios_iap_transactions")
-    .upsert(row, { onConflict: "transaction_id" })
-    .select("*")
-    .single();
-  if (error) throw error;
+  const data = await persistIosTransaction(supabase, row);
 
   return {
-    app,
-    credentialRef: credential.credentialRef,
-    transaction: data,
+    tracked: true,
+    state: data.state,
   };
 }
 
@@ -404,9 +509,8 @@ Deno.serve(async (request) => {
 
   try {
     const supabase = createAdminClient();
-    const authCtx = await authenticateStoreUser(request, supabase);
     const payload = (await request.json()) as VerifyIosRequest;
-    const result = await verifyApple(supabase, authCtx, payload);
+    const result = await verifyApple(supabase, payload);
 
     return json({
       ok: true,

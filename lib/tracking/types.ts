@@ -3,6 +3,30 @@ export type NumberLike = number | string | null;
 export type StaffRole = "Admin" | "Dev" | "Marketing";
 export type Platform = "google_play" | "apple_app_store";
 
+export type BackgroundJob = {
+  id: string;
+  app_id: string | null;
+  app_name: string | null;
+  created_at: string;
+  created_by: string;
+  description: string | null;
+  finished_at: string | null;
+  last_error: string | null;
+  metadata: unknown;
+  platform: string | null;
+  progress_current: number;
+  progress_total: number | null;
+  result_url: string | null;
+  source_job_id: string | null;
+  source_run_ids: string[];
+  started_at: string | null;
+  status: "queued" | "running" | "succeeded" | "failed" | "partial";
+  store_account_name: string | null;
+  title: string;
+  type: "notification_send" | "review_fetch";
+  updated_at: string;
+};
+
 export type TeamMember = {
   id: string;
   auth_user_id: string | null;
@@ -63,8 +87,6 @@ export type CredentialSecretMetadata = {
   status: "active" | "disabled";
   description: string | null;
   last_used_at: string | null;
-  supabase_user_id: string | null;
-  supabase_user_email: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -83,6 +105,12 @@ export type IosIapTransactionSummary = {
   price_milliunits: string | null;
   currency: string | null;
   is_trial: boolean | null;
+  offer_discount_type: string | null;
+  offer_period: string | null;
+  billing_plan_type: string | null;
+  transaction_reason: string | null;
+  storefront: string | null;
+  revocation_date: string | null;
   environment: string;
   raw_receipt: unknown;
   verified_at: string;
@@ -106,6 +134,10 @@ export type NotificationJob = {
   project_id: string | null;
   target_type: string;
   target_values: string[];
+  batch_done_count?: number;
+  batch_processed_target_count?: number;
+  batch_target_count?: number;
+  batch_total_count?: number;
   title: string | null;
   message: string | null;
   image_url: string | null;
@@ -183,6 +215,8 @@ export type DeviceToken = {
   platform: "android" | "ios" | string;
   firebase_app_id: string | null;
   firebase_project_id: string | null;
+  app_identifier: string | null;
+  fcm_token: string;
   app_version: string | null;
   os_version: string | null;
   locale: string | null;
@@ -193,6 +227,7 @@ export type DeviceToken = {
   product_app_id: string | null;
   package_name: string | null;
   bundle_id: string | null;
+  device_type: string | null;
   device_model: string | null;
   device_manufacturer: string | null;
   created_at: string;

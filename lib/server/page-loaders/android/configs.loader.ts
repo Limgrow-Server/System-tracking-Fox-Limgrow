@@ -1,17 +1,18 @@
 import "server-only";
 
-import { getAndroidCredentialConfigs } from "@/lib/server/services/credentials/android-credential.service";
-import { getSupabaseAuthUsersForStoreLink } from "@/lib/server/services/credentials/store-auth.service";
+import { getAndroidCredentialConfigsPage } from "@/lib/server/services/credentials/android-credential.service";
 import type { ConfigsPageData } from "@/lib/tracking/page-data";
 
 export async function getAndroidConfigsPageData(): Promise<ConfigsPageData> {
-  const [credentialConfigs, supabaseAuthUsers] = await Promise.all([
-    getAndroidCredentialConfigs(),
-    getSupabaseAuthUsersForStoreLink(),
-  ]);
+  const credentialConfigs = await getAndroidCredentialConfigsPage({ page: 1, pageSize: 10, skip: 0, take: 10 });
 
   return {
-    credentialSecrets: credentialConfigs.credentials,
-    supabaseAuthUsers,
+    credentialPagination: {
+      page: credentialConfigs.page,
+      pageSize: credentialConfigs.pageSize,
+      total: credentialConfigs.total,
+      totalPages: credentialConfigs.totalPages,
+    },
+    credentialSecrets: credentialConfigs.data,
   };
 }

@@ -11,9 +11,11 @@ import {
 import { requirePublicApiKey } from "./mobile-api-auth.ts";
 import { sha256Hex } from "./mobile-crypto.ts";
 import {
+  normalizeAppIdentifier,
   normalizeAppId,
   normalizeBundleId,
   normalizeDeviceId,
+  normalizeDeviceType,
   normalizeFirebaseProjectId,
   normalizeLocale,
   normalizePackageName,
@@ -37,6 +39,8 @@ type DeviceTokenRequest = {
   locale?: string;
   languageCode?: string;
   language_code?: string;
+  deviceType?: string;
+  device_type?: string;
   deviceModel?: string;
   deviceManufacturer?: string;
   errorCode?: string;
@@ -44,7 +48,7 @@ type DeviceTokenRequest = {
 };
 
 const safeColumns =
-  "id,user_id,app_id,device_id,platform,firebase_app_id,firebase_project_id,app_version,os_version,locale,status,last_seen_at,store_platform,store_account_name,product_app_id,package_name,bundle_id,device_model,device_manufacturer,created_at,updated_at";
+  "id,user_id,app_id,device_id,platform,firebase_app_id,firebase_project_id,app_identifier,app_version,os_version,locale,status,last_seen_at,store_platform,store_account_name,product_app_id,package_name,bundle_id,device_type,device_model,device_manufacturer,created_at,updated_at";
 
 function requestAppId(payload: DeviceTokenRequest) {
   return normalizeAppId(payload.appId) || normalizeAppId(payload.app_id);
@@ -118,6 +122,35 @@ function validateAppIdentifier(payload: DeviceTokenRequest, expectedPlatform: Mo
   return expectedPlatform === "android" ? "app_id_or_package_name_required" : "app_id_or_bundle_id_required";
 }
 
+function errorRecord(error: unknown) {
+  return error && typeof error === "object" && !Array.isArray(error)
+    ? error as Record<string, unknown>
+    : {};
+}
+
+function errorString(error: unknown, key: string) {
+  const value = errorRecord(error)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function deviceTokenError(error: unknown, expectedPlatform: MobilePlatform) {
+  const message = error instanceof Error
+    ? error.message
+    : errorString(error, "message")
+      ?? errorString(error, "error")
+      ?? `Unknown device-token-${expectedPlatform} error`;
+  const details = errorString(error, "details");
+  const hint = errorString(error, "hint");
+  const code = errorString(error, "code");
+
+  return {
+    code,
+    details,
+    error: message.slice(0, 500),
+    hint,
+  };
+}
+
 export function serveDeviceToken(expectedPlatform: MobilePlatform) {
   Deno.serve(async (request) => {
     if (request.method === "OPTIONS") {
@@ -159,6 +192,7 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
       const integration = await findIntegration(supabase, payload, expectedPlatform);
       const tokenHash = fcmToken ? await sha256Hex(fcmToken) : null;
       const deviceId = requestedDeviceId || (tokenHash ? tokenHash.slice(0, 24) : "");
+      const now = new Date().toISOString();
 
       if (action === "unregister" || action === "mark_invalid") {
         if (!tokenHash && !deviceId) {
@@ -168,8 +202,9 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         let query = supabase
           .from("device_tokens")
           .update({
+            last_seen_at: now,
             status: action === "unregister" ? "unregistered" : "invalid",
-            last_seen_at: new Date().toISOString(),
+            updated_at: now,
           })
           .eq("platform", expectedPlatform);
 
@@ -189,32 +224,47 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         return json({ ok: false, error: "fcm_token_required" }, 400);
       }
 
-      const productAppId = normalizeAppId(payload.productAppId) || normalizeAppId(integration?.product_app_id) || appId;
+      const integrationAppId = normalizeAppId(integration?.product_app_id);
+      const resolvedAppId = integrationAppId || appId;
+      const productAppId = integrationAppId || normalizeAppId(payload.productAppId) || resolvedAppId;
       const integrationStorePlatform = clean(integration?.store_platform) as StorePlatform;
       const storePlatform = payload.storePlatform ?? (integrationStorePlatform || inferredStorePlatform(expectedPlatform));
-      const userId = `app:${appId}:device:${deviceId || tokenHash.slice(0, 12)}`;
+      const packageName = expectedPlatform === "android" ? normalizePackageName(payload.packageName) || normalizePackageName(integration?.package_name) || null : null;
+      const bundleId = expectedPlatform === "ios" ? normalizeBundleId(payload.bundleId) || normalizeBundleId(integration?.bundle_id) || null : null;
+      const appIdentifier = normalizeAppIdentifier({
+        appId,
+        bundleId,
+        packageName,
+        platform: expectedPlatform,
+        productAppId,
+      }) || null;
+      const deviceType = normalizeDeviceType(payload.deviceType) || normalizeDeviceType(payload.device_type) || null;
+      const userId = `app:${resolvedAppId}:device:${deviceId || tokenHash.slice(0, 12)}`;
 
       const row = {
         user_id: userId,
-        app_id: appId,
+        app_id: resolvedAppId,
         device_id: deviceId,
         platform: expectedPlatform,
         firebase_app_id: clean(payload.firebaseAppId) || clean(integration?.firebase_app_id) || null,
         firebase_project_id: normalizeFirebaseProjectId(payload.firebaseProjectId) || normalizeFirebaseProjectId(integration?.firebase_project_id) || null,
+        app_identifier: appIdentifier,
         token_hash: tokenHash,
         fcm_token: fcmToken,
         app_version: clean(payload.appVersion) || null,
         os_version: clean(payload.osVersion) || null,
         locale: requestLocale(payload) || null,
         status: "active",
-        last_seen_at: new Date().toISOString(),
+        last_seen_at: now,
         store_platform: storePlatform,
         store_account_name: clean(integration?.store_account_name) || null,
         product_app_id: productAppId,
-        package_name: expectedPlatform === "android" ? normalizePackageName(payload.packageName) || normalizePackageName(integration?.package_name) || null : null,
-        bundle_id: expectedPlatform === "ios" ? normalizeBundleId(payload.bundleId) || normalizeBundleId(integration?.bundle_id) || null : null,
+        package_name: packageName,
+        bundle_id: bundleId,
+        device_type: deviceType,
         device_model: clean(payload.deviceModel) || null,
         device_manufacturer: clean(payload.deviceManufacturer) || null,
+        updated_at: now,
       };
 
       const { data, error } = await supabase
@@ -232,6 +282,7 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         device: data,
         app: {
           appId,
+          appIdentifier,
           productAppId,
           packageName: row.package_name,
           bundleId: row.bundle_id,
@@ -239,10 +290,18 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         },
       });
     } catch (error) {
+      const responseError = deviceTokenError(error, expectedPlatform);
+      console.error(`[device-token-${expectedPlatform}] request failed`, {
+        code: responseError.code,
+        details: responseError.details,
+        error: responseError.error,
+        hint: responseError.hint,
+      });
+
       return json(
         {
           ok: false,
-          error: error instanceof Error ? error.message : `Unknown device-token-${expectedPlatform} error`,
+          ...responseError,
         },
         500
       );

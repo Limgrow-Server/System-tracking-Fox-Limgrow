@@ -1,0 +1,157 @@
+model ReviewStoreTarget {
+  id                    String               @id @default(uuid()) @db.Uuid
+  platform              ReviewPlatform
+  androidStoreProfileId String?              @unique @map("android_store_profile_id") @db.Uuid
+  iosStoreProfileId     String?              @unique @map("ios_store_profile_id") @db.Uuid
+  storeAccountName      String               @map("store_account_name")
+  contactEmail          String?              @map("contact_email")
+  supportPhone          String?              @map("support_phone")
+  websiteUrl            String?              @map("website_url")
+  status                MappingStatus        @default(ACTIVE)
+  createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  androidStoreProfile   AndroidStoreProfile? @relation(fields: [androidStoreProfileId], references: [id], onDelete: Cascade)
+  iosStoreProfile       IosStoreProfile?     @relation(fields: [iosStoreProfileId], references: [id], onDelete: Cascade)
+  apps                  ReviewAppTarget[]
+
+  @@index([platform, status], map: "review_store_targets_platform_status_idx")
+  @@index([storeAccountName], map: "review_store_targets_store_name_idx")
+  @@map("review_store_targets")
+}
+
+model ReviewAppTarget {
+  id                    String                @id @default(uuid()) @db.Uuid
+  reviewStoreTargetId   String                @map("review_store_target_id") @db.Uuid
+  platform              ReviewPlatform
+  androidStoreMappingId String?               @unique @map("android_store_mapping_id") @db.Uuid
+  iosStoreMappingId     String?               @unique @map("ios_store_mapping_id") @db.Uuid
+  appName               String                @map("app_name")
+  appIdentifier         String                @map("app_identifier")
+  status                MappingStatus         @default(ACTIVE)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeTarget           ReviewStoreTarget     @relation(fields: [reviewStoreTargetId], references: [id], onDelete: Cascade)
+  androidStoreMapping   AndroidStoreMapping?  @relation(fields: [androidStoreMappingId], references: [id], onDelete: Cascade)
+  iosStoreMapping       IosStoreMapping?      @relation(fields: [iosStoreMappingId], references: [id], onDelete: Cascade)
+  syncState             ReviewSyncState?
+  replyTemplates        ReviewReplyTemplate[]
+  fetchRuns             ReviewFetchRun[]
+  androidReviews        AndroidStoreReview[]
+  iosReviews            IosStoreReview[]
+
+  @@index([reviewStoreTargetId, status], map: "review_app_targets_store_status_idx")
+  @@index([platform, status], map: "review_app_targets_platform_status_idx")
+  @@index([appIdentifier], map: "review_app_targets_identifier_idx")
+  @@map("review_app_targets")
+}
+
+model ReviewSyncState {
+  id                   String           @id @default(uuid()) @db.Uuid
+  reviewAppTargetId    String           @unique @map("review_app_target_id") @db.Uuid
+  status               ReviewSyncStatus @default(IDLE)
+  lastFetchStartedAt   DateTime?        @map("last_fetch_started_at") @db.Timestamptz(6)
+  lastFetchFinishedAt  DateTime?        @map("last_fetch_finished_at") @db.Timestamptz(6)
+  lastSuccessAt        DateTime?        @map("last_success_at") @db.Timestamptz(6)
+  lastReviewActivityAt DateTime?        @map("last_review_activity_at") @db.Timestamptz(6)
+  lockedAt             DateTime?        @map("locked_at") @db.Timestamptz(6)
+  lockedBy             String?          @map("locked_by")
+  lastErrorCode        String?          @map("last_error_code")
+  lastErrorMessage     String?          @map("last_error_message") @db.Text
+  lastFetchedCount     Int              @default(0) @map("last_fetched_count")
+  lastUpsertedCount    Int              @default(0) @map("last_upserted_count")
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  appTarget            ReviewAppTarget  @relation(fields: [reviewAppTargetId], references: [id], onDelete: Cascade)
+
+  @@index([status, lastFetchStartedAt], map: "review_sync_states_status_started_idx")
+  @@index([lastSuccessAt], map: "review_sync_states_success_idx")
+  @@map("review_sync_states")
+}
+
+model ReviewReplyTemplate {
+  id                String          @id @default(uuid()) @db.Uuid
+  reviewAppTargetId String          @map("review_app_target_id") @db.Uuid
+  rating            Int
+  replyText         String          @map("reply_text") @db.Text
+  isActive          Boolean         @default(false) @map("is_active")
+  createdBy         String?         @map("created_by")
+  updatedBy         String?         @map("updated_by")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  appTarget         ReviewAppTarget @relation(fields: [reviewAppTargetId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewAppTargetId, rating], map: "review_reply_templates_app_rating_key")
+  @@index([reviewAppTargetId, isActive], map: "review_reply_templates_app_active_idx")
+  @@map("review_reply_templates")
+}
+
+model ReviewFetchSchedule {
+  id               String                    @id @default(uuid()) @db.Uuid
+  scope            String                    @unique @default("global")
+  status           ReviewFetchScheduleStatus @default(ACTIVE)
+  intervalHours    Int                       @default(8) @map("interval_hours")
+  nextRunAt        DateTime?                 @map("next_run_at") @db.Timestamptz(6)
+  lastRunAt        DateTime?                 @map("last_run_at") @db.Timestamptz(6)
+  lastStatus       ReviewFetchRunStatus?     @map("last_status")
+  lastErrorCode    String?                   @map("last_error_code")
+  lastErrorMessage String?                   @map("last_error_message") @db.Text
+  lockedAt         DateTime?                 @map("locked_at") @db.Timestamptz(6)
+  lockedBy         String?                   @map("locked_by")
+  runCount         Int                       @default(0) @map("run_count")
+  createdBy        String?                   @map("created_by")
+  updatedBy        String?                   @map("updated_by")
+  createdAt        DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  fetchRuns        ReviewFetchRun[]
+
+  @@index([status, nextRunAt], map: "review_fetch_schedules_status_next_idx")
+  @@index([lockedAt], map: "review_fetch_schedules_locked_idx")
+  @@map("review_fetch_schedules")
+}
+
+model ReviewFetchRun {
+  id                  String                 @id @default(uuid()) @db.Uuid
+  reviewAppTargetId   String                 @map("review_app_target_id") @db.Uuid
+  sourceScheduleId    String?                @map("source_schedule_id") @db.Uuid
+  platform            ReviewPlatform
+  triggerType         ReviewFetchTrigger     @default(SCHEDULED) @map("trigger_type")
+  status              ReviewFetchRunStatus   @default(PENDING)
+  scanMode            ReviewFetchScanMode    @default(LIMITED) @map("scan_mode")
+  stopReason          ReviewFetchStopReason? @map("stop_reason")
+  scheduledFor        DateTime?              @map("scheduled_for") @db.Timestamptz(6)
+  nextAttemptAt       DateTime?              @map("next_attempt_at") @db.Timestamptz(6)
+  attemptCount        Int                    @default(0) @map("attempt_count")
+  maxAttempts         Int                    @default(3) @map("max_attempts")
+  lockedAt            DateTime?              @map("locked_at") @db.Timestamptz(6)
+  lockedBy            String?                @map("locked_by")
+  maxResults          Int                    @default(100) @map("max_results")
+  requestCount        Int                    @default(0) @map("request_count")
+  nextPageToken       String?                @map("next_page_token") @db.Text
+  nextPageUrl         String?                @map("next_page_url") @db.Text
+  pagesFetched        Int                    @default(0) @map("pages_fetched")
+  reviewsFetched      Int                    @default(0) @map("reviews_fetched")
+  reviewsUpserted     Int                    @default(0) @map("reviews_upserted")
+  rateLimitLimit      Int?                   @map("rate_limit_limit")
+  rateLimitRemaining  Int?                   @map("rate_limit_remaining")
+  lastRateLimitHeader String?                @map("last_rate_limit_header") @db.Text
+  rateLimitObservedAt DateTime?              @map("rate_limit_observed_at") @db.Timestamptz(6)
+  errorCode           String?                @map("error_code")
+  errorMessage        String?                @map("error_message") @db.Text
+  startedAt           DateTime?              @map("started_at") @db.Timestamptz(6)
+  finishedAt          DateTime?              @map("finished_at") @db.Timestamptz(6)
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+  appTarget           ReviewAppTarget        @relation(fields: [reviewAppTargetId], references: [id], onDelete: Cascade)
+  sourceSchedule      ReviewFetchSchedule?   @relation(fields: [sourceScheduleId], references: [id], onDelete: SetNull)
+
+  @@unique([reviewAppTargetId, triggerType, scheduledFor], map: "review_fetch_runs_app_trigger_scheduled_key")
+  @@index([reviewAppTargetId, platform, scanMode, status], map: "review_fetch_runs_app_platform_scan_status_idx")
+  @@index([status, nextAttemptAt], map: "review_fetch_runs_status_next_attempt_idx")
+  @@index([status, lockedAt], map: "review_fetch_runs_status_locked_idx")
+  @@index([reviewAppTargetId, createdAt], map: "review_fetch_runs_app_created_idx")
+  @@index([sourceScheduleId, scheduledFor], map: "review_fetch_runs_schedule_for_idx")
+  @@index([platform, status, createdAt], map: "review_fetch_runs_platform_status_created_idx")
+  @@index([platform, status, nextAttemptAt, createdAt], map: "review_fetch_runs_platform_status_next_created_idx")
+  @@index([createdAt], map: "review_fetch_runs_created_idx")
+  @@map("review_fetch_runs")
+}

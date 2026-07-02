@@ -6,9 +6,9 @@ import {
   type FormEvent,
   type ReactNode,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import { useRouter } from "next/navigation";
 import {
   CloudUpload,
   Copy,
@@ -22,10 +22,11 @@ import {
   Power,
   PowerOff,
   RotateCcw,
+  Search,
   Trash2,
-  UserRound,
 } from "lucide-react";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 import {
   PageHeader,
@@ -87,12 +88,32 @@ import type { CredentialSecretMetadata } from "@/lib/tracking/types";
 
 type CredentialAction = "upsert" | "delete";
 type SecretFormat = "json" | "p8";
+type SecretAccessOptions = { forceSend?: boolean };
 type WebkitTextSecurityStyle = CSSProperties & {
   WebkitTextSecurity?: "disc" | "none";
 };
 type ConfigViewTarget =
   | { platform: "android"; credential: CredentialSecretMetadata }
   | { platform: "ios"; group: IosCredentialGroup };
+type CredentialListResponse = {
+  success?: boolean;
+  data?: CredentialSecretMetadata[];
+  error?: string;
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  totalPages?: number;
+};
+type CredentialSecretOtpResponse = {
+  ok?: boolean;
+  unlocked?: boolean;
+  expiresAt?: string | null;
+  email?: string;
+  otpExpiresAt?: string;
+  error?: string;
+};
+
+const CONFIG_PAGE_SIZE = 10;
 
 const credentialRefPrefixes: Record<SecretType, string> = {
   firebase_service_account: "FIREBASE_ADMIN_SERVICE_ACCOUNT",
@@ -164,7 +185,6 @@ type IosCredentialGroup = {
   linkStore: string;
   avatarUrl: string;
   issuerId: string;
-  supabaseUserId: string | null;
   keyReview: CredentialSecretMetadata | null;
   keyIap: CredentialSecretMetadata | null;
   keyFirebase: CredentialSecretMetadata | null;
@@ -194,6 +214,16 @@ function credentialStatusLabel(status: string | null | undefined) {
   if (normalized === "active") return "Active";
   if (normalized === "inactive") return "Inactive";
   return notAvailable(normalized);
+}
+
+function appleKeyIdFromFileName(fileName: string) {
+  const baseName = fileName.split(/[\\/]/).pop() ?? fileName;
+  const withoutExtension = baseName.replace(/\.[^.]+$/, "");
+  const underscoreIndex = withoutExtension.lastIndexOf("_");
+
+  return underscoreIndex >= 0
+    ? withoutExtension.slice(underscoreIndex + 1).trim()
+    : "";
 }
 
 function keyPresence(credential: CredentialSecretMetadata | null) {
@@ -277,6 +307,34 @@ function InlineStoreLink({
     >
       <Link2 size={13} />
     </a>
+  );
+}
+
+function InputField({
+  id,
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="font-mono text-xs"
+      />
+    </div>
   );
 }
 
@@ -419,12 +477,14 @@ function SecretContentViewer({
   label,
   secretText,
   onSecretLoaded,
+  onEnsureSecretAccess,
 }: {
   credential: CredentialSecretMetadata;
   platform: MobilePlatform;
   label: string;
   secretText: string | undefined;
   onSecretLoaded: (credentialId: string, secretText: string) => void;
+  onEnsureSecretAccess: (options?: SecretAccessOptions) => Promise<boolean>;
 }) {
   const [pending, setPending] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -438,6 +498,33 @@ function SecretContentViewer({
       : "Show key"
     : "Load key from Vault";
 
+  async function fetchVaultSecret() {
+    const params = new URLSearchParams({
+      reveal: "secret",
+      id: credential.id,
+      platform,
+    });
+    const response = await fetch(
+      `/api/admin/credentials?${params.toString()}`,
+    );
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      secretText?: string;
+      error?: string;
+    };
+
+    if (
+      !response.ok ||
+      !payload.ok ||
+      typeof payload.secretText !== "string"
+    ) {
+      throw new Error(payload.error ?? "Could not load Vault secret.");
+    }
+
+    onSecretLoaded(credential.id, payload.secretText);
+    setRevealed(true);
+  }
+
   async function loadSecret() {
     if (secretText) {
       setRevealed((current) => !current);
@@ -447,32 +534,26 @@ function SecretContentViewer({
     setPending(true);
 
     try {
-      const params = new URLSearchParams({
-        reveal: "secret",
-        id: credential.id,
-        platform,
-      });
-      const response = await fetch(
-        `/api/admin/credentials?${params.toString()}`,
-      );
-      const payload = (await response.json()) as {
-        ok?: boolean;
-        secretText?: string;
-        error?: string;
-      };
+      const unlocked = await onEnsureSecretAccess();
+      if (!unlocked) return;
 
-      if (
-        !response.ok ||
-        !payload.ok ||
-        typeof payload.secretText !== "string"
-      ) {
-        throw new Error(payload.error ?? "Could not load Vault secret.");
+      try {
+        await fetchVaultSecret();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Could not load Vault secret.";
+
+        if (!message.toLowerCase().includes("otp")) {
+          throw error;
+        }
+
+        const unlockedAfterRetry = await onEnsureSecretAccess({
+          forceSend: true,
+        });
+        if (unlockedAfterRetry) await fetchVaultSecret();
       }
-
-      onSecretLoaded(credential.id, payload.secretText);
-      setRevealed(true);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Could not load Vault secret.",
       );
     } finally {
@@ -485,9 +566,9 @@ function SecretContentViewer({
 
     try {
       await navigator.clipboard.writeText(secretText);
-      toast.success("Key copied to clipboard.");
+      void showToast("success", "Key copied to clipboard.");
     } catch {
-      toast.error("Could not copy key.");
+      void showToast("error", "Could not copy key.");
     }
   }
 
@@ -564,6 +645,7 @@ function IosCredentialKeyViewSection({
   secretLabel,
   secretCache,
   onSecretLoaded,
+  onEnsureSecretAccess,
 }: {
   title: string;
   credential: CredentialSecretMetadata | null;
@@ -572,16 +654,19 @@ function IosCredentialKeyViewSection({
   secretLabel: string;
   secretCache: Record<string, string>;
   onSecretLoaded: (credentialId: string, secretText: string) => void;
+  onEnsureSecretAccess: (options?: SecretAccessOptions) => Promise<boolean>;
 }) {
   return (
     <fieldset className="space-y-3 rounded-lg border p-3">
       <legend className="px-1 text-sm font-medium">{title}</legend>
       {keyIdLabel ? (
-        <ReadOnlySensitiveInputField
-          id={`${title.replace(/\s+/g, "-").toLowerCase()}-key-id`}
-          label={keyIdLabel}
-          value={keyId}
-        />
+        <ReadOnlyInputField label={keyIdLabel} value={keyId}>
+          <Input
+            readOnly
+            value={notAvailable(keyId)}
+            className="bg-muted/30 font-mono text-xs"
+          />
+        </ReadOnlyInputField>
       ) : null}
       {credential ? (
         <SecretContentViewer
@@ -590,6 +675,7 @@ function IosCredentialKeyViewSection({
           label={secretLabel}
           secretText={secretCache[credential.id]}
           onSecretLoaded={onSecretLoaded}
+          onEnsureSecretAccess={onEnsureSecretAccess}
         />
       ) : (
         <ReadOnlyInputField label={secretLabel} value={null} />
@@ -602,10 +688,12 @@ function ConfigViewContent({
   target,
   secretCache,
   onSecretLoaded,
+  onEnsureSecretAccess,
 }: {
   target: ConfigViewTarget;
   secretCache: Record<string, string>;
   onSecretLoaded: (credentialId: string, secretText: string) => void;
+  onEnsureSecretAccess: (options?: SecretAccessOptions) => Promise<boolean>;
 }) {
   if (target.platform === "android") {
     const credential = target.credential;
@@ -642,6 +730,7 @@ function ConfigViewContent({
           label="Google Service Account JSON"
           secretText={secretCache[credential.id]}
           onSecretLoaded={onSecretLoaded}
+          onEnsureSecretAccess={onEnsureSecretAccess}
         />
       </div>
     );
@@ -679,6 +768,7 @@ function ConfigViewContent({
         secretLabel="Key Review (optional)"
         secretCache={secretCache}
         onSecretLoaded={onSecretLoaded}
+        onEnsureSecretAccess={onEnsureSecretAccess}
       />
       <IosCredentialKeyViewSection
         title="Key IAP"
@@ -688,6 +778,7 @@ function ConfigViewContent({
         secretLabel="Key IAP (optional)"
         secretCache={secretCache}
         onSecretLoaded={onSecretLoaded}
+        onEnsureSecretAccess={onEnsureSecretAccess}
       />
       <IosCredentialKeyViewSection
         title="Key Firebase"
@@ -695,6 +786,7 @@ function ConfigViewContent({
         secretLabel="Key firebase-admin (optional)"
         secretCache={secretCache}
         onSecretLoaded={onSecretLoaded}
+        onEnsureSecretAccess={onEnsureSecretAccess}
       />
     </div>
   );
@@ -728,14 +820,6 @@ function latestDateIso(left: string, right: string) {
   return new Date(left).getTime() >= new Date(right).getTime() ? left : right;
 }
 
-function selectedSupabaseUserId(value: string) {
-  return value && value !== "__none__" ? value : null;
-}
-
-function supabaseUserIdFormValue(value: string) {
-  return value === "__none__" ? "" : value;
-}
-
 function groupIosCredentials(
   credentials: CredentialSecretMetadata[],
 ): IosCredentialGroup[] {
@@ -759,7 +843,6 @@ function groupIosCredentials(
         linkStore: "",
         avatarUrl: "",
         issuerId: "",
-        supabaseUserId: credential.supabase_user_id,
         keyReview: null,
         keyIap: null,
         keyFirebase: null,
@@ -777,8 +860,6 @@ function groupIosCredentials(
       current.avatarUrl = metadata.avatarUrl;
     if (!current.issuerId && credential.issuer_id)
       current.issuerId = credential.issuer_id;
-    if (!current.supabaseUserId && credential.supabase_user_id)
-      current.supabaseUserId = credential.supabase_user_id;
     current.updatedAt = latestDateIso(current.updatedAt, credential.updated_at);
     current.credentials.push(credential);
 
@@ -961,11 +1042,14 @@ export function CredentialConfigs({
   data: ConfigsPageData;
   platformFilter: MobilePlatform;
 }) {
-  const router = useRouter();
   const platformLabel = platformFilter === "android" ? "Android" : "iOS";
+  const [credentialSecrets, setCredentialSecrets] = useState(data.credentialSecrets);
+  const [credentialPagination, setCredentialPagination] = useState(data.credentialPagination);
+  const [credentialTableLoading, setCredentialTableLoading] = useState(false);
+  const [credentialSearchQuery, setCredentialSearchQuery] = useState("");
   const vaultOptions = useMemo(
-    () => credentialVaultOptions(data.credentialSecrets),
-    [data.credentialSecrets],
+    () => credentialVaultOptions(credentialSecrets),
+    [credentialSecrets],
   );
 
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -980,7 +1064,6 @@ export function CredentialConfigs({
   const [storeName, setStoreName] = useState("");
   const [linkStore, setLinkStore] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
-  const [supabaseUserId, setSupabaseUserId] = useState("");
   const [secretFile, setSecretFile] = useState<File | null>(null);
   const [selectedFileName, setSelectedFileName] = useState("");
   const [iosReviewKeyId, setIosReviewKeyId] = useState("");
@@ -1003,6 +1086,21 @@ export function CredentialConfigs({
   const [vaultSecretCache, setVaultSecretCache] = useState<
     Record<string, string>
   >({});
+  const [secretOtpOpen, setSecretOtpOpen] = useState(false);
+  const [secretOtpCode, setSecretOtpCode] = useState("");
+  const [secretOtpEmail, setSecretOtpEmail] = useState("");
+  const [secretOtpExpiresAt, setSecretOtpExpiresAt] = useState<string | null>(
+    null,
+  );
+  const [secretUnlockExpiresAt, setSecretUnlockExpiresAt] = useState<
+    string | null
+  >(null);
+  const [secretOtpSending, setSecretOtpSending] = useState(false);
+  const [secretOtpVerifying, setSecretOtpVerifying] = useState(false);
+  const [secretOtpError, setSecretOtpError] = useState<string | null>(null);
+  const secretOtpResolveRef = useRef<((unlocked: boolean) => void) | null>(
+    null,
+  );
 
   const isAndroidConfigCredentialView = platformFilter === "android";
   const isIosConfigCredentialView = platformFilter === "ios";
@@ -1033,35 +1131,74 @@ export function CredentialConfigs({
     (type) => secretTypeSupportsPlatform(type, platform),
   );
   const iosCredentialGroups = useMemo(
-    () => groupIosCredentials(data.credentialSecrets),
-    [data.credentialSecrets],
+    () => groupIosCredentials(credentialSecrets),
+    [credentialSecrets],
   );
   const selectedAndroidCredential = useMemo(
     () =>
-      data.credentialSecrets.find(
+      credentialSecrets.find(
         (credential) =>
           credential.platform === "android" &&
           credential.id === selectedCredentialId,
       ) ?? null,
-    [data.credentialSecrets, selectedCredentialId],
+    [credentialSecrets, selectedCredentialId],
   );
 
-  function credentialBelongsToCurrentAuthSelection(
-    credential: CredentialSecretMetadata,
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadCredentialPage(1, { searchQuery: value });
+  }, 500);
+
+  function updateCredentialSearchQuery(nextValue: string) {
+    setCredentialSearchQuery(nextValue);
+    debouncedSearch(nextValue);
+  }
+
+  async function loadCredentialPage(
+    page: number,
+    overrides?: { knownTotal?: number; searchQuery?: string },
   ) {
-    if (isAndroidCredentialOnlyFlow) {
-      return credential.id === selectedCredentialId;
+    const nextSearchQuery =
+      overrides?.searchQuery ?? credentialSearchQuery;
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(CONFIG_PAGE_SIZE),
+      platform: platformFilter,
+    });
+    const search = nextSearchQuery.trim();
+
+    if (search) params.set("search", search);
+    if (overrides?.knownTotal !== undefined) {
+      params.set("knownTotal", String(overrides.knownTotal));
     }
 
-    if (!isIosConfigCredentialView || !iosEditingGroup) {
-      return false;
-    }
+    setCredentialTableLoading(true);
 
-    if (iosEditingGroup.storeProfileId) {
-      return credential.store_profile_id === iosEditingGroup.storeProfileId;
-    }
+    try {
+      const response = await fetch(
+        `/api/admin/credentials?${params.toString()}`,
+      );
+      const payload = (await response.json()) as CredentialListResponse;
 
-    return credential.store_account_name === iosEditingGroup.storeName;
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Load credential configs failed.");
+      }
+
+      setCredentialSecrets(payload.data);
+      setCredentialPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? CONFIG_PAGE_SIZE,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+    } catch (error) {
+      void showToast("error",
+        error instanceof Error
+          ? error.message
+          : "Load credential configs failed.",
+      );
+    } finally {
+      setCredentialTableLoading(false);
+    }
   }
 
   function cacheVaultSecret(credentialId: string, secretText: string) {
@@ -1070,6 +1207,144 @@ export function CredentialConfigs({
         ? current
         : { ...current, [credentialId]: secretText },
     );
+  }
+
+  function resolveSecretOtpWaiter(unlocked: boolean) {
+    const resolve = secretOtpResolveRef.current;
+    secretOtpResolveRef.current = null;
+    resolve?.(unlocked);
+  }
+
+  function credentialOtpError(payload: CredentialSecretOtpResponse) {
+    return payload.error ?? "Credential OTP operation failed.";
+  }
+
+  async function requestCredentialSecretOtp() {
+    setSecretOtpSending(true);
+    setSecretOtpError(null);
+
+    try {
+      const response = await fetch("/api/admin/credentials/otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "send" }),
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      setSecretOtpEmail(payload.email ?? "");
+      setSecretOtpExpiresAt(payload.otpExpiresAt ?? null);
+      void showToast("success", "OTP sent to your email.");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not send credential OTP.";
+      setSecretOtpError(message);
+      throw error;
+    } finally {
+      setSecretOtpSending(false);
+    }
+  }
+
+  async function ensureCredentialSecretAccess(
+    options?: SecretAccessOptions,
+  ) {
+    if (!options?.forceSend) {
+      const response = await fetch("/api/admin/credentials/otp", {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      if (payload.unlocked) {
+        setSecretUnlockExpiresAt(payload.expiresAt ?? null);
+        return true;
+      }
+    }
+
+    if (secretOtpResolveRef.current) {
+      setSecretOtpOpen(true);
+      return new Promise<boolean>((resolve) => {
+        const previousResolve = secretOtpResolveRef.current;
+        secretOtpResolveRef.current = (unlocked) => {
+          previousResolve?.(unlocked);
+          resolve(unlocked);
+        };
+      });
+    }
+
+    const waitForOtp = new Promise<boolean>((resolve) => {
+      secretOtpResolveRef.current = resolve;
+    });
+
+    setSecretOtpCode("");
+    setSecretOtpError(null);
+    setSecretOtpOpen(true);
+
+    try {
+      await requestCredentialSecretOtp();
+    } catch (error) {
+      setSecretOtpOpen(false);
+      resolveSecretOtpWaiter(false);
+      throw error instanceof Error
+        ? error
+        : new Error("Could not send credential OTP.");
+    }
+
+    return waitForOtp;
+  }
+
+  async function verifyCredentialSecretAccessOtp() {
+    const code = secretOtpCode.replace(/\D/g, "");
+    if (!/^\d{6}$/.test(code)) {
+      setSecretOtpError("OTP code must contain 6 digits.");
+      return;
+    }
+
+    setSecretOtpVerifying(true);
+    setSecretOtpError(null);
+
+    try {
+      const response = await fetch("/api/admin/credentials/otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "verify", code }),
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok || !payload.unlocked) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      setSecretUnlockExpiresAt(payload.expiresAt ?? null);
+      setSecretOtpOpen(false);
+      setSecretOtpCode("");
+      void showToast("success", "Credential keys unlocked for 1 hour.");
+      resolveSecretOtpWaiter(true);
+    } catch (error) {
+      setSecretOtpError(
+        error instanceof Error
+          ? error.message
+          : "Could not verify credential OTP.",
+      );
+    } finally {
+      setSecretOtpVerifying(false);
+    }
+  }
+
+  function closeSecretOtpDialog() {
+    if (secretOtpSending || secretOtpVerifying) return;
+    setSecretOtpOpen(false);
+    setSecretOtpCode("");
+    setSecretOtpError(null);
+    resolveSecretOtpWaiter(false);
   }
 
   function resetAndroidCredentialForm() {
@@ -1082,7 +1357,6 @@ export function CredentialConfigs({
     setStoreName("");
     setLinkStore("");
     setAvatarUrl("");
-    setSupabaseUserId("");
     setSecretFile(null);
     setSelectedFileName("");
     setIosEditingGroup(null);
@@ -1098,7 +1372,6 @@ export function CredentialConfigs({
     setStoreName("");
     setLinkStore("");
     setAvatarUrl("");
-    setSupabaseUserId("");
     setSecretFile(null);
     setSelectedFileName("");
     setIosReviewKeyId("");
@@ -1128,7 +1401,6 @@ export function CredentialConfigs({
       setStoreName("");
       setLinkStore("");
       setAvatarUrl("");
-      setSupabaseUserId("");
       setSecretFile(null);
       setSelectedFileName("");
       setIosEditingGroup(null);
@@ -1162,7 +1434,6 @@ export function CredentialConfigs({
     setStoreName(credential.store_account_name ?? "");
     setLinkStore(metadata.linkStore);
     setAvatarUrl(metadata.avatarUrl);
-    setSupabaseUserId(credential.supabase_user_id ?? "");
     setSecretFile(null);
     setSelectedFileName("");
     setSheetOpen(true);
@@ -1178,7 +1449,6 @@ export function CredentialConfigs({
     setStoreName(group.storeName);
     setLinkStore(group.linkStore);
     setAvatarUrl(group.avatarUrl);
-    setSupabaseUserId(group.supabaseUserId ?? "");
     setIosReviewKeyId(group.keyReview?.key_id ?? "");
     setIosIapKeyId(group.keyIap?.key_id ?? "");
     setIosIssuerId(group.keyReview?.issuer_id ?? group.keyIap?.issuer_id ?? "");
@@ -1226,13 +1496,13 @@ export function CredentialConfigs({
 
     try {
       await patchCredentialStatus(credential, "android", nextStatus);
-      toast.success(
+      void showToast("success",
         `Android credential has been set to ${credentialStatusLabel(nextStatus)}.`,
       );
-      router.refresh();
+      await loadCredentialPage(credentialPagination.page);
       setStatusConfirmTarget(null);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Credential status update failed.",
@@ -1254,13 +1524,13 @@ export function CredentialConfigs({
         ),
       );
 
-      toast.success(
+      void showToast("success",
         `iOS credential group has been set to ${credentialStatusLabel(nextStatus)}.`,
       );
-      router.refresh();
+      await loadCredentialPage(credentialPagination.page);
       setStatusConfirmTarget(null);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Credential status update failed.",
@@ -1319,10 +1589,14 @@ export function CredentialConfigs({
       setHardDeleteTarget(null);
       setHardDeleteConfirmationName("");
       setVaultSecretCache({});
-      toast.success(payload.message ?? "Credential config hard deleted.");
-      router.refresh();
+      void showToast("success", payload.message ?? "Credential config hard deleted.");
+      await loadCredentialPage(
+        credentialSecrets.length <= ids.length && credentialPagination.page > 1
+          ? credentialPagination.page - 1
+          : credentialPagination.page,
+      );
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error
           ? error.message
           : "Credential hard delete failed.",
@@ -1370,7 +1644,7 @@ export function CredentialConfigs({
       !lowerName.endsWith(".json") &&
       file.type !== "application/json"
     ) {
-      toast.error("Google Service Account must be a JSON file.");
+      void showToast("error", "Google Service Account must be a JSON file.");
       return;
     }
 
@@ -1390,13 +1664,13 @@ export function CredentialConfigs({
     } else if (lowerName.endsWith(".p8")) {
       setSecretFormat("p8");
     } else {
-      toast.error(
+      void showToast("error",
         "Credential file must be a JSON service account or Apple .p8 key.",
       );
       return;
     }
 
-    toast.info(`${file.name} selected for secure upload.`);
+    void showToast("info", `${file.name} selected for secure upload.`);
   }
 
   function selectIosSecretFile(
@@ -1406,7 +1680,7 @@ export function CredentialConfigs({
     const lowerName = file.name.toLowerCase();
 
     if ((kind === "review" || kind === "iap") && !lowerName.endsWith(".p8")) {
-      toast.error("Apple keys must be .p8 files.");
+      void showToast("error", "Apple keys must be .p8 files.");
       return;
     }
 
@@ -1415,14 +1689,22 @@ export function CredentialConfigs({
       !lowerName.endsWith(".json") &&
       file.type !== "application/json"
     ) {
-      toast.error("Key firebase-admin must be a JSON file.");
+      void showToast("error", "Key firebase-admin must be a JSON file.");
       return;
     }
 
-    if (kind === "review") setIosReviewFile(file);
-    if (kind === "iap") setIosIapFile(file);
+    if (kind === "review") {
+      setIosReviewFile(file);
+      const keyId = appleKeyIdFromFileName(file.name);
+      if (keyId) setIosReviewKeyId(keyId);
+    }
+    if (kind === "iap") {
+      setIosIapFile(file);
+      const keyId = appleKeyIdFromFileName(file.name);
+      if (keyId) setIosIapKeyId(keyId);
+    }
     if (kind === "firebase") setIosFirebaseFile(file);
-    toast.info(`${file.name} selected for secure upload.`);
+    void showToast("info", `${file.name} selected for secure upload.`);
   }
 
   async function patchCredentialMetadata(
@@ -1438,7 +1720,6 @@ export function CredentialConfigs({
         storeAccountName: storeName,
         linkStore,
         avatarUrl,
-        supabaseUserId: selectedSupabaseUserId(supabaseUserId),
         keyId: fields.keyId,
         issuerId: fields.issuerId,
         status: "active",
@@ -1480,7 +1761,6 @@ export function CredentialConfigs({
     body.set("storeAccountName", storeName);
     body.set("linkStore", linkStore);
     body.set("avatarUrl", avatarUrl);
-    body.set("supabaseUserId", supabaseUserIdFormValue(supabaseUserId));
     body.set("secretFile", file);
 
     if (keyId) body.set("keyId", keyId);
@@ -1574,8 +1854,8 @@ export function CredentialConfigs({
     setSheetOpen(false);
     resetIosCredentialForm();
     setVaultSecretCache({});
-    toast.success("iOS credential vault has been saved.");
-    router.refresh();
+    void showToast("success", "iOS credential vault has been saved.");
+    await loadCredentialPage(credentialPagination.page);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -1613,7 +1893,6 @@ export function CredentialConfigs({
             storeAccountName: storeName,
             linkStore,
             avatarUrl,
-            supabaseUserId: selectedSupabaseUserId(supabaseUserId),
             status: "active",
           }),
         });
@@ -1630,8 +1909,8 @@ export function CredentialConfigs({
         setSecretFile(null);
         setSelectedFileName("");
         setSheetOpen(false);
-        toast.success(payload.message ?? "Credential metadata updated.");
-        router.refresh();
+        void showToast("success", payload.message ?? "Credential metadata updated.");
+        await loadCredentialPage(credentialPagination.page);
         return;
       }
 
@@ -1657,14 +1936,14 @@ export function CredentialConfigs({
       body.set("platform", platform);
       body.set("storeAccountName", storeName);
       if (isAndroidCredentialOnlyFlow) {
-        const currentCredential = data.credentialSecrets.find(
+        const currentCredential = credentialSecrets.find(
           (credential) => credential.id === selectedCredentialId,
         );
-        if (currentCredential?.store_profile_id)
+        if (currentCredential?.store_profile_id) {
           body.set("storeProfileId", currentCredential.store_profile_id);
+        }
         body.set("linkStore", linkStore);
         body.set("avatarUrl", avatarUrl);
-        body.set("supabaseUserId", supabaseUserIdFormValue(supabaseUserId));
       }
       if (submittedSecretFile) body.set("secretFile", submittedSecretFile);
 
@@ -1693,10 +1972,10 @@ export function CredentialConfigs({
       setSelectedFileName("");
       setVaultSecretCache({});
       setSheetOpen(false);
-      toast.success(payload.message ?? "Credential operation completed.");
-      router.refresh();
+      void showToast("success", payload.message ?? "Credential operation completed.");
+      await loadCredentialPage(selectedCredentialId === "new" ? 1 : credentialPagination.page);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Credential operation failed.",
       );
     } finally {
@@ -1741,6 +2020,9 @@ export function CredentialConfigs({
     !hardDeleteTargetIsInactive(hardDeleteTarget) ||
     pendingActionId === hardDeleteTargetId ||
     hardDeleteConfirmationName.trim() !== hardDeleteExpectedName;
+  const secretOtpCodeDigits = secretOtpCode.replace(/\D/g, "");
+  const secretOtpSubmitDisabled =
+    secretOtpSending || secretOtpVerifying || secretOtpCodeDigits.length !== 6;
 
   return (
     <div className="space-y-5">
@@ -1905,53 +2187,6 @@ export function CredentialConfigs({
                         />
                       </div>
 
-                      {(isAndroidCredentialOnlyFlow ||
-                        isIosConfigCredentialView) &&
-                      data.supabaseAuthUsers.length > 0 ? (
-                        <div className="grid gap-2">
-                          <Label htmlFor="supabaseUserId">
-                            Auth account{" "}
-                            <span className="text-muted-foreground">
-                              (optional)
-                            </span>
-                          </Label>
-                          <Select
-                            value={supabaseUserId}
-                            onValueChange={setSupabaseUserId}
-                          >
-                            <SelectTrigger
-                              id="supabaseUserId"
-                              className="h-9 w-full"
-                            >
-                              <SelectValue placeholder="No account linked" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">
-                                No account linked
-                              </SelectItem>
-                              {data.supabaseAuthUsers
-                                .filter((user) => {
-                                  if (user.id === supabaseUserId) return true;
-                                  const alreadyLinked =
-                                    data.credentialSecrets.some(
-                                      (credential) =>
-                                        credential.supabase_user_id ===
-                                          user.id &&
-                                        !credentialBelongsToCurrentAuthSelection(
-                                          credential,
-                                        ),
-                                    );
-                                  return !alreadyLinked;
-                                })
-                                .map((user) => (
-                                  <SelectItem key={user.id} value={user.id}>
-                                    {user.email}
-                                  </SelectItem>
-                                ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      ) : null}
                     </>
                   ) : null}
 
@@ -2016,7 +2251,7 @@ export function CredentialConfigs({
                         <legend className="px-1 text-sm font-medium">
                           Key Review
                         </legend>
-                        <SensitiveInput
+                        <InputField
                           id="iosReviewKeyId"
                           label="Key Review ID (optional)"
                           value={iosReviewKeyId}
@@ -2039,6 +2274,9 @@ export function CredentialConfigs({
                               vaultSecretCache[iosEditingGroup.keyReview.id]
                             }
                             onSecretLoaded={cacheVaultSecret}
+                            onEnsureSecretAccess={
+                              ensureCredentialSecretAccess
+                            }
                           />
                         ) : null}
                       </fieldset>
@@ -2047,7 +2285,7 @@ export function CredentialConfigs({
                         <legend className="px-1 text-sm font-medium">
                           Key IAP
                         </legend>
-                        <SensitiveInput
+                        <InputField
                           id="iosIapKeyId"
                           label="Key IAP ID (optional)"
                           value={iosIapKeyId}
@@ -2070,6 +2308,9 @@ export function CredentialConfigs({
                               vaultSecretCache[iosEditingGroup.keyIap.id]
                             }
                             onSecretLoaded={cacheVaultSecret}
+                            onEnsureSecretAccess={
+                              ensureCredentialSecretAccess
+                            }
                           />
                         ) : null}
                       </fieldset>
@@ -2096,6 +2337,9 @@ export function CredentialConfigs({
                               vaultSecretCache[iosEditingGroup.keyFirebase.id]
                             }
                             onSecretLoaded={cacheVaultSecret}
+                            onEnsureSecretAccess={
+                              ensureCredentialSecretAccess
+                            }
                           />
                         ) : null}
                       </fieldset>
@@ -2127,6 +2371,7 @@ export function CredentialConfigs({
                             vaultSecretCache[selectedAndroidCredential.id]
                           }
                           onSecretLoaded={cacheVaultSecret}
+                          onEnsureSecretAccess={ensureCredentialSecretAccess}
                         />
                       ) : null}
                     </>
@@ -2183,11 +2428,95 @@ export function CredentialConfigs({
                 target={viewTarget}
                 secretCache={vaultSecretCache}
                 onSecretLoaded={cacheVaultSecret}
+                onEnsureSecretAccess={ensureCredentialSecretAccess}
               />
             ) : null}
           </div>
         </SheetContent>
       </Sheet>
+
+      <Dialog
+        open={secretOtpOpen}
+        onOpenChange={(open) => {
+          if (!open) closeSecretOtpDialog();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Verify credential access</DialogTitle>
+            <DialogDescription>
+              Enter the OTP sent to{" "}
+              {secretOtpEmail || "the configured security email"} to view
+              hidden credential keys for 1 hour.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid gap-2">
+              <Label htmlFor="credentialSecretOtp">OTP code</Label>
+              <Input
+                id="credentialSecretOtp"
+                inputMode="numeric"
+                maxLength={6}
+                value={secretOtpCode}
+                onChange={(event) =>
+                  setSecretOtpCode(
+                    event.target.value.replace(/\D/g, "").slice(0, 6),
+                  )
+                }
+                placeholder="123456"
+                autoComplete="one-time-code"
+              />
+            </div>
+            {secretOtpExpiresAt ? (
+              <p className="text-xs text-muted-foreground">
+                OTP expires at {dateTime(secretOtpExpiresAt)}.
+              </p>
+            ) : null}
+            {secretUnlockExpiresAt ? (
+              <p className="text-xs text-muted-foreground">
+                Current unlock expires at {dateTime(secretUnlockExpiresAt)}.
+              </p>
+            ) : null}
+            {secretOtpError ? (
+              <Alert variant="destructive">
+                <AlertTitle>OTP failed</AlertTitle>
+                <AlertDescription>{secretOtpError}</AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={secretOtpSending || secretOtpVerifying}
+              onClick={() =>
+                void requestCredentialSecretOtp().catch(() => undefined)
+              }
+            >
+              {secretOtpSending ? <Spinner /> : <RotateCcw size={15} />}
+              Resend OTP
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={secretOtpSending || secretOtpVerifying}
+                onClick={closeSecretOtpDialog}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={secretOtpSubmitDisabled}
+                onClick={() => void verifyCredentialSecretAccessOtp()}
+              >
+                {secretOtpVerifying ? <Spinner /> : <KeyRound size={15} />}
+                Verify
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={Boolean(statusConfirmTarget)}
@@ -2302,8 +2631,27 @@ export function CredentialConfigs({
 
       {isAndroidConfigCredentialView ? (
         <Card className="rounded-lg">
-          <CardHeader className="border-b">
-            <CardTitle>Credential config</CardTitle>
+          <CardHeader className="gap-3 border-b">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <CardTitle className="flex items-center gap-2">
+                Credential config
+                {credentialTableLoading ? (
+                  <Spinner className="size-4" />
+                ) : null}
+              </CardTitle>
+              <div className="relative sm:w-[320px]">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="search"
+                  value={credentialSearchQuery}
+                  onChange={(event) =>
+                    updateCredentialSearchQuery(event.target.value)
+                  }
+                  placeholder="Search stores or credentials..."
+                  className="h-9 pl-9"
+                />
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="overflow-x-auto px-0">
             <Table className="min-w-[1040px]">
@@ -2311,7 +2659,6 @@ export function CredentialConfigs({
                 <TableRow>
                   <TableHead className="pl-4">Avatar</TableHead>
                   <TableHead>Store name</TableHead>
-                  <TableHead>Account</TableHead>
                   <TableHead>Service account JSON</TableHead>
                   <TableHead>Vault</TableHead>
                   <TableHead>Status</TableHead>
@@ -2320,7 +2667,7 @@ export function CredentialConfigs({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.credentialSecrets.slice(0, 24).map((secret) => {
+                {credentialSecrets.map((secret) => {
                   const metadata = credentialConfigMetadata(secret);
 
                   return (
@@ -2344,32 +2691,6 @@ export function CredentialConfigs({
                             storeName={secret.store_account_name}
                           />
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        {secret.supabase_user_id ? (
-                          <div className="flex items-center gap-1.5">
-                            <UserRound
-                              size={14}
-                              className="shrink-0 text-emerald-600"
-                            />
-                            <span
-                              className="max-w-[160px] truncate text-xs font-medium"
-                              title={
-                                secret.supabase_user_email ??
-                                secret.supabase_user_id
-                              }
-                            >
-                              {data.supabaseAuthUsers.find(
-                                (user) => user.id === secret.supabase_user_id,
-                              )?.email ??
-                                secret.supabase_user_id.slice(0, 8) + "…"}
-                            </span>
-                          </div>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">
-                            N/A
-                          </span>
-                        )}
                       </TableCell>
                       <TableCell>{keyPresence(secret)}</TableCell>
                       <TableCell>
@@ -2466,7 +2787,7 @@ export function CredentialConfigs({
                     </TableRow>
                   );
                 })}
-                {!data.credentialSecrets.length ? (
+                {!credentialSecrets.length ? (
                   <TableEmptyState
                     colSpan={8}
                     icon={KeyRound}
@@ -2477,15 +2798,51 @@ export function CredentialConfigs({
               </TableBody>
             </Table>
             <TablePaginationFooter
-              shown={Math.min(data.credentialSecrets.length, 24)}
-              total={data.credentialSecrets.length}
+              from={
+                (credentialPagination.page - 1) *
+                  credentialPagination.pageSize +
+                1
+              }
+              onPageChange={(page) =>
+                void loadCredentialPage(page, {
+                  knownTotal: credentialPagination.total,
+                })
+              }
+              page={credentialPagination.page}
+              shown={credentialSecrets.length}
+              to={
+                (credentialPagination.page - 1) *
+                  credentialPagination.pageSize +
+                credentialSecrets.length
+              }
+              total={credentialPagination.total}
+              totalPages={credentialPagination.totalPages}
             />
           </CardContent>
         </Card>
       ) : isIosConfigCredentialView ? (
         <Card className="rounded-lg">
-          <CardHeader className="border-b">
-            <CardTitle>Credential config</CardTitle>
+          <CardHeader className="gap-3 border-b">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <CardTitle className="flex items-center gap-2">
+                Credential config
+                {credentialTableLoading ? (
+                  <Spinner className="size-4" />
+                ) : null}
+              </CardTitle>
+              <div className="relative sm:w-[320px]">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="search"
+                  value={credentialSearchQuery}
+                  onChange={(event) =>
+                    updateCredentialSearchQuery(event.target.value)
+                  }
+                  placeholder="Search stores or credentials..."
+                  className="h-9 pl-9"
+                />
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="overflow-x-auto px-0">
             <Table className="min-w-[1240px]">
@@ -2493,7 +2850,6 @@ export function CredentialConfigs({
                 <TableRow>
                   <TableHead className="pl-4">Avatar</TableHead>
                   <TableHead>Store name</TableHead>
-                  <TableHead>Account</TableHead>
                   <TableHead>Issuer ID</TableHead>
                   <TableHead>Key IAP</TableHead>
                   <TableHead>Key Review</TableHead>
@@ -2505,7 +2861,7 @@ export function CredentialConfigs({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {iosCredentialGroups.slice(0, 24).map((group) => (
+                {iosCredentialGroups.map((group) => (
                   <TableRow
                     key={group.id}
                     className={configRowClass(
@@ -2529,29 +2885,6 @@ export function CredentialConfigs({
                         />
                       </div>
                     </TableCell>
-                    <TableCell>
-                      {group.supabaseUserId ? (
-                        <div className="flex items-center gap-1.5">
-                          <UserRound
-                            size={14}
-                            className="shrink-0 text-emerald-600"
-                          />
-                          <span
-                            className="max-w-[160px] truncate text-xs font-medium"
-                            title={group.supabaseUserId}
-                          >
-                            {data.supabaseAuthUsers.find(
-                              (user) => user.id === group.supabaseUserId,
-                            )?.email ?? `${group.supabaseUserId.slice(0, 8)}…`}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">
-                          N/A
-                        </span>
-                      )}
-                    </TableCell>
-
                     <TableCell>
                       <span className="block max-w-[220px] truncate text-muted-foreground">
                         {notAvailable(group.issuerId)}
@@ -2661,8 +2994,25 @@ export function CredentialConfigs({
               </TableBody>
             </Table>
             <TablePaginationFooter
-              shown={Math.min(iosCredentialGroups.length, 24)}
-              total={iosCredentialGroups.length}
+              from={
+                (credentialPagination.page - 1) *
+                  credentialPagination.pageSize +
+                1
+              }
+              onPageChange={(page) =>
+                void loadCredentialPage(page, {
+                  knownTotal: credentialPagination.total,
+                })
+              }
+              page={credentialPagination.page}
+              shown={iosCredentialGroups.length}
+              to={
+                (credentialPagination.page - 1) *
+                  credentialPagination.pageSize +
+                iosCredentialGroups.length
+              }
+              total={credentialPagination.total}
+              totalPages={credentialPagination.totalPages}
             />
           </CardContent>
         </Card>

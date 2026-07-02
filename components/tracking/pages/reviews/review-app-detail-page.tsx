@@ -1,8 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Calendar as CalendarIcon,
@@ -39,6 +37,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
+import { announceBackgroundJob } from "@/lib/client/background-jobs";
 import {
   Select,
   SelectContent,
@@ -59,19 +58,33 @@ import {
   PageHeader,
   StatCard,
   StatusBadge,
+  TablePaginationFooter,
 } from "@/components/tracking/primitives";
+import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
+import {
+  MAX_REVIEW_REPLY_TEXT_LENGTH,
+  renderReviewReplyTemplate,
+} from "@/lib/tracking/reply-template";
 import type {
-  AndroidDeviceMetadataDto,
-  AndroidStoreReviewDto,
+  ReviewDeviceMetadataDto,
+  StoreReviewDto,
+  PaginationMeta,
+  ReviewAppCard,
   ReviewAppDetailPageData,
+  ReviewAppStats,
+  ReviewFetchRunDto,
+  ReviewFetchScheduleDto,
   ReviewReplyTemplatePreviewDto,
+  ReviewSyncStateDto,
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+import { showToast } from "@/lib/client/toast";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 const GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_REPLY_TEXT_LENGTH = MAX_REVIEW_REPLY_TEXT_LENGTH;
 
 function formatRating(value: number | null) {
   return value ? value.toFixed(1) : "N/A";
@@ -96,7 +109,7 @@ function Stars({ rating }: { rating: number | null }) {
 
 function RatingDistribution({ data }: { data: ReviewAppDetailPageData }) {
   return (
-    <Card className="rounded-lg">
+    <Card className="self-start rounded-lg">
       <CardHeader>
         <CardTitle className="text-base">Rating Distribution</CardTitle>
       </CardHeader>
@@ -191,7 +204,7 @@ function fetchDateRangeError(fromDate: string, toDate: string) {
     return "From date must be before or equal to To date.";
   }
   if (from.getTime() < windowStart.getTime()) {
-    return "Google Play only exposes reviews from the last 7 days.";
+    return "Manual review fetch currently supports the last 7 days.";
   }
   if (to.getTime() > windowEnd.getTime()) {
     return "To date cannot be in the future.";
@@ -203,6 +216,108 @@ function fetchDateRangeError(fromDate: string, toDate: string) {
   }
 
   return "";
+}
+
+function storeBadgeClass(platform: ReviewAppCard["platform"]) {
+  return platform === "ios"
+    ? "border-sky-200 bg-sky-50 text-sky-700"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function storeBadgeLabel(platform: ReviewAppCard["platform"]) {
+  return platform === "ios" ? "App Store" : "Google Play";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parseEmbeddedJson(value: string) {
+  const jsonStart = value.indexOf("{");
+  if (jsonStart === -1) return null;
+
+  try {
+    return JSON.parse(value.slice(jsonStart)) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function stringValue(value: unknown) {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number") return String(value);
+  return "";
+}
+
+function syncErrorCode(message: string, fallbackCode?: string | null) {
+  const parsed = parseEmbeddedJson(message);
+  const googleError = isRecord(parsed) && isRecord(parsed.error)
+    ? parsed.error
+    : isRecord(parsed)
+      ? parsed
+      : null;
+  const status = stringValue(googleError?.status);
+  const code = stringValue(googleError?.code);
+
+  if (code && status) return `${code} ${status}`;
+  if (status) return status;
+  if (code) return code;
+  if (fallbackCode) return fallbackCode;
+
+  return "FETCH_FAILED";
+}
+
+function formattedRawError(message: string) {
+  const parsed = parseEmbeddedJson(message);
+  return parsed ? JSON.stringify(parsed, null, 2) : message;
+}
+
+function fetchReviewErrorToast(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : "Reviews could not be fetched.";
+  const code = syncErrorCode(message);
+
+  return code === "FETCH_FAILED"
+    ? "Reviews could not be fetched."
+    : `Reviews could not be fetched: ${code}`;
+}
+
+function RawSyncErrorDialog({ message }: { message: string }) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 border-rose-200 bg-background text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+        >
+          <FileJson size={14} />
+          View raw error
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[80vh] overflow-hidden sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Raw sync error</DialogTitle>
+          <DialogDescription>
+            Full provider error returned by the latest review fetch attempt.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-[56vh] overflow-auto rounded-lg border bg-zinc-950 p-4 font-mono text-xs text-zinc-300">
+          <pre className="whitespace-pre-wrap break-words">
+            {formattedRawError(message)}
+          </pre>
+        </div>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="outline">
+              Close
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function FetchDatePicker({
@@ -282,6 +397,7 @@ function SyncPanel({
   toDate: string;
 }) {
   const syncRunning = data.syncState?.status === "running";
+  const supportsDateRange = data.app.platform === "android";
   const windowStartDate = defaultFetchFromDate();
   const windowEndDate = defaultFetchToDate();
   const fromMinDate = latestInputValue(
@@ -294,7 +410,9 @@ function SyncPanel({
     windowEndDate,
     addDaysToInputValue(fromDate, GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS - 1),
   );
-  const dateRangeError = fetchDateRangeError(fromDate, toDate);
+  const dateRangeError = supportsDateRange
+    ? fetchDateRangeError(fromDate, toDate)
+    : null;
 
   return (
     <Card className="rounded-lg">
@@ -312,22 +430,24 @@ function SyncPanel({
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <FetchDatePicker
-            label="From"
-            maxDate={fromMaxDate}
-            minDate={fromMinDate}
-            onChange={onFromDateChange}
-            value={fromDate}
-          />
-          <FetchDatePicker
-            label="To"
-            maxDate={toMaxDate}
-            minDate={toMinDate}
-            onChange={onToDateChange}
-            value={toDate}
-          />
-        </div>
+        {supportsDateRange ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <FetchDatePicker
+              label="From"
+              maxDate={fromMaxDate}
+              minDate={fromMinDate}
+              onChange={onFromDateChange}
+              value={fromDate}
+            />
+            <FetchDatePicker
+              label="To"
+              maxDate={toMaxDate}
+              minDate={toMinDate}
+              onChange={onToDateChange}
+              value={toDate}
+            />
+          </div>
+        ) : null}
         {dateRangeError ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
             {dateRangeError}
@@ -362,8 +482,24 @@ function SyncPanel({
         </div>
 
         {data.syncState?.lastErrorMessage ? (
-          <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
-            {data.syncState.lastErrorMessage}
+          <div className="rounded-md border border-rose-200 bg-rose-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="grid gap-1.5">
+                <div className="text-xs font-medium text-rose-700">
+                  Last error
+                </div>
+                <Badge
+                  variant="outline"
+                  className="w-fit border-rose-200 bg-background text-rose-700"
+                >
+                  {syncErrorCode(
+                    data.syncState.lastErrorMessage,
+                    data.syncState.lastErrorCode,
+                  )}
+                </Badge>
+              </div>
+              <RawSyncErrorDialog message={data.syncState.lastErrorMessage} />
+            </div>
           </div>
         ) : null}
 
@@ -372,8 +508,8 @@ function SyncPanel({
             Recent runs
           </div>
           {data.fetchRuns.length ? (
-            <div className="space-y-2">
-              {data.fetchRuns.slice(0, 5).map((run) => (
+            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              {data.fetchRuns.map((run) => (
                 <div
                   key={run.id}
                   className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm"
@@ -384,9 +520,13 @@ function SyncPanel({
                       <span className="text-xs text-muted-foreground">
                         {run.triggerType}
                       </span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                        {run.scanMode}
+                      </span>
                     </div>
                     <div className="mt-1 truncate text-xs text-muted-foreground">
                       {dateTime(run.startedAt)}
+                      {run.stopReason ? ` / ${run.stopReason}` : ""}
                     </div>
                   </div>
                   <div className="text-right text-xs text-muted-foreground">
@@ -407,17 +547,22 @@ function SyncPanel({
   );
 }
 
-function CommentAuthorCell({ review }: { review: AndroidStoreReviewDto }) {
+function CommentAuthorCell({ review }: { review: StoreReviewDto }) {
   return (
     <div className="min-w-[11rem] whitespace-normal">
       <div className="font-medium text-foreground">
         {review.authorName ?? "Anonymous reviewer"}
       </div>
+      {review.reviewerLanguage ? (
+        <Badge variant="secondary" className="mt-1 text-[11px] font-medium">
+          {review.reviewerLanguage}
+        </Badge>
+      ) : null}
     </div>
   );
 }
 
-function CommentContentCell({ review }: { review: AndroidStoreReviewDto }) {
+function CommentContentCell({ review }: { review: StoreReviewDto }) {
   const commentText = review.reviewText || review.originalText || "No comment text.";
 
   return (
@@ -439,24 +584,36 @@ function CommentContentCell({ review }: { review: AndroidStoreReviewDto }) {
 }
 
 function CommentReplyCell({
+  app,
   onSend,
   review,
   replyTemplate,
   sending,
 }: {
+  app: ReviewAppCard;
   onSend: () => void;
-  review: AndroidStoreReviewDto;
+  review: StoreReviewDto;
   replyTemplate: ReviewReplyTemplatePreviewDto | null;
   sending: boolean;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const commentText = review.reviewText || review.originalText || "No comment text.";
-  const templatePreviewText =
-    replyTemplate?.resolvedReplyText || replyTemplate?.replyText.trim() || "";
+  const templatePreviewText = replyTemplate
+    ? renderReviewReplyTemplate(replyTemplate.replyText, {
+        appName: app.appName,
+        authorName: review.authorName,
+        contactEmail: app.storeContactEmail,
+        storeName: app.storeAccountName,
+        supportPhone: app.storeSupportPhone,
+        websiteUrl: app.storeWebsiteUrl,
+      })
+    : "";
+  const templateTooLong = templatePreviewText.length > MAX_REPLY_TEXT_LENGTH;
   const canSendTemplate = Boolean(
     review.rating &&
       replyTemplate?.isActive &&
-      replyTemplate.resolvedReplyText.trim(),
+      templatePreviewText.trim() &&
+      !templateTooLong,
   );
 
   function confirmSend() {
@@ -485,7 +642,7 @@ function CommentReplyCell({
           <DialogHeader>
             <DialogTitle>Send reply?</DialogTitle>
             <DialogDescription>
-              Review the mapped template before sending it to Google Play.
+              Review the mapped template before sending it to the store.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -529,10 +686,14 @@ function CommentReplyCell({
                   No mapped reply content is available for this rating.
                 </div>
               )}
-              {replyTemplate?.isActive && !replyTemplate.resolvedReplyText.trim() ? (
+              {replyTemplate?.isActive && !templatePreviewText.trim() ? (
                 <div className="text-xs text-amber-700">
-                  The active template becomes empty after mapping store contact
-                  fields.
+                  The active template becomes empty after mapping variables.
+                </div>
+              ) : null}
+              {templateTooLong ? (
+                <div className="text-xs font-medium text-destructive">
+                  Mapped reply is longer than {MAX_REPLY_TEXT_LENGTH} characters.
                 </div>
               ) : null}
             </div>
@@ -570,7 +731,7 @@ function CommentReplyCell({
 }
 
 function deviceName(
-  metadata: AndroidDeviceMetadataDto | null,
+  metadata: ReviewDeviceMetadataDto | null,
   deviceCode: string | null,
 ) {
   const name = [metadata?.manufacturer, metadata?.productName]
@@ -580,7 +741,7 @@ function deviceName(
   return name || metadata?.productName || deviceCode || "Unknown device";
 }
 
-function deviceSpecs(metadata: AndroidDeviceMetadataDto | null) {
+function deviceSpecs(metadata: ReviewDeviceMetadataDto | null) {
   if (!metadata) return "";
 
   const screen =
@@ -592,7 +753,7 @@ function deviceSpecs(metadata: AndroidDeviceMetadataDto | null) {
   return [metadata.deviceClass, screen, ram].filter(Boolean).join(" / ");
 }
 
-function VersionDeviceCell({ review }: { review: AndroidStoreReviewDto }) {
+function VersionDeviceCell({ review }: { review: StoreReviewDto }) {
   const version = review.appVersionName
     ? `${review.appVersionName}${review.appVersionCode ? ` (${review.appVersionCode})` : ""}`
     : review.appVersionCode
@@ -600,7 +761,7 @@ function VersionDeviceCell({ review }: { review: AndroidStoreReviewDto }) {
       : "Unknown version";
   const device = [
     deviceName(review.deviceMetadata, review.device),
-    review.androidOsVersion ? `Android ${review.androidOsVersion}` : null,
+    review.osVersionLabel,
   ]
     .filter(Boolean)
     .join(" / ");
@@ -619,7 +780,7 @@ function VersionDeviceCell({ review }: { review: AndroidStoreReviewDto }) {
   );
 }
 
-function VotesCell({ review }: { review: AndroidStoreReviewDto }) {
+function VotesCell({ review }: { review: StoreReviewDto }) {
   return (
     <div className="flex min-w-[5.5rem] items-center gap-3 text-xs text-muted-foreground">
       <span className="flex items-center gap-1">
@@ -634,91 +795,211 @@ function VotesCell({ review }: { review: AndroidStoreReviewDto }) {
   );
 }
 
-function CommentJsonDialog({ review }: { review: AndroidStoreReviewDto }) {
+function CommentJsonDialog({ review, mappingId }: { review: StoreReviewDto; mappingId: string }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [rawReview, setRawReview] = useState<unknown>(review.rawReview);
+
+  async function loadRawReview() {
+    if (rawReview) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/comments/reviews/raw?mappingId=${mappingId}&reviewId=${review.reviewId}`);
+      const payload = await res.json();
+      if (payload.success) {
+        setRawReview(payload.rawReview);
+      } else {
+        setRawReview({ error: payload.error ?? "Failed to load" });
+      }
+    } catch {
+      setRawReview({ error: "Network error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={(isOpen) => {
+      setOpen(isOpen);
+      if (isOpen && !rawReview) {
+        void loadRawReview();
+      }
+    }}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm" className="gap-1.5">
           <FileJson size={13} />
           JSON
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[80vh] overflow-hidden sm:max-w-4xl">
+      <DialogContent className="max-h-[80vh] flex flex-col overflow-hidden sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Comment JSON</DialogTitle>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-auto rounded-lg border bg-zinc-950 p-4 font-mono text-xs text-zinc-300">
-          <pre className="whitespace-pre-wrap">
-            {JSON.stringify(review.rawReview, null, 2)}
-          </pre>
+          {loading ? (
+            <div className="flex h-12 items-center justify-center">
+              <Spinner />
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap">
+              {JSON.stringify(rawReview, null, 2)}
+            </pre>
+          )}
         </div>
       </DialogContent>
     </Dialog>
   );
 }
 
+type ReviewCommentsResponse = {
+  data?: StoreReviewDto[];
+  error?: string;
+  fetchRuns?: ReviewFetchRunDto[];
+  fetchSchedule?: ReviewFetchScheduleDto | null;
+  page?: number;
+  pageSize?: number;
+  replyTemplates?: ReviewReplyTemplatePreviewDto[];
+  reviewFilters?: ReviewAppDetailPageData["reviewFilters"];
+  stats?: ReviewAppStats;
+  success?: boolean;
+  syncState?: ReviewSyncStateDto | null;
+  total?: number;
+  totalPages?: number;
+};
+
 export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData }) {
-  const router = useRouter();
   const [fetchingReviews, setFetchingReviews] = useState(false);
   const [fetchFromDate, setFetchFromDate] = useState(defaultFetchFromDate);
   const [fetchToDate, setFetchToDate] = useState(defaultFetchToDate);
-  const [search, setSearch] = useState("");
-  const [ratingFilter, setRatingFilter] = useState("all");
-  const [replyFilter, setReplyFilter] = useState("all");
+  const [reviews, setReviews] = useState(data.reviews);
+  const [reviewPagination, setReviewPagination] =
+    useState<PaginationMeta>(data.reviewPagination);
+  const [stats, setStats] = useState(data.stats);
+  const [syncState, setSyncState] = useState(data.syncState);
+  const [fetchRuns, setFetchRuns] = useState(data.fetchRuns);
+  const [fetchSchedule, setFetchSchedule] = useState(data.fetchSchedule);
+  const [replyTemplates, setReplyTemplates] = useState(data.replyTemplates);
+  const [search, setSearch] = useState(data.reviewFilters.search);
+  const [ratingFilter, setRatingFilter] = useState(data.reviewFilters.rating);
+  const [replyFilter, setReplyFilter] = useState(data.reviewFilters.reply);
+  const [loadingComments, setLoadingComments] = useState(false);
   const [replyingReviewId, setReplyingReviewId] = useState<string | null>(null);
+
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadReviewPage(1, { search: value });
+  }, 500);
   const replyTemplateByRating = useMemo(
-    () => new Map(data.replyTemplates.map((template) => [template.rating, template])),
-    [data.replyTemplates],
+    () => new Map(replyTemplates.map((template) => [template.rating, template])),
+    [replyTemplates],
   );
+  const pageData: ReviewAppDetailPageData = {
+    ...data,
+    fetchRuns,
+    fetchSchedule,
+    replyTemplates,
+    reviews,
+    stats,
+    syncState,
+  };
 
-  const filteredReviews = useMemo(() => {
-    const query = search.toLowerCase();
-
-    return data.reviews.filter((review) => {
-      const matchesSearch =
-        !query ||
-        (review.reviewText ?? "").toLowerCase().includes(query) ||
-        (review.originalText ?? "").toLowerCase().includes(query) ||
-        (review.authorName ?? "").toLowerCase().includes(query) ||
-        review.reviewId.toLowerCase().includes(query);
-      const matchesRating =
-        ratingFilter === "all" || String(review.rating ?? "") === ratingFilter;
-      const hasReply = Boolean(review.developerReplyText);
-      const matchesReply =
-        replyFilter === "all" ||
-        (replyFilter === "replied" && hasReply) ||
-        (replyFilter === "pending" && !hasReply);
-
-      return matchesSearch && matchesRating && matchesReply;
+  async function loadReviewPage(
+    page: number,
+    overrides?: {
+      ratingFilter?: string;
+      replyFilter?: string;
+      search?: string;
+    },
+  ) {
+    const nextSearch = overrides?.search ?? search;
+    const nextRating = overrides?.ratingFilter ?? ratingFilter;
+    const nextReply = overrides?.replyFilter ?? replyFilter;
+    const params = new URLSearchParams({
+      context: "false",
+      mappingId: data.app.mappingId,
+      page: String(page),
+      pageSize: "10",
     });
-  }, [data.reviews, ratingFilter, replyFilter, search]);
+
+    if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextRating !== "all") params.set("rating", nextRating);
+    if (nextReply !== "all") params.set("reply", nextReply);
+
+    setLoadingComments(true);
+
+    try {
+      const response = await fetch(`/api/comments/reviews?${params.toString()}`);
+      const payload = (await response.json()) as ReviewCommentsResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Comments could not be loaded.");
+      }
+
+      setReviews(payload.data);
+      setReviewPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.stats) setStats(payload.stats);
+      if (payload.syncState !== undefined) setSyncState(payload.syncState);
+      if (payload.fetchRuns) setFetchRuns(payload.fetchRuns);
+      if (payload.fetchSchedule !== undefined) {
+        setFetchSchedule(payload.fetchSchedule);
+      }
+      if (payload.replyTemplates) setReplyTemplates(payload.replyTemplates);
+    } catch (error) {
+      void showToast("error",
+        error instanceof Error ? error.message : "Comments could not be loaded.",
+      );
+    } finally {
+      setLoadingComments(false);
+    }
+  }
+
   async function fetchReviews() {
     if (fetchingReviews) return;
 
     setFetchingReviews(true);
 
     try {
+      const requestBody =
+        data.app.platform === "android"
+          ? {
+              fromDate: fetchFromDate || undefined,
+              platform: data.app.platform,
+              storeMappingId: data.app.mappingId,
+              timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+              toDate: fetchToDate || undefined,
+              triggerType: "manual",
+            }
+          : {
+              platform: data.app.platform,
+              storeMappingId: data.app.mappingId,
+              triggerType: "manual",
+            };
       const response = await fetch("/api/review-fetch-runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fromDate: fetchFromDate || undefined,
-          storeMappingId: data.app.mappingId,
-          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
-          toDate: fetchToDate || undefined,
-          triggerType: "manual",
-        }),
+        body: JSON.stringify(requestBody),
       });
       const payload = (await response.json()) as {
+        backgroundJob?: unknown;
         error?: string;
         ok?: boolean;
         result?: {
+          enqueued?: number;
           hasMore?: boolean;
           pagesFetched?: number;
+          requestCount?: number;
           reviewsFetched?: number;
           reviewsMatched?: number;
           reviewsSkipped?: number;
           reviewsUpserted?: number;
+          scanMode?: string;
+          skipped?: number;
+          stopReason?: string;
+          status?: string;
         };
       };
 
@@ -726,21 +1007,44 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         throw new Error(payload.error ?? "Reviews could not be fetched.");
       }
 
-      const moreText = payload.result.hasMore ? " More pages are available." : "";
-      toast.success(
-        `Fetched ${payload.result.reviewsFetched ?? 0} reviews, matched ${payload.result.reviewsMatched ?? 0}, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
-      );
-      router.refresh();
+      announceBackgroundJob(payload.backgroundJob);
+
+      if (payload.result.status === "queued") {
+        const enqueued = payload.result.enqueued ?? 0;
+        const skipped = payload.result.skipped ?? 0;
+        void showToast(
+          enqueued > 0 ? "success" : "info",
+          enqueued > 0
+            ? `Queued ${enqueued} comment fetch job(s).`
+            : `${skipped} comment fetch job(s) are already running or queued.`,
+        );
+        return;
+      }
+
+      if (payload.result.status === "empty") {
+        const skipped = payload.result.skipped ?? 0;
+        void showToast(
+          skipped > 0 ? "info" : "warning",
+          skipped > 0
+            ? `${skipped} comment fetch job(s) are already running or queued.`
+            : "No comment fetch job was queued.",
+        );
+        return;
+      } else {
+        const moreText = payload.result.hasMore ? " More pages are available." : "";
+        void showToast("success",
+          `Fetched ${payload.result.reviewsFetched ?? 0} reviews, matched ${payload.result.reviewsMatched ?? 0}, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
+        );
+        await loadReviewPage(1);
+      }
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Reviews could not be fetched.",
-      );
+      void showToast("error", fetchReviewErrorToast(error));
     } finally {
       setFetchingReviews(false);
     }
   }
 
-  async function sendReply(review: AndroidStoreReviewDto) {
+  async function sendReply(review: StoreReviewDto) {
     if (replyingReviewId) return;
 
     setReplyingReviewId(review.reviewId);
@@ -750,6 +1054,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          platform: data.app.platform,
           reviewId: review.reviewId,
           storeMappingId: data.app.mappingId,
         }),
@@ -764,10 +1069,10 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         throw new Error(payload.error ?? "Reply could not be sent.");
       }
 
-      toast.success(payload.message ?? "Reply sent.");
-      router.refresh();
+      void showToast("success", payload.message ?? "Reply sent.");
+      await loadReviewPage(reviewPagination.page);
     } catch (error) {
-      toast.error(
+      void showToast("error",
         error instanceof Error ? error.message : "Reply could not be sent.",
       );
     } finally {
@@ -778,13 +1083,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <nav className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        <Link
+        <PendingNavigationLink
           href="/comments"
           className="flex items-center gap-1 transition-colors hover:text-foreground"
         >
           <ArrowLeft size={15} />
           List Apps
-        </Link>
+        </PendingNavigationLink>
         <ChevronRight size={15} />
         <span className="truncate text-foreground">{data.app.appName}</span>
       </nav>
@@ -795,20 +1100,12 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         description={data.app.identifier}
         action={
           <div className="flex flex-wrap items-center gap-2">
-            {data.isMockData ? (
-              <Badge
-                variant="outline"
-                className="border-amber-200 bg-amber-50 text-amber-700"
-              >
-                Mock data
-              </Badge>
-            ) : null}
             <Badge
               variant="outline"
-              className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+              className={cn("gap-1", storeBadgeClass(data.app.platform))}
             >
               <Smartphone size={12} />
-              Google Play
+              {storeBadgeLabel(data.app.platform)}
             </Badge>
           </div>
         }
@@ -817,38 +1114,38 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Total Comments"
-          value={compactNumber(data.stats.totalReviews)}
-          detail={`${compactNumber(data.stats.pendingReplyCount)} pending replies`}
+          value={compactNumber(stats.totalReviews)}
+          detail={`${compactNumber(stats.pendingReplyCount)} pending replies`}
           icon={MessageSquareText}
           trend="flat"
         />
         <StatCard
           label="Average Rating"
-          value={formatRating(data.stats.averageRating)}
-          detail="Google Play review score"
+          value={formatRating(stats.averageRating)}
+          detail={`${storeBadgeLabel(data.app.platform)} review score`}
           icon={Star}
           trend="flat"
         />
         <StatCard
           label="Reply Coverage"
-          value={`${data.stats.replyCoverage}%`}
-          detail={`${compactNumber(data.stats.repliedCount)} replied comments`}
+          value={`${stats.replyCoverage}%`}
+          detail={`${compactNumber(stats.repliedCount)} replied comments`}
           icon={MessageSquareReply}
-          trend={data.stats.replyCoverage >= 80 ? "up" : "flat"}
+          trend={stats.replyCoverage >= 80 ? "up" : "flat"}
         />
         <StatCard
           label="Latest Comment"
-          value={dateTime(data.stats.latestReviewAt)}
+          value={dateTime(stats.latestReviewAt)}
           detail="Newest user comment"
           icon={CalendarIcon}
           trend="flat"
         />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <RatingDistribution data={data} />
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <RatingDistribution data={pageData} />
         <SyncPanel
-          data={data}
+          data={pageData}
           fetching={fetchingReviews}
           fromDate={fetchFromDate}
           onFetch={fetchReviews}
@@ -867,11 +1164,21 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
               className="pl-8"
               placeholder="Search comments, reviewer or review id..."
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setSearch(nextValue);
+                debouncedSearch(nextValue);
+              }}
             />
           </div>
           <div className="flex gap-2">
-            <Select value={ratingFilter} onValueChange={setRatingFilter}>
+            <Select
+              value={ratingFilter}
+              onValueChange={(value) => {
+                setRatingFilter(value);
+                void loadReviewPage(1, { ratingFilter: value });
+              }}
+            >
               <SelectTrigger className="w-[120px] bg-background">
                 <SelectValue placeholder="Rating" />
               </SelectTrigger>
@@ -884,7 +1191,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                 ))}
               </SelectContent>
             </Select>
-            <Select value={replyFilter} onValueChange={setReplyFilter}>
+            <Select
+              value={replyFilter}
+              onValueChange={(value) => {
+                setReplyFilter(value);
+                void loadReviewPage(1, { replyFilter: value });
+              }}
+            >
               <SelectTrigger className="w-[130px] bg-background">
                 <SelectValue placeholder="Reply" />
               </SelectTrigger>
@@ -913,7 +1226,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredReviews.map((review) => (
+                {reviews.map((review) => (
                   <TableRow key={review.id}>
                     <TableCell className="align-top">
                       <CommentAuthorCell review={review} />
@@ -923,6 +1236,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                     </TableCell>
                     <TableCell className="align-top">
                       <CommentReplyCell
+                        app={pageData.app}
                         onSend={() => sendReply(review)}
                         replyTemplate={
                           review.rating
@@ -953,17 +1267,21 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                       <VotesCell review={review} />
                     </TableCell>
                     <TableCell className="align-top text-right">
-                      <CommentJsonDialog review={review} />
+                      <CommentJsonDialog review={review} mappingId={pageData.app.mappingId} />
                     </TableCell>
                   </TableRow>
                 ))}
-                {!filteredReviews.length ? (
+                {!reviews.length ? (
                   <TableRow>
                     <TableCell colSpan={8} className="py-10">
                       <EmptyPanel
                         icon={MessageSquareText}
-                        title="No comments found"
-                        description="Fetch Google Play comments or adjust the current filters."
+                        title={loadingComments ? "Loading comments" : "No comments found"}
+                        description={
+                          loadingComments
+                            ? "The current page is being loaded."
+                            : "Fetch store comments or adjust the current filters."
+                        }
                         className="border-0 shadow-none"
                       />
                     </TableCell>
@@ -972,6 +1290,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
               </TableBody>
             </Table>
           </div>
+          <TablePaginationFooter
+            onPageChange={(page) => void loadReviewPage(page)}
+            page={reviewPagination.page}
+            shown={reviews.length}
+            total={reviewPagination.total}
+            totalPages={reviewPagination.totalPages}
+          />
         </div>
       </div>
     </div>

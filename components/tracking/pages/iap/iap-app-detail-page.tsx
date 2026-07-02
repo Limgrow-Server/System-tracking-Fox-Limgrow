@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   ArrowDownRight,
   ArrowLeft,
@@ -11,29 +11,16 @@ import {
   ChevronRight,
   CreditCard,
   FileJson,
-  MoreHorizontal,
   Smartphone,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { TableEmptyState } from "@/components/tracking/primitives";
+import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import {
   Select,
   SelectContent,
@@ -43,12 +30,47 @@ import {
 } from "@/components/ui/select";
 import type {
   IapAppDetailPageData,
+  IapAppMetrics,
   IapAppTransaction,
+  IapTrialConversionAnalytics,
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 import type { IosIapTransactionSummary } from "@/lib/tracking/types";
+import { showToast } from "@/lib/client/toast";
+import { IosTrialAnalyticsPanel } from "./ios-trial-analytics-panel";
+import { IapRevenueChart } from "./iap-revenue-chart";
 
-const pageSize = 10;
+const IapReceiptDialog = dynamic(
+  () => import("./iap-receipt-dialog").then((mod) => mod.IapReceiptDialog),
+  { loading: () => null },
+);
+
+type IapTransactionListResponse = {
+  success?: boolean;
+  data?: IapAppTransaction[];
+  error?: string;
+  metrics?: IapAppMetrics;
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  totalPages?: number;
+  transactionStates?: string[];
+};
+
+type IapTrialAnalyticsResponse = {
+  success?: boolean;
+  error?: string;
+  trialAnalytics?: IapTrialConversionAnalytics | null;
+};
+
+type IapAppContextResponse = {
+  success?: boolean;
+  error?: string;
+  metrics?: IapAppMetrics;
+  transactionStates?: string[];
+};
+
+const IAP_TRANSACTION_SKELETON_COUNT = 8;
 
 function formatRevenue(
   micros: number | string | null,
@@ -101,14 +123,30 @@ function transactionProductId(transaction: IapAppTransaction) {
     : transaction.productId;
 }
 
-function transactionPackageOrBundle(transaction: IapAppTransaction) {
-  return isIosTransaction(transaction)
-    ? transaction.bundle_id
-    : transaction.packageName;
-}
-
 function transactionKind(transaction: IapAppTransaction) {
   return isAndroidTransaction(transaction) ? transaction.purchaseKind : null;
+}
+
+function transactionIsFreeTrial(transaction: IapAppTransaction) {
+  if (!isIosTransaction(transaction)) return false;
+  return (
+    transaction.is_trial === true ||
+    transaction.offer_discount_type?.toLowerCase() === "free_trial"
+  );
+}
+
+function transactionTrialLabel(transaction: IapAppTransaction) {
+  if (!isIosTransaction(transaction)) return null;
+  if (transactionIsFreeTrial(transaction)) return "Free Trial";
+  if (transaction.offer_discount_type) {
+    return transaction.offer_discount_type
+      .toLowerCase()
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+  return "Paid";
 }
 
 function transactionIsTest(transaction: IapAppTransaction) {
@@ -145,34 +183,71 @@ function transactionRawReceipt(transaction: IapAppTransaction) {
     : transaction.rawReceipt;
 }
 
-function transactionRevenueValue(transaction: IapAppTransaction) {
-  const micros = transactionRevenueMicros(transaction);
-  if (micros === null) return 0;
-  const numericMicros =
-    typeof micros === "number" ? micros : Number.parseInt(micros, 10);
-  return Number.isFinite(numericMicros) ? numericMicros / 1_000_000 : 0;
+type JsonRecord = Record<string, unknown>;
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function transactionTimestamp(transaction: IapAppTransaction) {
-  const dateValue = transactionPurchaseDate(transaction);
-  if (!dateValue) return 0;
-  const timestamp = new Date(dateValue).getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
+function decodeBase64UrlJson(value: string): unknown {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const json = new TextDecoder().decode(bytes);
+
+  return JSON.parse(json) as unknown;
 }
 
-function transactionSearchText(transaction: IapAppTransaction) {
-  return [
-    transactionDisplayId(transaction),
-    transactionSecondaryId(transaction),
-    transactionProductId(transaction),
-    transactionPackageOrBundle(transaction),
-    isIosTransaction(transaction)
-      ? transaction.user_id
-      : transaction.purchaseToken,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+function decodeJws(jws: string) {
+  const [header, payload] = jws.split(".");
+  if (!header || !payload) return null;
+
+  try {
+    return {
+      header: decodeBase64UrlJson(header),
+      payload: decodeBase64UrlJson(payload),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function signedTransactionInfoFromReceipt(receipt: unknown) {
+  if (!isJsonRecord(receipt)) return null;
+
+  const direct = receipt.signedTransactionInfo;
+  if (typeof direct === "string") return direct;
+
+  const transactionInfoResponse = receipt.transactionInfoResponse;
+  if (isJsonRecord(transactionInfoResponse)) {
+    const nested = transactionInfoResponse.signedTransactionInfo;
+    if (typeof nested === "string") return nested;
+  }
+
+  return null;
+}
+
+function receiptDisplayPayload(receipt: unknown) {
+  if (!isJsonRecord(receipt)) return receipt;
+
+  const existingDecoded =
+    isJsonRecord(receipt.decodedTransactionInfo) ||
+    Array.isArray(receipt.decodedTransactionInfo)
+      ? receipt.decodedTransactionInfo
+      : null;
+  const signedTransactionInfo = signedTransactionInfoFromReceipt(receipt);
+  const decoded = signedTransactionInfo ? decodeJws(signedTransactionInfo) : null;
+  const decodedTransactionInfo = existingDecoded ?? decoded?.payload ?? null;
+
+  if (!decodedTransactionInfo) return receipt;
+
+  return {
+    receiptType: "app_store_server_api_transaction",
+    decodedTransactionInfo,
+    jwsHeader: decoded?.header ?? receipt.jwsHeader ?? null,
+    source: receipt.source ?? "app_store_server_api.get_transaction_info",
+  };
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -217,7 +292,7 @@ function OverviewCard({
         <div className="tracking-tight flex items-center gap-2 text-sm font-medium">
           <span>{title}</span>
         </div>
-        <MoreHorizontal size={16} className="cursor-pointer opacity-60" />
+        <div className="h-2 w-2 rounded-full bg-primary/70" />
       </div>
       {/* Content */}
       <div className="space-y-[10px] px-4 pt-0 pb-4">
@@ -247,66 +322,236 @@ function OverviewCard({
   );
 }
 
+function IapMetricsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-2 gap-4 lg:col-span-5">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div
+            key={`iap-overview-skeleton-${index}`}
+            className="col-span-2 h-[150px] rounded-lg border bg-card p-5 sm:col-span-1"
+          >
+            <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+            <div className="mt-8 h-8 w-28 animate-pulse rounded bg-muted" />
+            <div className="mt-4 h-4 w-36 animate-pulse rounded bg-muted" />
+          </div>
+        ))}
+      </div>
+      <div className="h-[320px] rounded-lg border bg-card p-5 lg:col-span-7">
+        <div className="h-5 w-28 animate-pulse rounded bg-muted" />
+        <div className="mt-4 h-[240px] animate-pulse rounded bg-muted/60" />
+      </div>
+    </div>
+  );
+}
+
 export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
-  const { app, transactions } = data;
+  const { app } = data;
   const isIos = app.platform === "ios";
 
-  const [search, setSearch] = useState("");
-  const [filterState, setFilterState] = useState<string>("all");
-  const [filterKind, setFilterKind] = useState<string>("all");
-  const [page, setPage] = useState(1);
+  const [metrics, setMetrics] = useState(data.metrics);
+  const [transactions, setTransactions] = useState(data.transactions);
+  const [transactionPagination, setTransactionPagination] = useState(
+    data.transactionPagination,
+  );
+  const [transactionStates, setTransactionStates] = useState(
+    data.transactionStates,
+  );
+  const [metricsLoaded, setMetricsLoaded] = useState(
+    data.metricsLoaded ?? true,
+  );
+  const [trialAnalytics, setTrialAnalytics] = useState(data.trialAnalytics);
+  const [trialAnalyticsLoading, setTrialAnalyticsLoading] = useState(
+    isIos && !data.trialAnalytics,
+  );
+  const [filterState, setFilterState] = useState<string>(data.filters.state);
+  const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
+  const [filterTrial, setFilterTrial] = useState<string>(data.filters.trial);
+  const [tableLoading, setTableLoading] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
 
-  const filteredTransactions = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  async function loadTransactionsPage(
+    page: number,
+    overrides?: {
+      filterKind?: string;
+      filterState?: string;
+      filterTrial?: string;
+    },
+  ) {
+    const nextFilterState = overrides?.filterState ?? filterState;
+    const nextFilterKind = overrides?.filterKind ?? filterKind;
+    const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
+    const params = new URLSearchParams({
+      context: overrides ? "true" : "false",
+      mappingId: app.mappingId,
+      page: String(page),
+      pageSize: "10",
+      platform: app.platform,
+    });
 
-    return transactions
-      .filter((tx) => {
-        const tState = tx.state.toLowerCase();
-        const tKind = transactionKind(tx);
-        const matchSearch = !query || transactionSearchText(tx).includes(query);
-        const matchState = filterState === "all" || tState === filterState;
-        const matchKind =
-          isIos || filterKind === "all" || tKind?.toLowerCase() === filterKind;
+    if (nextFilterState !== "all") params.set("state", nextFilterState);
+    if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
+    if (isIos && nextFilterTrial !== "all") {
+      params.set("trial", nextFilterTrial);
+    }
+    if (!overrides) {
+      params.set("knownTotal", String(transactionPagination.total));
+    }
 
-        return matchSearch && matchState && matchKind;
-      })
-      .sort((a, b) => transactionTimestamp(b) - transactionTimestamp(a));
-  }, [transactions, search, filterState, filterKind, isIos]);
+    setTableLoading(true);
+    setLoadingPage(page);
 
-  const stats = useMemo(() => {
-    let rev = 0;
-    let active = 0;
-    let canceled = 0;
-    const latestTimestamp = Math.max(
-      0,
-      ...filteredTransactions.map(transactionTimestamp),
-    );
-    const week = 7 * 24 * 60 * 60 * 1000;
-    let revL7 = 0;
-    let revP7 = 0;
-    let ordL7 = 0;
-    let ordP7 = 0;
+    try {
+      const response = await fetch(
+        `/api/admin/iap/app-transactions?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapTransactionListResponse;
 
-    filteredTransactions.forEach((tx) => {
-      const test = transactionIsTest(tx);
-      const st = tx.state.toLowerCase();
-      const value = transactionRevenueValue(tx);
-      const timestamp = transactionTimestamp(tx);
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Load IAP transactions failed.");
+      }
 
-      if (!test && value > 0) {
-        rev += value;
-        if (latestTimestamp && timestamp >= latestTimestamp - week) {
-          revL7 += value;
-          ordL7++;
-        } else if (latestTimestamp && timestamp >= latestTimestamp - 2 * week) {
-          revP7 += value;
-          ordP7++;
+      setTransactions(payload.data);
+      setTransactionPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.metrics) {
+        setMetrics(payload.metrics);
+        setMetricsLoaded(true);
+      }
+      if (payload.transactionStates) {
+        setTransactionStates(payload.transactionStates);
+      }
+    } catch (error) {
+      void showToast("error",
+        error instanceof Error
+          ? error.message
+          : "Load IAP transactions failed.",
+      );
+    } finally {
+      setTableLoading(false);
+      setLoadingPage(null);
+    }
+  }
+
+  useEffect(() => {
+    if (metricsLoaded) return;
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
+    });
+
+    if (filterState !== "all") params.set("state", filterState);
+    if (!isIos && filterKind !== "all") params.set("kind", filterKind);
+    if (isIos && filterTrial !== "all") {
+      params.set("trial", filterTrial);
+    }
+
+    async function loadIapContext() {
+      try {
+        const response = await fetch(
+          `/api/admin/iap/app-context?${params.toString()}`,
+        );
+        const payload = (await response.json()) as IapAppContextResponse;
+
+        if (!response.ok || !payload.success || !payload.metrics) {
+          throw new Error(payload.error ?? "Load IAP metrics failed.");
+        }
+
+        if (!cancelled) {
+          setMetrics(payload.metrics);
+          setTransactionStates(payload.transactionStates ?? []);
+          setMetricsLoaded(true);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMetricsLoaded(true);
+          void showToast("error",
+            error instanceof Error
+              ? error.message
+              : "Load IAP metrics failed.",
+          );
         }
       }
-      if (st === "active" || st === "purchased") active++;
-      if (st === "canceled" || st === "expired") canceled++;
+    }
+
+    void loadIapContext();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    app.mappingId,
+    app.platform,
+    filterKind,
+    filterState,
+    filterTrial,
+    isIos,
+    metricsLoaded,
+  ]);
+
+  useEffect(() => {
+    if (!isIos || trialAnalytics) return;
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
     });
+
+    async function loadTrialAnalytics() {
+      setTrialAnalyticsLoading(true);
+
+      try {
+        const response = await fetch(
+          `/api/admin/iap/trial-analytics?${params.toString()}`,
+        );
+        const payload = (await response.json()) as IapTrialAnalyticsResponse;
+
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error ?? "Load trial analytics failed.");
+        }
+
+        if (!cancelled) {
+          setTrialAnalytics(payload.trialAnalytics ?? null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          void showToast("error",
+            error instanceof Error
+              ? error.message
+              : "Load trial analytics failed.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setTrialAnalyticsLoading(false);
+        }
+      }
+    }
+
+    void loadTrialAnalytics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [app.mappingId, app.platform, isIos, trialAnalytics]);
+
+  const stats = useMemo(() => {
+    const rev = metrics.totalRevenue;
+    const active = metrics.activeCount;
+    const canceled = metrics.canceledCount;
+    const total = metrics.totalCount;
+    const revL7 = metrics.last7Revenue;
+    const revP7 = metrics.previous7Revenue;
+    const ordL7 = metrics.last7Orders;
+    const ordP7 = metrics.previous7Orders;
     const sg =
       revP7 > 0 ? ((revL7 - revP7) / revP7) * 100 : revL7 > 0 ? 100 : 0;
     const og =
@@ -315,7 +560,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       rev,
       active,
       canceled,
-      total: filteredTransactions.length,
+      total,
       sg,
       ogDir: og >= 0 ? ("up" as const) : ("down" as const),
       sgDir: sg >= 0 ? ("up" as const) : ("down" as const),
@@ -324,81 +569,20 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       ordL7,
       ordP7,
       og,
-      latestTimestamp,
+      latestTimestamp: metrics.latestTimestamp,
     };
-  }, [filteredTransactions]);
-
-  // Monthly chart data (12 months)
-  const { buckets, maxVal } = useMemo(() => {
-    const months = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-    const b: { label: string; prod: number; sand: number }[] = [];
-    const chartEnd = stats.latestTimestamp
-      ? new Date(stats.latestTimestamp)
-      : new Date("2026-06-01T00:00:00.000Z");
-
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(chartEnd.getFullYear(), chartEnd.getMonth() - i, 1);
-      b.push({ label: months[d.getMonth()], prod: 0, sand: 0 });
-    }
-
-    filteredTransactions.forEach((tx) => {
-      const pd = new Date(transactionPurchaseDate(tx) ?? 0);
-      const value = transactionRevenueValue(tx);
-      if (!value || Number.isNaN(pd.getTime())) return;
-
-      const mIdx = b.findIndex((_, idx) => {
-        const ref = new Date(
-          chartEnd.getFullYear(),
-          chartEnd.getMonth() - (11 - idx),
-          1,
-        );
-        return (
-          ref.getMonth() === pd.getMonth() &&
-          ref.getFullYear() === pd.getFullYear()
-        );
-      });
-
-      if (mIdx >= 0) {
-        if (transactionIsTest(tx)) b[mIdx].sand += value;
-        else b[mIdx].prod += value;
-      }
-    });
-    let mx = 1;
-    b.forEach((x) => {
-      if (x.prod + x.sand > mx) mx = x.prod + x.sand;
-    });
-    return { buckets: b, maxVal: mx };
-  }, [filteredTransactions, stats.latestTimestamp]);
+  }, [metrics]);
 
   const uniqueStates = useMemo(() => {
-    const states = new Set<string>();
-    transactions.forEach((tx) => states.add(tx.state.toLowerCase()));
-    return Array.from(states).sort();
-  }, [transactions]);
+    return Array.from(
+      new Set(transactionStates.map((state) => state.toLowerCase())),
+    ).sort();
+  }, [transactionStates]);
 
-  const totalPages = Math.ceil(filteredTransactions.length / pageSize);
-  const currentPage = Math.min(page, Math.max(1, totalPages));
-  const visible = useMemo(
-    () =>
-      filteredTransactions.slice(
-        (currentPage - 1) * pageSize,
-        currentPage * pageSize,
-      ),
-    [filteredTransactions, currentPage],
-  );
+  const currentPage = transactionPagination.page;
+  const tableStartIndex =
+    (transactionPagination.page - 1) * transactionPagination.pageSize;
+  const visible = transactions;
 
   const fmtVND = (n: number) =>
     new Intl.NumberFormat("vi-VN", {
@@ -406,20 +590,17 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       currency: "VND",
     }).format(n);
   const fmtNum = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
-  const revTrendBadgePct =
-    stats.sg >= 0 ? `+${stats.sg.toFixed(0)}%` : `${stats.sg.toFixed(0)}%`;
-
   return (
     <div className="flex flex-col h-full overflow-hidden bg-muted/10 p-4 sm:p-6 gap-6">
       {/* Breadcrumb */}
       <nav className="flex items-center space-x-2 text-sm text-muted-foreground font-medium shrink-0">
-        <Link
+        <PendingNavigationLink
           href="/iap"
           className="hover:text-foreground transition-colors flex items-center"
         >
           <ArrowLeft className="mr-1.5 h-4 w-4" />
           Apps
-        </Link>
+        </PendingNavigationLink>
         <ChevronRight className="h-4 w-4" />
         <div className="flex items-center gap-2 text-foreground bg-background px-2 py-1 rounded-md border shadow-sm">
           {isIos ? (
@@ -444,7 +625,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       </nav>
 
       {/* Overview Grid: Left = 4 cards (2×2), Right = Revenue Chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 shrink-0">
+      {metricsLoaded ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 shrink-0">
         {/* Left: 4 Overview Cards in 2×2 sub-grid */}
         <div className="lg:col-span-5 grid grid-cols-2 gap-4">
           <div className="col-span-2 sm:col-span-1">
@@ -485,109 +667,37 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           </div>
         </div>
 
-        {/* Right: Revenue Chart Card */}
-        <div className="lg:col-span-7 bg-card text-card-foreground rounded-lg border flex flex-col">
-          <div className="flex flex-col space-y-1.5 p-4">
-            <div className="flex items-center justify-between">
-              <div className="leading-none font-semibold tracking-tight">
-                Revenue
-              </div>
-              <Select defaultValue="2026">
-                <SelectTrigger className="w-[100px] h-9">
-                  <SelectValue placeholder="Year" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2026">2026</SelectItem>
-                  <SelectItem value="2025">2025</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center gap-2">
-              <p className="text-2xl font-bold">{fmtVND(stats.rev)}</p>
-              <span className="text-muted-foreground text-sm font-medium">
-                {revTrendBadgePct} from last week
-              </span>
-            </div>
-          </div>
-          <div className="p-4 pt-0 flex-1 flex flex-col justify-end mt-4">
-            {/* Custom Bar Chart matching Shadcn Reference */}
-            <div className="relative flex items-end w-full h-[180px] xl:h-[220px]">
-              {/* Horizontal Grid Lines */}
-              <div className="absolute inset-0 flex flex-col justify-between pointer-events-none pb-[24px]">
-                <div className="w-full border-t border-border/50"></div>
-                <div className="w-full border-t border-border/50"></div>
-                <div className="w-full border-t border-border/50"></div>
-              </div>
-
-              {/* Bars */}
-              <div className="relative z-10 w-full flex items-end justify-between h-full pb-[24px]">
-                {buckets.map((b, i) => {
-                  const total = b.prod + b.sand;
-                  const hPct = maxVal > 0 ? (total / maxVal) * 100 : 0;
-                  return (
-                    <div
-                      key={i}
-                      className="flex flex-col items-center flex-1 group relative h-full justify-end"
-                    >
-                      <div className="absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none bg-zinc-950 text-white text-xs p-2.5 rounded-lg shadow-xl z-50 border border-zinc-800 min-w-[120px]">
-                        <p className="font-semibold border-b border-zinc-800 pb-1.5 mb-1 w-full text-center">
-                          {b.label}
-                        </p>
-                        <div className="flex justify-between w-full gap-3">
-                          <span className="text-zinc-400">Total:</span>
-                          <span className="font-bold">{fmtVND(total)}</span>
-                        </div>
-                        <div className="flex justify-between w-full gap-3 mt-1 text-[10px]">
-                          <span className="text-zinc-500">Prod:</span>
-                          <span className="font-semibold text-zinc-300">
-                            {fmtVND(b.prod)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between w-full gap-3 mt-0.5 text-[10px]">
-                          <span className="text-zinc-500">Sand:</span>
-                          <span className="font-semibold text-zinc-300">
-                            {fmtVND(b.sand)}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="w-full px-[2px] sm:px-1 md:px-2 flex justify-center items-end h-full">
-                        <div
-                          className="w-full max-w-[32px] bg-primary rounded-t-[4px] transition-all duration-500 hover:opacity-80"
-                          style={{ height: `${hPct}%` }}
-                        ></div>
-                      </div>
-                      <span className="absolute -bottom-[20px] text-[12px] text-muted-foreground font-medium">
-                        {b.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+        <IapRevenueChart
+          buckets={metrics.revenueBuckets}
+          revenue={stats.rev}
+          trendPct={stats.sg}
+        />
         </div>
-      </div>
+      ) : (
+        <IapMetricsSkeleton />
+      )}
+
+      {isIos && trialAnalytics ? (
+        <IosTrialAnalyticsPanel
+          analytics={trialAnalytics}
+          onInspectPayload={setSelectedReceipt}
+        />
+      ) : isIos && trialAnalyticsLoading ? (
+        <div className="h-[360px] overflow-hidden rounded-lg border bg-card">
+          <div className="h-full animate-pulse bg-muted/30" />
+        </div>
+      ) : null}
 
       {/* Table Card */}
       <div className="flex-1 min-h-0 flex flex-col bg-card text-card-foreground border rounded-lg overflow-hidden">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 border-b bg-muted/20">
-          <Input
-            type="search"
-            placeholder="Search Order ID or Product ID..."
-            className="w-full sm:max-w-xs h-9 bg-background"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-          />
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex flex-col items-stretch justify-end gap-4 border-b bg-muted/20 p-4 sm:flex-row sm:items-center">
+          <div className="flex w-full items-center gap-2 sm:w-auto">
             {!isIos && (
               <Select
                 value={filterKind}
                 onValueChange={(v) => {
                   setFilterKind(v);
-                  setPage(1);
+                  void loadTransactionsPage(1, { filterKind: v });
                 }}
               >
                 <SelectTrigger className="w-full sm:w-[130px] h-9 bg-background">
@@ -600,11 +710,29 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 </SelectContent>
               </Select>
             )}
+            {isIos && (
+              <Select
+                value={filterTrial}
+                onValueChange={(v) => {
+                  setFilterTrial(v);
+                  void loadTransactionsPage(1, { filterTrial: v });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full bg-background sm:w-[150px]">
+                  <SelectValue placeholder="Trial" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Billing</SelectItem>
+                  <SelectItem value="trial">Free Trial</SelectItem>
+                  <SelectItem value="non_trial">Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             <Select
               value={filterState}
               onValueChange={(v) => {
                 setFilterState(v);
-                setPage(1);
+                void loadTransactionsPage(1, { filterState: v });
               }}
             >
               <SelectTrigger className="w-full sm:w-[140px] h-9 bg-background">
@@ -635,11 +763,39 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
               </tr>
             </thead>
             <tbody className="divide-y border-b bg-background">
-              {visible.map((tx) => {
+              {tableLoading ? (
+                Array.from({ length: IAP_TRANSACTION_SKELETON_COUNT }).map((_, index) => (
+                  <tr key={`iap-transaction-skeleton-${index}`}>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-44 animate-pulse rounded bg-muted" />
+                      <div className="mt-2 h-3 w-32 animate-pulse rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-5 w-24 animate-pulse rounded-full bg-muted" />
+                      <div className="mt-2 h-3 w-36 animate-pulse rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+                      <div className="mt-2 h-3 w-28 animate-pulse rounded bg-muted" />
+                    </td>
+                    <td className="px-4 py-3.5">
+                      <div className="h-8 w-20 animate-pulse rounded-md bg-muted" />
+                    </td>
+                  </tr>
+                ))
+              ) : visible.map((tx) => {
                 const txId = transactionDisplayId(tx);
                 const secondaryId = transactionSecondaryId(tx);
                 const productId = transactionProductId(tx);
                 const purchaseKind = transactionKind(tx);
+                const trialLabel = transactionTrialLabel(tx);
+                const freeTrial = transactionIsFreeTrial(tx);
                 const isTest = transactionIsTest(tx);
                 const revenue = transactionRevenueMicros(tx);
                 const currency = transactionCurrency(tx);
@@ -672,9 +828,30 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               : "Product"}
                           </Badge>
                         )}
+                        {isIos && trialLabel ? (
+                          <Badge
+                            variant="outline"
+                            className={
+                              freeTrial
+                                ? "border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
+                                : "border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+                            }
+                          >
+                            {trialLabel}
+                          </Badge>
+                        ) : null}
                         <div className="text-xs text-muted-foreground font-semibold">
                           {productId}
                         </div>
+                        {isIos &&
+                        isIosTransaction(tx) &&
+                        (tx.transaction_reason || tx.billing_plan_type) ? (
+                          <div className="text-[10px] text-muted-foreground">
+                            {[tx.transaction_reason, tx.billing_plan_type]
+                              .filter(Boolean)
+                              .join(" / ")}
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-4 py-3.5">
@@ -711,111 +888,54 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                       ) : null}
                     </td>
                     <td className="px-4 py-3.5">
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1.5 px-2.5"
-                            onClick={() =>
-                              setSelectedReceipt(transactionRawReceipt(tx))
-                            }
-                          >
-                            <FileJson size={13} />
-                            <span>JSON</span>
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="sm:max-w-4xl max-h-[80vh] flex flex-col p-6">
-                          <DialogHeader className="pb-2 border-b">
-                            <DialogTitle className="flex items-center gap-2">
-                              <FileJson size={18} className="text-primary" />
-                              <span>Receipt Details</span>
-                            </DialogTitle>
-                          </DialogHeader>
-                          <div className="flex-1 overflow-auto mt-4 p-4 rounded-lg bg-zinc-950 font-mono text-xs text-zinc-300 border border-zinc-800">
-                            <pre className="whitespace-pre-wrap">
-                              {JSON.stringify(selectedReceipt, null, 2)}
-                            </pre>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1.5 px-2.5"
+                        onClick={() =>
+                          setSelectedReceipt(
+                            receiptDisplayPayload(transactionRawReceipt(tx)),
+                          )
+                        }
+                      >
+                        <FileJson size={13} />
+                        <span>JSON</span>
+                      </Button>
                     </td>
                   </tr>
                 );
               })}
-              {!visible.length && (
+              {!tableLoading && !visible.length && (
                 <TableEmptyState
                   colSpan={6}
                   icon={CreditCard}
                   title="No transactions found"
-                  description="Try changing your search terms or filters."
+                  description="Try changing your filters."
                 />
               )}
             </tbody>
           </table>
         </div>
 
-        {filteredTransactions.length > 0 && (
-          <div className="flex flex-col gap-3 border-t px-4 py-3.5 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between bg-muted/10 shrink-0">
-            <span>
-              Showing {visible.length} of {filteredTransactions.length}{" "}
-              transactions
-            </span>
-            <Pagination className="mx-0 w-auto justify-start sm:justify-end">
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    href="#"
-                    text="Prev"
-                    className={
-                      currentPage <= 1 ? "pointer-events-none opacity-50" : ""
-                    }
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setPage((v) => Math.max(1, v - 1));
-                    }}
-                  />
-                </PaginationItem>
-                {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
-                  let pn = i + 1;
-                  if (totalPages > 5 && currentPage > 3)
-                    pn = currentPage - 2 + i;
-                  if (pn > totalPages) return null;
-                  return (
-                    <PaginationItem key={pn}>
-                      <PaginationLink
-                        href="#"
-                        isActive={currentPage === pn}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setPage(pn);
-                        }}
-                      >
-                        {pn}
-                      </PaginationLink>
-                    </PaginationItem>
-                  );
-                })}
-                <PaginationItem>
-                  <PaginationNext
-                    href="#"
-                    text="Next"
-                    className={
-                      currentPage >= totalPages
-                        ? "pointer-events-none opacity-50"
-                        : ""
-                    }
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setPage((v) => Math.min(totalPages, v + 1));
-                    }}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          </div>
-        )}
+        <TablePaginationFooter
+          from={tableStartIndex + 1}
+          loadingPage={loadingPage}
+          onPageChange={(page) => void loadTransactionsPage(page)}
+          page={currentPage}
+          shown={visible.length}
+          to={tableStartIndex + visible.length}
+          total={transactionPagination.total}
+          totalPages={transactionPagination.totalPages}
+        />
       </div>
+      {selectedReceipt !== null ? (
+        <IapReceiptDialog
+          receipt={selectedReceipt}
+          onOpenChange={(open) => {
+            if (!open) setSelectedReceipt(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import {
   type MobilePlatform,
   type SupabaseAdminClient,
 } from "../_shared/edge-config.ts";
-import { normalizeAppId } from "../_shared/mobile-normalize.ts";
+import { normalizeAppId, normalizeAppIdentifier } from "../_shared/mobile-normalize.ts";
 
 export type TargetType = "topic" | "device";
 
@@ -24,12 +24,15 @@ export type SendNotificationRequest = {
   credentialRef?: string;
   data?: unknown;
   deviceIds?: string[];
+  deviceTokenIds?: string[];
   imageUrl?: string;
+  jobId?: string;
   message?: string;
   notifications?: LocaleNotificationInput[];
   packageName?: string;
   platform?: MobilePlatform;
   productAppId?: string;
+  queuedBatchId?: string;
   scheduleId?: string;
   storeAccountName?: string;
   storeProfileId?: string;
@@ -51,9 +54,18 @@ type LocaleNotification = {
 };
 
 export type SendResult = {
+  credentialProjectId: string | null;
+  deviceAppId: string | null;
+  deviceAppIdentifier: string | null;
+  deviceBundleId: string | null;
+  deviceFirebaseProjectId: string | null;
   deviceId: string | null;
+  devicePackageName: string | null;
+  deviceProductAppId: string | null;
+  deviceTokenId: string | null;
   error: string | null;
   fcmErrorCode: string | null;
+  fcmToken: string | null;
   invalidToken: boolean;
   ok: boolean;
   providerMessageId: string | null;
@@ -64,14 +76,60 @@ export type SendResult = {
 };
 
 type DeviceTarget = {
+  appIdentifier: string | null;
   appId: string | null;
   bundleId: string | null;
   deviceId: string;
+  firebaseProjectId: string | null;
+  id: string;
   fcmToken: string;
   locale: string | null;
   packageName: string | null;
   productAppId: string | null;
 };
+
+function errorForLog(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    return error as Record<string, unknown>;
+  }
+
+  return { message: String(error) };
+}
+
+function errorString(error: unknown, key: string) {
+  const record = errorForLog(error);
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error
+    ? error.message
+    : errorString(error, "message")
+      ?? errorString(error, "error")
+      ?? fallback;
+}
+
+function logSendFailure(message: string, details: Record<string, unknown>) {
+  console.error(`[send-notification] ${message}`, details);
+}
+
+function logTargetValue(input: {
+  deviceId?: string | null;
+  targetType: TargetType;
+  targetValue: string;
+}) {
+  if (input.targetType === "device") return input.deviceId ?? "fcm-token-redacted";
+  return input.targetValue;
+}
 
 function primaryLocale(locales: LocaleNotification[]) {
   return locales.find((locale) => locale.topicCode === "en") ?? locales[0];
@@ -79,7 +137,49 @@ function primaryLocale(locales: LocaleNotification[]) {
 
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
+const MAX_DEVICE_TARGETS = 1000;
+const DEVICE_TOKEN_QUERY_BATCH_SIZE = 50;
+const DB_WRITE_BATCH_SIZE = 100;
+const DEFAULT_FCM_SEND_CONCURRENCY = 10;
 const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
+
+function chunks<T>(items: T[], size: number) {
+  const groups: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    groups.push(items.slice(index, index + size));
+  }
+  return groups;
+}
+
+function intDenoEnv(name: string, fallback: number, min: number, max: number) {
+  const parsed = Number(Deno.env.get(name));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(Math.floor(parsed), min), max);
+}
+
+function fcmSendConcurrency() {
+  return intDenoEnv("FCM_SEND_CONCURRENCY", DEFAULT_FCM_SEND_CONCURRENCY, 1, 50);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }));
+
+  return results;
+}
 
 function base64Url(input: string | ArrayBuffer) {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : new Uint8Array(input);
@@ -167,6 +267,21 @@ export async function requireAdminCaller(supabase: SupabaseAdminClient, request:
   };
 }
 
+export async function requireAdminOrInternalCaller(supabase: SupabaseAdminClient, request: Request): Promise<Caller> {
+  const expectedSecret = clean(Deno.env.get("NOTIFICATION_DISPATCH_SECRET")) || clean(Deno.env.get("NOTIFICATION_QUEUE_SECRET"));
+  const providedSecret = clean(request.headers.get("x-dispatch-secret")) || clean(request.headers.get("x-notification-queue-secret"));
+
+  if (expectedSecret && providedSecret && expectedSecret === providedSecret) {
+    return {
+      authUserId: "notification-worker",
+      email: "notification-worker@system.local",
+      memberId: "notification-worker",
+    };
+  }
+
+  return requireAdminCaller(supabase, request);
+}
+
 function inferPlatform(payload: SendNotificationRequest): MobilePlatform {
   if (payload.platform === "android" || payload.platform === "ios") return payload.platform;
   if (clean(payload.bundleId)) return "ios";
@@ -188,7 +303,12 @@ function normalizeTargetType(value: unknown): TargetType {
 
 function normalizeDeviceIds(value: unknown) {
   const rawItems = Array.isArray(value) ? value : [];
-  return Array.from(new Set(rawItems.map((item) => clean(item)).filter(Boolean))).slice(0, 500);
+  return Array.from(new Set(rawItems.map((item) => clean(item)).filter(Boolean))).slice(0, MAX_DEVICE_TARGETS);
+}
+
+function normalizeDeviceTokenIds(value: unknown) {
+  const rawItems = Array.isArray(value) ? value : [];
+  return Array.from(new Set(rawItems.map((item) => clean(item)).filter(Boolean))).slice(0, MAX_DEVICE_TARGETS);
 }
 
 function notificationAppId(payload: SendNotificationRequest) {
@@ -326,6 +446,42 @@ function fcmPayload(input: {
   return { message };
 }
 
+function redactedFcmPayload(payload: ReturnType<typeof fcmPayload>) {
+  const message = { ...payload.message };
+  if ("token" in message) {
+    message.token = "fcm-token-redacted";
+  }
+
+  return {
+    ...payload,
+    message,
+  };
+}
+
+function logIosFcmPayload(
+  input: {
+    deviceId?: string | null;
+    platform: MobilePlatform;
+    projectId: string;
+    targetType: TargetType;
+    targetValue: string;
+    topicCode?: string | null;
+  },
+  payload: ReturnType<typeof fcmPayload>
+) {
+  if (input.platform !== "ios") return;
+
+  console.info("[send-notification] iOS FCM request payload", {
+    deviceId: input.deviceId ?? null,
+    fcmPayload: redactedFcmPayload(payload),
+    platform: input.platform,
+    projectId: input.projectId,
+    targetType: input.targetType,
+    targetValue: logTargetValue(input),
+    topicCode: input.topicCode ?? null,
+  });
+}
+
 function formatFcmError(body: unknown, projectId: string, clientEmail: string | null) {
   const message =
     body && typeof body === "object" && "error" in body
@@ -339,6 +495,12 @@ function formatFcmError(body: unknown, projectId: string, clientEmail: string | 
   }
 
   return message.slice(0, 600);
+}
+
+function userFacingFcmError(code: string | null, formattedError: string) {
+  if (code === "UNREGISTERED") return "Người dùng đã tắt thông báo.";
+  if (code === "THIRD_PARTY_AUTH_ERROR") return "Thiếu hoặc sai APNs Auth Key/Certificate trong Firebase project của iOS app.";
+  return formattedError;
 }
 
 function fcmDetailErrorCode(body: unknown) {
@@ -388,39 +550,83 @@ async function sendFcm(input: {
   body: string;
   clientEmail: string | null;
   data: Record<string, string>;
+  deviceAppId?: string | null;
+  deviceAppIdentifier?: string | null;
+  deviceBundleId?: string | null;
+  deviceFirebaseProjectId?: string | null;
   deviceId?: string | null;
+  devicePackageName?: string | null;
+  deviceProductAppId?: string | null;
+  deviceTokenId?: string | null;
   endpoint: string;
   imageUrl: string;
+  platform: MobilePlatform;
   projectId: string;
   targetType: TargetType;
   targetValue: string;
   title: string;
   topicCode?: string | null;
 }): Promise<SendResult> {
+  const requestPayload = fcmPayload({
+    body: input.body,
+    data: input.data,
+    imageUrl: input.imageUrl,
+    targetType: input.targetType,
+    targetValue: input.targetValue,
+    title: input.title,
+  });
+
+  logIosFcmPayload(input, requestPayload);
+
   const response = await fetch(input.endpoint, {
     method: "POST",
     headers: {
       authorization: `Bearer ${input.accessToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(fcmPayload({
-      body: input.body,
-      data: input.data,
-      imageUrl: input.imageUrl,
-      targetType: input.targetType,
-      targetValue: input.targetValue,
-      title: input.title,
-    })),
+    body: JSON.stringify(requestPayload),
   });
   const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
 
   if (!response.ok) {
     const formattedError = formatFcmError(body, input.projectId, input.clientEmail);
-    return {
+    const code = fcmErrorCode(body);
+    const error = userFacingFcmError(code, formattedError);
+    const invalidToken = isInvalidFcmTokenError({ body, formattedError, status: response.status });
+    logSendFailure("FCM request failed", {
+      credentialProjectId: input.projectId,
+      deviceAppId: input.deviceAppId ?? null,
+      deviceAppIdentifier: input.deviceAppIdentifier ?? null,
+      deviceBundleId: input.deviceBundleId ?? null,
+      deviceFirebaseProjectId: input.deviceFirebaseProjectId ?? null,
       deviceId: input.deviceId ?? null,
-      error: formattedError,
-      fcmErrorCode: fcmErrorCode(body),
-      invalidToken: isInvalidFcmTokenError({ body, formattedError, status: response.status }),
+      devicePackageName: input.devicePackageName ?? null,
+      deviceProductAppId: input.deviceProductAppId ?? null,
+      error,
+      fcmErrorCode: code,
+      fcmToken: input.targetType === "device" ? input.targetValue : null,
+      invalidToken,
+      projectId: input.projectId,
+      status: response.status,
+      targetType: input.targetType,
+      targetValue: logTargetValue(input),
+      topicCode: input.topicCode ?? null,
+    });
+
+    return {
+      credentialProjectId: input.projectId,
+      deviceAppId: input.deviceAppId ?? null,
+      deviceAppIdentifier: input.deviceAppIdentifier ?? null,
+      deviceBundleId: input.deviceBundleId ?? null,
+      deviceFirebaseProjectId: input.deviceFirebaseProjectId ?? null,
+      deviceId: input.deviceId ?? null,
+      devicePackageName: input.devicePackageName ?? null,
+      deviceProductAppId: input.deviceProductAppId ?? null,
+      deviceTokenId: input.deviceTokenId ?? null,
+      error,
+      fcmErrorCode: code,
+      fcmToken: input.targetType === "device" ? input.targetValue : null,
+      invalidToken,
       ok: false,
       providerMessageId: null,
       status: response.status,
@@ -431,9 +637,18 @@ async function sendFcm(input: {
   }
 
   return {
+    credentialProjectId: input.projectId,
+    deviceAppId: input.deviceAppId ?? null,
+    deviceAppIdentifier: input.deviceAppIdentifier ?? null,
+    deviceBundleId: input.deviceBundleId ?? null,
+    deviceFirebaseProjectId: input.deviceFirebaseProjectId ?? null,
     deviceId: input.deviceId ?? null,
+    devicePackageName: input.devicePackageName ?? null,
+    deviceProductAppId: input.deviceProductAppId ?? null,
+    deviceTokenId: input.deviceTokenId ?? null,
     error: null,
     fcmErrorCode: null,
+    fcmToken: input.targetType === "device" ? input.targetValue : null,
     invalidToken: false,
     ok: true,
     providerMessageId: stringValue(body?.name),
@@ -458,46 +673,83 @@ async function getDeviceTargets(
     appName?: string;
     bundleId?: string | null;
     deviceIds: string[];
+    deviceTokenIds?: string[];
     packageName?: string | null;
     platform: MobilePlatform;
+    productAppId?: string | null;
   }
 ) {
-  if (!input.deviceIds.length) return [];
+  if (!input.deviceIds.length && !input.deviceTokenIds?.length) return [];
 
-  const query = supabase
-    .from("device_tokens")
-    .select("app_id,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,status")
-    .eq("platform", input.platform)
-    .eq("status", "active")
-    .in("device_id", input.deviceIds);
+  const rows: Record<string, unknown>[] = [];
+  const select = "id,app_id,app_identifier,device_id,fcm_token,locale,package_name,bundle_id,product_app_id,firebase_project_id,status";
 
-  const { data, error } = await query;
+  if (input.deviceTokenIds?.length) {
+    for (const tokenIdBatch of chunks(input.deviceTokenIds, DEVICE_TOKEN_QUERY_BATCH_SIZE)) {
+      const { data, error } = await supabase
+        .from("device_tokens")
+        .select(select)
+        .eq("platform", input.platform)
+        .eq("status", "active")
+        .in("id", tokenIdBatch);
 
-  if (error) throw error;
+      if (error) throw error;
+      rows.push(...((data ?? []) as Record<string, unknown>[]));
+    }
+  } else {
+    for (const deviceIdBatch of chunks(input.deviceIds, DEVICE_TOKEN_QUERY_BATCH_SIZE)) {
+      const { data, error } = await supabase
+        .from("device_tokens")
+        .select(select)
+        .eq("platform", input.platform)
+        .eq("status", "active")
+        .in("device_id", deviceIdBatch);
 
-  const appId = clean(input.appId);
+      if (error) throw error;
+      rows.push(...((data ?? []) as Record<string, unknown>[]));
+    }
+  }
+
+  const appId = normalizeAppId(input.appId);
   const appName = clean(input.appName);
   const packageName = clean(input.packageName);
   const bundleId = clean(input.bundleId);
+  const productAppId = normalizeAppId(input.productAppId);
+  const requestedAppIdentifier = normalizeAppIdentifier({
+    appId,
+    bundleId,
+    packageName,
+    platform: input.platform,
+    productAppId,
+  });
+  const requestedAppKeys = Array.from(new Set([appId, productAppId, appId || productAppId ? "" : appName].filter(Boolean)));
 
-  return (data ?? []).map((row) => {
-    const record = row as Record<string, unknown>;
+  return rows.map((record) => {
     return {
+      appIdentifier: stringValue(record.app_identifier),
       appId: stringValue(record.app_id),
       bundleId: stringValue(record.bundle_id),
       deviceId: clean(record.device_id),
+      firebaseProjectId: stringValue(record.firebase_project_id),
+      id: clean(record.id),
       fcmToken: clean(record.fcm_token),
       locale: stringValue(record.locale),
       packageName: stringValue(record.package_name),
       productAppId: stringValue(record.product_app_id),
     };
   }).filter((device) => {
-    if (!device.deviceId || !device.fcmToken) return false;
-    if (appId && (device.appId === appId || device.productAppId === appId)) return true;
-    if (appName && (device.appId === appName || device.productAppId === appName)) return true;
+    if (!device.id || !device.deviceId || !device.fcmToken) return false;
+    const deviceAppKeys = [
+      normalizeAppId(device.appId),
+      normalizeAppId(device.productAppId),
+    ].filter(Boolean);
+    if (requestedAppKeys.length && deviceAppKeys.length) {
+      return deviceAppKeys.some((deviceKey) => requestedAppKeys.includes(deviceKey));
+    }
+    if (requestedAppIdentifier && device.appIdentifier === requestedAppIdentifier) return true;
     if (packageName && device.packageName === packageName) return true;
     if (bundleId && device.bundleId === bundleId) return true;
-    return !appId && !appName && !packageName && !bundleId;
+    return !requestedAppKeys.length && !packageName && !bundleId;
   });
 }
 
@@ -518,6 +770,7 @@ async function insertJob(
   const appName = clean(input.payload.appName) || clean(input.payload.productAppId) || input.topicBase || "unknown_app";
   const appId = normalizeAppId(input.payload.appId) || normalizeAppId(input.payload.productAppId) || null;
   const firstLocale = primaryLocale(input.locales);
+  const now = new Date().toISOString();
   const { data, error } = await supabase
     .from("notification_jobs")
     .insert({
@@ -540,11 +793,27 @@ async function insertJob(
       target_values: input.targetValues,
       title: firstLocale?.title ?? null,
       topic_base: input.topicBase || "device",
+      updated_at: now,
     })
     .select("*")
     .single();
 
   if (error) throw error;
+  return data as Record<string, unknown>;
+}
+
+async function getExistingJob(
+  supabase: SupabaseAdminClient,
+  jobId: string,
+) {
+  const { data, error } = await supabase
+    .from("notification_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) throw new Error("notification_job_not_found");
   return data as Record<string, unknown>;
 }
 
@@ -563,7 +832,16 @@ async function writeEvents(
     event_type: result.ok ? "fcm_sent" : "fcm_failed",
     job_id: input.jobId,
     metadata: {
+      credentialProjectId: result.credentialProjectId,
+      deviceAppId: result.deviceAppId,
+      deviceAppIdentifier: result.deviceAppIdentifier,
+      deviceBundleId: result.deviceBundleId,
+      deviceFirebaseProjectId: result.deviceFirebaseProjectId,
+      devicePackageName: result.devicePackageName,
+      deviceProductAppId: result.deviceProductAppId,
+      deviceTokenId: result.deviceTokenId,
       fcmErrorCode: result.fcmErrorCode,
+      fcmToken: result.fcmToken,
       invalidToken: result.invalidToken,
       topicCode: result.topicCode,
     },
@@ -576,8 +854,11 @@ async function writeEvents(
   }));
 
   if (!rows.length) return;
-  const { error } = await supabase.from("notification_events").insert(rows);
-  if (error) throw error;
+
+  for (const rowBatch of chunks(rows, DB_WRITE_BATCH_SIZE)) {
+    const { error } = await supabase.from("notification_events").insert(rowBatch);
+    if (error) throw error;
+  }
 }
 
 async function markInvalidDeviceTokens(
@@ -587,23 +868,25 @@ async function markInvalidDeviceTokens(
     results: SendResult[];
   }
 ) {
-  const invalidDeviceIds = Array.from(new Set(input.results
-    .filter((result) => result.invalidToken && result.deviceId)
-    .map((result) => result.deviceId!)
+  const invalidDeviceTokenIds = Array.from(new Set(input.results
+    .filter((result) => result.invalidToken && result.deviceTokenId)
+    .map((result) => result.deviceTokenId!)
   ));
 
-  if (!invalidDeviceIds.length) return;
+  if (!invalidDeviceTokenIds.length) return;
 
-  const { error } = await supabase
-    .from("device_tokens")
-    .update({
-      last_seen_at: new Date().toISOString(),
-      status: "invalid",
-    })
-    .eq("platform", input.platform)
-    .in("device_id", invalidDeviceIds);
+  for (const tokenIdBatch of chunks(invalidDeviceTokenIds, DB_WRITE_BATCH_SIZE)) {
+    const { error } = await supabase
+      .from("device_tokens")
+      .update({
+        last_seen_at: new Date().toISOString(),
+        status: "invalid",
+      })
+      .eq("platform", input.platform)
+      .in("id", tokenIdBatch);
 
-  if (error) throw error;
+    if (error) throw error;
+  }
 }
 
 async function updateJob(
@@ -619,7 +902,7 @@ async function updateJob(
     targetValues: string[];
   },
 ) {
-  const status = input.errorCount === 0 ? "sent" : input.sentCount > 0 ? "partial_failed" : "failed";
+  const status = input.sentCount > 0 ? "sent" : "failed";
   const updatePayload: Record<string, unknown> = {
     credential_ref: input.credentialRef ?? null,
     error_count: input.errorCount,
@@ -652,7 +935,15 @@ async function updateJob(
 }
 
 function failedResult(input: {
+  credentialProjectId?: string | null;
+  deviceAppId?: string | null;
+  deviceAppIdentifier?: string | null;
+  deviceBundleId?: string | null;
+  deviceFirebaseProjectId?: string | null;
   deviceId?: string | null;
+  devicePackageName?: string | null;
+  deviceProductAppId?: string | null;
+  deviceTokenId?: string | null;
   error: string;
   fcmErrorCode?: string | null;
   invalidToken?: boolean;
@@ -662,9 +953,18 @@ function failedResult(input: {
   status?: number;
 }): SendResult {
   return {
+    credentialProjectId: input.credentialProjectId ?? null,
+    deviceAppId: input.deviceAppId ?? null,
+    deviceAppIdentifier: input.deviceAppIdentifier ?? null,
+    deviceBundleId: input.deviceBundleId ?? null,
+    deviceFirebaseProjectId: input.deviceFirebaseProjectId ?? null,
     deviceId: input.deviceId ?? null,
+    devicePackageName: input.devicePackageName ?? null,
+    deviceProductAppId: input.deviceProductAppId ?? null,
+    deviceTokenId: input.deviceTokenId ?? null,
     error: input.error,
     fcmErrorCode: input.fcmErrorCode ?? null,
+    fcmToken: null,
     invalidToken: input.invalidToken ?? false,
     ok: false,
     providerMessageId: null,
@@ -687,7 +987,10 @@ export async function sendNotificationPayload(
   const dataPayload = objectPayload(payload.data);
   const baseFcmData = fcmDataPayload(dataPayload);
   const imageUrl = clean(payload.imageUrl);
+  const deviceTokenIds = normalizeDeviceTokenIds(payload.deviceTokenIds);
   const deviceIds = normalizeDeviceIds(payload.deviceIds);
+  const deviceTargetValues = deviceTokenIds.length ? deviceTokenIds : deviceIds;
+  const targetValueKind = deviceTokenIds.length ? "device_token_id" : "device_id";
   const topicBase = topicSegment(
     clean(payload.topicBase) ||
     appId ||
@@ -696,22 +999,27 @@ export async function sendNotificationPayload(
     (platform === "android" ? clean(payload.packageName) : clean(payload.bundleId)) ||
     "notification"
   );
-  const initialTargetValues = targetType === "device" ? deviceIds : locales.map((locale) => `${topicBase}-${locale.topicCode}`);
+  const initialTargetValues = targetType === "device" ? deviceTargetValues : locales.map((locale) => `${topicBase}-${locale.topicCode}`);
 
-  if (targetType === "device" && !deviceIds.length) throw new Error("device_ids_required");
+  if (targetType === "device" && !deviceTargetValues.length) throw new Error("device_targets_required");
   if (targetType === "topic" && !topicBase) throw new Error("topic_base_required");
 
-  const job = await insertJob(supabase, {
-    actorEmail,
-    dataPayload,
-    imageUrl,
-    locales,
-    payload,
-    platform,
-    targetType,
-    targetValues: initialTargetValues,
-    topicBase,
-  });
+  const queuedJobId = clean(payload.jobId);
+  const queuedBatchId = clean(payload.queuedBatchId);
+  const usesExistingJob = Boolean(queuedJobId && queuedBatchId);
+  const job = usesExistingJob
+    ? await getExistingJob(supabase, queuedJobId)
+    : await insertJob(supabase, {
+      actorEmail,
+      dataPayload,
+      imageUrl,
+      locales,
+      payload,
+      platform,
+      targetType,
+      targetValues: initialTargetValues,
+      topicBase,
+    });
   const jobId = clean(job.id);
 
   try {
@@ -764,6 +1072,7 @@ export async function sendNotificationPayload(
           },
           endpoint,
           imageUrl,
+          platform,
           projectId,
           targetType,
           targetValue: `${topicBase}-${locale.topicCode}`,
@@ -777,26 +1086,38 @@ export async function sendNotificationPayload(
         appName: resolvedPayload.appName,
         bundleId: resolvedPayload.bundleId,
         deviceIds,
+        deviceTokenIds,
         packageName: resolvedPayload.packageName,
         platform,
+        productAppId: resolvedPayload.productAppId,
       });
-      const devicesById = new Map(devices.map((device) => [device.deviceId, device]));
+      const devicesByTarget = new Map(devices.map((device) => [deviceTokenIds.length ? device.id : device.deviceId, device]));
 
-      for (const deviceId of deviceIds) {
-        const device = devicesById.get(deviceId);
+      results.push(...await mapWithConcurrency(deviceTargetValues, fcmSendConcurrency(), async (targetValue) => {
+        const device = devicesByTarget.get(targetValue);
         if (!device) {
-          results.push(failedResult({
-            deviceId,
-            error: `No active ${platform} FCM token found for device_id ${deviceId}`,
+          logSendFailure("No active FCM token found for requested device", {
+            appId: normalizeAppId(resolvedPayload.appId) || appId || null,
+            bundleId: clean(resolvedPayload.bundleId) || null,
+            deviceId: targetValueKind === "device_id" ? targetValue : null,
+            deviceTokenId: targetValueKind === "device_token_id" ? targetValue : null,
+            packageName: clean(resolvedPayload.packageName) || null,
+            platform,
+            targetType,
+            targetValueKind,
+          });
+
+          return failedResult({
+            deviceId: targetValueKind === "device_id" ? targetValue : null,
+            error: `No active ${platform} FCM token found for ${targetValueKind} ${targetValue}`,
             status: 404,
             targetType,
-            targetValue: deviceId,
-          }));
-          continue;
+            targetValue,
+          });
         }
 
         const locale = localeForDevice(device, locales);
-        results.push(await sendFcm({
+        return sendFcm({
           accessToken,
           body: locale.body,
           clientEmail,
@@ -804,32 +1125,76 @@ export async function sendNotificationPayload(
             ...deliveryData,
             notificationLocale: locale.topicCode,
           },
-          deviceId,
+          deviceAppId: device.appId,
+          deviceAppIdentifier: device.appIdentifier,
+          deviceBundleId: device.bundleId,
+          deviceFirebaseProjectId: device.firebaseProjectId,
+          deviceId: device.deviceId,
+          devicePackageName: device.packageName,
+          deviceProductAppId: device.productAppId,
+          deviceTokenId: device.id,
           endpoint,
           imageUrl,
+          platform,
           projectId,
           targetType,
           targetValue: device.fcmToken,
           title: locale.title,
           topicCode: locale.topicCode,
-        }));
-      }
+        });
+      }));
     }
 
     const sentCount = results.filter((result) => result.ok).length;
     const errorCount = results.length - sentCount;
+    if (errorCount > 0) {
+      logSendFailure("Notification job finished with failed targets", {
+        appId: normalizeAppId(resolvedPayload.appId) || appId || null,
+        errorCount,
+        failedTargets: results
+          .filter((result) => !result.ok)
+          .slice(0, 20)
+          .map((result) => ({
+            credentialProjectId: result.credentialProjectId,
+            deviceAppId: result.deviceAppId,
+            deviceAppIdentifier: result.deviceAppIdentifier,
+            deviceBundleId: result.deviceBundleId,
+            deviceFirebaseProjectId: result.deviceFirebaseProjectId,
+            deviceId: result.deviceId,
+            devicePackageName: result.devicePackageName,
+            deviceProductAppId: result.deviceProductAppId,
+            error: result.error,
+            fcmErrorCode: result.fcmErrorCode,
+            invalidToken: result.invalidToken,
+            status: result.status,
+            targetType: result.targetType,
+            targetValue: result.targetType === "device" ? result.deviceId ?? "fcm-token-redacted" : result.targetValue,
+            topicCode: result.topicCode,
+          })),
+        credentialProjectId: projectId,
+        credentialRef: config.firebaseAdmin.credential.credentialRef,
+        jobId,
+        platform,
+        sentCount,
+        targetType,
+        totalTargets: results.length,
+      });
+    }
+
     await writeEvents(supabase, { jobId, platform, results });
     await markInvalidDeviceTokens(supabase, { platform, results });
-    const updatedJob = await updateJob(supabase, {
-      credentialRef: config.firebaseAdmin.credential.credentialRef,
-      errorCount,
-      jobId,
-      platform,
-      projectId,
-      resolvedPayload,
-      sentCount,
-      targetValues: targetType === "device" ? deviceIds : results.map((result) => result.targetValue),
-    });
+    const updatedJob = usesExistingJob
+      ? job
+      : await updateJob(supabase, {
+        credentialRef: config.firebaseAdmin.credential.credentialRef,
+        errorCount,
+        jobId,
+        platform,
+        projectId,
+        resolvedPayload,
+        sentCount,
+        targetValues: targetType === "device" ? initialTargetValues : results.map((result) => result.targetValue),
+      });
 
     return {
       app: config.app,
@@ -844,26 +1209,38 @@ export async function sendNotificationPayload(
       topicBase,
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown notification send error";
+    const failureMessage = errorMessage(error, "Unknown notification send error");
+    logSendFailure("Notification job failed before FCM send completed", {
+      appId,
+      error: errorForLog(error),
+      jobId,
+      platform,
+      targetType,
+      targetValues: initialTargetValues,
+      topicBase,
+    });
+
     const failedTargets = initialTargetValues.length ? initialTargetValues : [topicBase];
     const results = failedTargets.map((targetValue) =>
       failedResult({
         deviceId: targetType === "device" ? targetValue : null,
-        error: errorMessage,
+        error: failureMessage,
         targetType,
         targetValue,
       })
     );
     await writeEvents(supabase, { jobId, platform, results });
-    const updatedJob = await updateJob(supabase, {
-      credentialRef: clean(payload.credentialRef) || null,
-      errorCount: results.length,
-      jobId,
-      platform,
-      projectId: null,
-      sentCount: 0,
-      targetValues: initialTargetValues,
-    });
+    const updatedJob = usesExistingJob
+      ? job
+      : await updateJob(supabase, {
+        credentialRef: clean(payload.credentialRef) || null,
+        errorCount: results.length,
+        jobId,
+        platform,
+        projectId: null,
+        sentCount: 0,
+        targetValues: initialTargetValues,
+      });
 
     return {
       app: null,

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Apple,
@@ -13,6 +13,7 @@ import {
   CreditCard,
   Gauge,
   History,
+  LayoutDashboard,
   LogOut,
   Menu,
   MessageSquareReply,
@@ -28,13 +29,13 @@ import {
   X,
 } from "lucide-react";
 import { ReactNode, useState } from "react";
-import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { BackgroundJobTray } from "@/components/tracking/background-job-tray";
 import type { ConsoleSession } from "@/lib/auth/rbac";
+import { showToast } from "@/lib/client/toast";
 import { cn } from "@/lib/utils";
 import type { StaffRole } from "@/lib/tracking/types";
 
@@ -58,7 +59,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         roles: ["Admin", "Dev", "Marketing"],
       },
       {
-        title: "Users",
+        title: "User Management",
         href: "/users",
         icon: <UsersRound size={17} />,
         roles: ["Admin"],
@@ -111,10 +112,16 @@ const navGroups: { title: string; items: NavItem[] }[] = [
       },
       {
         title: "Notifications",
-        href: "/notifications/send",
+        href: "/notifications/overview",
         icon: <Bell size={17} />,
-        roles: ["Admin"],
+        roles: ["Admin", "Dev", "Marketing"],
         children: [
+          {
+            title: "Overview",
+            href: "/notifications/overview",
+            icon: <LayoutDashboard size={15} />,
+            roles: ["Admin", "Dev", "Marketing"],
+          },
           {
             title: "Send",
             href: "/notifications/send",
@@ -125,13 +132,13 @@ const navGroups: { title: string; items: NavItem[] }[] = [
             title: "Schedules",
             href: "/notifications/schedules",
             icon: <CalendarClock size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Dev", "Marketing"],
           },
           {
             title: "History",
             href: "/notifications/history",
             icon: <History size={15} />,
-            roles: ["Admin"],
+            roles: ["Admin", "Dev", "Marketing"],
           },
         ],
       },
@@ -155,17 +162,59 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "Comments",
         href: "/comments",
         icon: <MessageSquareText size={17} />,
-        roles: ["Admin", "Marketing"],
+        roles: ["Admin", "Dev", "Marketing"],
+      },
+      {
+        title: "Schedule",
+        href: "/comments-schedule",
+        icon: <CalendarClock size={17} />,
+        roles: ["Admin", "Dev", "Marketing"],
       },
       {
         title: "Reply",
         href: "/reply",
         icon: <MessageSquareReply size={17} />,
-        roles: ["Admin", "Marketing"],
+        roles: ["Admin", "Dev", "Marketing"],
       },
     ],
   },
 ];
+
+function visibleNavItems(items: NavItem[], role: StaffRole): NavItem[] {
+  return items
+    .filter((item) => item.roles.includes(role))
+    .map((item) => ({
+      ...item,
+      children: item.children
+        ? visibleNavItems(item.children, role)
+        : undefined,
+    }))
+    .filter((item) => !item.children || item.children.length > 0);
+}
+
+function visibleNavGroups(role: StaffRole) {
+  return navGroups
+    .map((group) => ({
+      ...group,
+      items: visibleNavItems(group.items, role),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function NavPendingDot({ className }: { className?: string }) {
+  const { pending } = useLinkStatus();
+
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "ml-auto size-1.5 shrink-0 rounded-full bg-current opacity-0 transition-opacity delay-100",
+        pending && "animate-pulse opacity-70",
+        className,
+      )}
+    />
+  );
+}
 
 function SidebarContent({
   role,
@@ -185,6 +234,7 @@ function SidebarContent({
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>(
     {},
   );
+  const groups = visibleNavGroups(role);
 
   return (
     <div className="flex h-full flex-col">
@@ -226,11 +276,11 @@ function SidebarContent({
 
       <div
         className={cn(
-          "flex-1 overflow-y-auto p-3 transition-all duration-300",
+          "flex-1 overflow-y-auto overscroll-contain p-3 transition-all duration-300",
           collapsed ? "space-y-3 px-2" : "space-y-5",
         )}
       >
-        {navGroups.map((group) => (
+        {groups.map((group) => (
           <div key={group.title}>
             {!collapsed ? (
               <div className="mb-2 px-2 text-xs font-medium text-muted-foreground">
@@ -248,19 +298,13 @@ function SidebarContent({
                     )
                   : pathname === item.href ||
                     pathname.startsWith(`${item.href}/`);
-                const allowed = item.roles.includes(role);
                 const expanded = hasChildren
                   ? !collapsed && (expandedItems[item.href] ?? active)
                   : false;
 
                 if (hasChildren) {
                   return (
-                    <div
-                      key={item.href}
-                      className={cn(
-                        !allowed && "pointer-events-none opacity-35",
-                      )}
-                    >
+                    <div key={item.href}>
                       <button
                         type="button"
                         onClick={() => {
@@ -276,7 +320,6 @@ function SidebarContent({
                           }));
                         }}
                         aria-expanded={expanded}
-                        aria-disabled={!allowed}
                         title={item.title}
                         className={cn(
                           "flex h-9 w-full items-center rounded-lg text-sm font-medium transition-all duration-200",
@@ -352,6 +395,7 @@ function SidebarContent({
                                     <span className="truncate">
                                       {child.title}
                                     </span>
+                                    <NavPendingDot />
                                   </Link>
                                 );
                               })}
@@ -365,9 +409,8 @@ function SidebarContent({
                 return (
                   <Link
                     key={item.href}
-                    href={allowed ? item.href : "#"}
+                    href={item.href}
                     onClick={onNavigate}
-                    aria-disabled={!allowed}
                     title={item.title}
                     className={cn(
                       "flex h-9 items-center rounded-lg text-sm font-medium transition-all duration-200",
@@ -377,7 +420,6 @@ function SidebarContent({
                       active
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                      !allowed && "pointer-events-none opacity-35",
                     )}
                   >
                     <span
@@ -391,13 +433,18 @@ function SidebarContent({
                         <span className="truncate">{item.title}</span>
                       ) : null}
                     </span>
-                    {!collapsed && item.badge ? (
-                      <Badge
-                        variant="secondary"
-                        className="h-5 rounded-md px-1.5 text-[11px]"
-                      >
-                        {item.badge}
-                      </Badge>
+                    {!collapsed ? (
+                      <span className="flex items-center gap-2">
+                        {item.badge ? (
+                          <Badge
+                            variant="secondary"
+                            className="h-5 rounded-md px-1.5 text-[11px]"
+                          >
+                            {item.badge}
+                          </Badge>
+                        ) : null}
+                        <NavPendingDot />
+                      </span>
                     ) : null}
                   </Link>
                 );
@@ -488,11 +535,11 @@ export function AppShell({
   async function logout() {
     const response = await fetch("/api/auth/logout", { method: "POST" });
     if (!response.ok) {
-      toast.error("Sign out failed.");
+      await showToast("error", "Sign out failed.");
       return;
     }
 
-    toast.success("Signed out.");
+    await showToast("success", "Signed out.");
     router.replace("/login");
     router.refresh();
   }
@@ -507,7 +554,7 @@ export function AppShell({
             : "lg:grid-cols-[16rem_1fr]",
         )}
       >
-        <aside className="sticky top-0 hidden h-svh self-start overflow-hidden border-r bg-sidebar lg:block">
+        <aside className="sticky top-0 hidden h-svh self-start overflow-hidden overscroll-contain border-r bg-sidebar lg:block">
           <SidebarContent
             role={role}
             session={session}
@@ -519,30 +566,48 @@ export function AppShell({
         <div className="flex h-svh min-w-0 flex-col overflow-y-auto overscroll-contain">
           <header className="sticky top-0 z-40 h-16 shrink-0 border-b bg-background/90 backdrop-blur">
             <div className="flex h-full items-center gap-3 px-4">
-              <Sheet open={open} onOpenChange={setOpen}>
-                <SheetTrigger asChild>
-                  <Button variant="outline" size="icon" className="lg:hidden">
-                    <Menu size={16} />
-                  </Button>
-                </SheetTrigger>
-                <SheetContent side="left" className="w-72 p-0">
-                  <div className="absolute right-3 top-3 z-10">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => setOpen(false)}
-                    >
-                      <X size={15} />
-                    </Button>
-                  </div>
-                  <SidebarContent
-                    role={role}
-                    session={session}
-                    onLogout={logout}
-                    onNavigate={() => setOpen(false)}
+              <Button
+                variant="outline"
+                size="icon"
+                className="lg:hidden"
+                aria-label="Open navigation"
+                onClick={() => setOpen(true)}
+              >
+                <Menu size={16} />
+              </Button>
+              {open ? (
+                <div className="fixed inset-0 z-50 lg:hidden">
+                  <button
+                    type="button"
+                    aria-label="Close navigation"
+                    className="absolute inset-0 bg-black/10"
+                    onClick={() => setOpen(false)}
                   />
-                </SheetContent>
-              </Sheet>
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Navigation"
+                    className="absolute inset-y-0 left-0 flex w-72 flex-col border-r bg-sidebar shadow-lg"
+                  >
+                    <div className="absolute right-3 top-3 z-10">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setOpen(false)}
+                        aria-label="Close navigation"
+                      >
+                        <X size={15} />
+                      </Button>
+                    </div>
+                    <SidebarContent
+                      role={role}
+                      session={session}
+                      onLogout={logout}
+                      onNavigate={() => setOpen(false)}
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               <Button
                 type="button"
@@ -582,6 +647,7 @@ export function AppShell({
           </header>
 
           <main className="flex-1 p-4 sm:p-6">{children}</main>
+          <BackgroundJobTray />
         </div>
       </div>
     </div>

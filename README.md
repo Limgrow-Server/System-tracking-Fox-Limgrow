@@ -140,7 +140,7 @@ Các script Prisma có sẵn:
 npm run prisma:format
 npm run prisma:validate
 npm run prisma:generate
-npm run prisma:migrate:dev                 # dùng .env
+npm run prisma:migrate:dev                 # dùng .env, alias an toàn sang migrate deploy
 npm run prisma:migrate:deploy              # dùng .env
 npm run prisma:migrate:deploy:production   # dùng .env.production
 npm run prisma:migrate:status              # dùng .env
@@ -172,10 +172,10 @@ npm run prisma:studio
 
 ### Khi phát triển migration mới
 
-Dùng `migrate dev` khi đang phát triển schema:
+Repo này có migration phụ thuộc Supabase Vault (`vault.decrypted_secrets`), nên không dùng trực tiếp `prisma migrate dev`. Lệnh đó tạo shadow database trắng và sẽ fail vì shadow DB không có Supabase Vault. Script `prisma:migrate:dev` trong repo được giữ lại như alias an toàn sang `migrate deploy`.
 
 ```powershell
-npm run prisma:migrate:dev -- --name ten_migration_mo_ta
+npm run prisma:migrate:deploy
 npm run prisma:generate
 ```
 
@@ -212,15 +212,15 @@ npm install
 npm run prisma:migrate:status
 ```
 
-Trước khi đổi schema, kiểm tra `.env` đang trỏ tới Supabase project development/local, không phải production. Sau đó sửa model Prisma và tạo migration:
+Trước khi đổi schema, kiểm tra `.env` đang trỏ tới Supabase project development/local, không phải production. Sau đó sửa model Prisma, thêm migration SQL trong `prisma/migrations/<timestamp>_<name>/migration.sql`, rồi apply bằng:
 
 ```bash
-npm run prisma:migrate:dev -- --name ten_migration_mo_ta
+npm run prisma:migrate:deploy
 npm run prisma:generate
 npm run prisma:migrate:status
 ```
 
-Review file SQL vừa sinh trong `prisma/migrations/.../migration.sql` trước khi commit. Nếu migration chạm tới bảng trong schema exposed như `public`, cần kiểm tra RLS, policy, grant, function privilege và dữ liệu backfill. Với thay đổi destructive như drop column/table hoặc đổi kiểu dữ liệu, cần có plan backfill/rollback rõ ràng trước khi merge.
+Review file SQL trong `prisma/migrations/.../migration.sql` trước khi commit. Nếu migration chạm tới bảng trong schema exposed như `public`, cần kiểm tra RLS, policy, grant, function privilege và dữ liệu backfill. Với thay đổi destructive như drop column/table hoặc đổi kiểu dữ liệu, cần có plan backfill/rollback rõ ràng trước khi merge.
 
 Commit những file liên quan:
 
@@ -290,6 +290,8 @@ supabase functions deploy device-token-ios --project-ref <project-ref>
 supabase functions deploy dispatch-notifications --project-ref <project-ref>
 supabase functions deploy notification-event --project-ref <project-ref>
 supabase functions deploy send-notification --project-ref <project-ref>
+supabase functions deploy device-token-android --project-ref <project-ref> --no-verify-jwt
+supabase functions deploy device-token-ios --project-ref <project-ref> --no-verify-jwt
 supabase functions deploy verify-android --project-ref <project-ref>
 supabase functions deploy verify-ios --project-ref <project-ref>
 ```
@@ -411,7 +413,12 @@ Repo dùng Husky để tự kiểm tra trước commit/push:
 
 - `pre-commit`: kiểm tra branch name và chạy `lint-staged`.
 - `commit-msg`: kiểm tra commit message bằng Commitlint.
-- `pre-push`: chạy `npm run check`.
+
+`git push` không tự chạy full build để tránh trùng với GitHub Action và làm push chậm. Trước khi push, chạy thủ công:
+
+```bash
+npm run check
+```
 
 Commit message bắt buộc theo format:
 
@@ -475,7 +482,7 @@ git push --force-with-lease origin staging:staging
 
 ### GitHub Action quality
 
-Workflow CI nằm ở [.github/workflows/quality.yml](.github/workflows/quality.yml). Workflow tên `quality` chạy trên pull request và push vào các branch chính, rồi chạy:
+Workflow CI nằm ở [.github/workflows/ci.yml](.github/workflows/ci.yml). Workflow tên `CI`, job required check tên `quality`, chạy trên pull request và push vào các branch chính, rồi chạy:
 
 ```bash
 npm ci
@@ -483,6 +490,27 @@ npm run check
 ```
 
 Nếu GitHub branch protection đang yêu cầu check `quality`, tên required check phải trùng với job `quality`.
+
+SonarCloud hiện đang bật `Automatic Analysis`, nên workflow không chạy manual Sonar scan mặc định để tránh lỗi phân tích trùng:
+
+```text
+You are running CI analysis while Automatic Analysis is enabled
+```
+
+Nếu muốn chuyển sang manual scan trong GitHub Action:
+
+1. Tắt `Automatic Analysis` trong SonarCloud project.
+2. Tạo GitHub repository variable:
+
+```text
+ENABLE_SONAR_SCAN=true
+```
+
+3. Tạo secret:
+
+```text
+SONAR_TOKEN
+```
 
 ### Discord webhook cho CI
 
