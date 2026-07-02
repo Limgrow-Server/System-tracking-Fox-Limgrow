@@ -508,6 +508,7 @@ export function NotificationSendPage({
                 devices={[]}
                 fillHeight
                 schedules={schedules}
+                scheduleStats={data.notificationScheduleStats}
                 search={search}
                 selectedAppIdSet={selectedAppIdSet}
                 updateAppSelection={updateAppSelection}

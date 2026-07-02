@@ -105,6 +105,8 @@ model IosIapTransaction {
   @@unique([transactionId], map: "ios_iap_transactions_transaction_key")
   @@index([storeProfileId], map: "ios_iap_transactions_store_profile_id_idx")
   @@index([bundleId, verifiedAt], map: "ios_iap_transactions_bundle_verified_idx")
+  @@index([bundleId, storeProfileId, verifiedAt], map: "ios_iap_transactions_bundle_profile_verified_idx")
+  @@index([bundleId, storeProfileId, purchaseDate], map: "ios_iap_transactions_bundle_profile_purchase_idx")
   @@index([productId, verifiedAt], map: "ios_iap_transactions_product_verified_idx")
   @@index([userId, verifiedAt], map: "ios_iap_transactions_user_verified_idx")
   @@map("ios_iap_transactions")

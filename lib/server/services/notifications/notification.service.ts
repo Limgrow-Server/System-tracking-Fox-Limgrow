@@ -1,9 +1,11 @@
 import "server-only";
 
 import { Prisma } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 
 import { prisma } from "@/lib/prisma";
 import { searchTextVariants } from "@/lib/search";
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { firstAppId } from "@/lib/tracking/identity";
 import {
   deviceTokenToTracking,
@@ -11,6 +13,7 @@ import {
   notificationJobToTracking,
   notificationScheduleToTracking,
 } from "@/lib/tracking/mappers/notification";
+import type { NotificationCountStat } from "@/lib/tracking/page-data";
 import type { DeviceToken, StoreMapping } from "@/lib/tracking/types";
 
 const deviceTokenSummarySelect = {
@@ -61,6 +64,17 @@ type NotificationRecordPageOptions = {
   store?: string;
   take?: number;
 };
+
+type NotificationStatsScopeApp = Pick<
+  StoreMapping,
+  | "app_id"
+  | "app_name"
+  | "bundle_id"
+  | "id"
+  | "package_name"
+  | "platform"
+  | "store_account_name"
+>;
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -552,10 +566,20 @@ function textArraySql(values: string[]) {
     : Prisma.sql`array[]::text[]`;
 }
 
-export async function getActiveDeviceTokenCountsForApps(apps: StoreMapping[]) {
-  if (!apps.length) return {};
+function statsScopeApps(apps: StoreMapping[]): NotificationStatsScopeApp[] {
+  return apps.map((app) => ({
+    app_id: app.app_id,
+    app_name: app.app_name,
+    bundle_id: app.bundle_id,
+    id: app.id,
+    package_name: app.package_name,
+    platform: app.platform,
+    store_account_name: app.store_account_name,
+  }));
+}
 
-  const appRows = apps.map((app) => {
+function deviceTokenScopeRows(apps: NotificationStatsScopeApp[]) {
+  return apps.map((app) => {
     const appIds = uniqueSearchValues([app.app_id]);
     const packageNames = uniqueSearchValues([app.package_name]);
     const bundleIds = uniqueSearchValues([app.bundle_id]);
@@ -575,8 +599,33 @@ export async function getActiveDeviceTokenCountsForApps(apps: StoreMapping[]) {
       ${!hasIdentifier && Boolean(clean(app.store_account_name))}::boolean
     )`;
   });
+}
 
-  const rows = await prisma.$queryRaw<Array<{ count: number; mappingId: string }>>(Prisma.sql`
+function emptyCountStats(apps: NotificationStatsScopeApp[]) {
+  return Object.fromEntries(
+    apps.map((app) => [
+      app.id,
+      {
+        active: 0,
+        lastSeenAt: null,
+        total: 0,
+      } satisfies NotificationCountStat,
+    ]),
+  ) as Record<string, NotificationCountStat>;
+}
+
+async function getDeviceTokenStatsForScopeApps(apps: NotificationStatsScopeApp[]) {
+  if (!apps.length) return {};
+
+  const stats = emptyCountStats(apps);
+  const appRows = deviceTokenScopeRows(apps);
+
+  const rows = await prisma.$queryRaw<Array<{
+    active: number;
+    lastSeenAt: Date | string | null;
+    mappingId: string;
+    total: number;
+  }>>(Prisma.sql`
     with app_scope(
       mapping_id,
       platform,
@@ -591,11 +640,12 @@ export async function getActiveDeviceTokenCountsForApps(apps: StoreMapping[]) {
     )
     select
       app_scope.mapping_id as "mappingId",
-      count(device_tokens.id)::int as "count"
+      count(device_tokens.id)::int as "total",
+      count(device_tokens.id) filter (where device_tokens.status = 'active')::int as "active",
+      max(device_tokens.last_seen_at) as "lastSeenAt"
     from app_scope
     left join public.device_tokens
       on device_tokens.platform = app_scope.platform
-      and device_tokens.status = 'active'
       and (
         device_tokens.app_identifier = any(app_scope.identifiers)
         or device_tokens.package_name = any(app_scope.package_names)
@@ -615,7 +665,133 @@ export async function getActiveDeviceTokenCountsForApps(apps: StoreMapping[]) {
     group by app_scope.mapping_id
   `);
 
-  return Object.fromEntries(rows.map((row) => [row.mappingId, Number(row.count)])) as Record<string, number>;
+  rows.forEach((row) => {
+    stats[row.mappingId] = {
+      active: Number(row.active),
+      lastSeenAt: row.lastSeenAt
+        ? row.lastSeenAt instanceof Date
+          ? row.lastSeenAt.toISOString()
+          : new Date(row.lastSeenAt).toISOString()
+        : null,
+      total: Number(row.total),
+    };
+  });
+
+  return stats;
+}
+
+const getCachedDeviceTokenStatsForScopeApps = unstable_cache(
+  getDeviceTokenStatsForScopeApps,
+  ["notification-device-token-stats-v2"],
+  {
+    revalidate: 30,
+    tags: [
+      CACHE_TAGS.androidStoreMappings,
+      CACHE_TAGS.deviceTokens,
+      CACHE_TAGS.iosStoreMappings,
+    ],
+  },
+);
+
+export async function getDeviceTokenStatsForApps(apps: StoreMapping[]) {
+  return getCachedDeviceTokenStatsForScopeApps(statsScopeApps(apps));
+}
+
+export async function getActiveDeviceTokenCountsForApps(apps: StoreMapping[]) {
+  const stats = await getDeviceTokenStatsForApps(apps);
+  return Object.fromEntries(
+    Object.entries(stats).map(([mappingId, stat]) => [mappingId, stat.active]),
+  ) as Record<string, number>;
+}
+
+function scheduleScopeRows(apps: NotificationStatsScopeApp[]) {
+  return apps.map((app) => {
+    const appIds = uniqueSearchValues([app.app_id]);
+    const packageNames = uniqueSearchValues([app.package_name]);
+    const bundleIds = uniqueSearchValues([app.bundle_id]);
+
+    return Prisma.sql`(
+      ${app.id}::text,
+      ${app.platform}::text,
+      ${textArraySql(appIds)},
+      ${textArraySql(packageNames)},
+      ${textArraySql(bundleIds)},
+      ${clean(app.app_name)}::text,
+      ${clean(app.store_account_name)}::text
+    )`;
+  });
+}
+
+async function getNotificationScheduleStatsForScopeApps(
+  apps: NotificationStatsScopeApp[],
+) {
+  if (!apps.length) return {};
+
+  const stats = emptyCountStats(apps);
+  const appRows = scheduleScopeRows(apps);
+
+  const rows = await prisma.$queryRaw<Array<{
+    active: number;
+    mappingId: string;
+    total: number;
+  }>>(Prisma.sql`
+    with app_scope(
+      mapping_id,
+      platform,
+      app_ids,
+      package_names,
+      bundle_ids,
+      app_name,
+      store_account_name
+    ) as (
+      values ${Prisma.join(appRows)}
+    )
+    select
+      app_scope.mapping_id as "mappingId",
+      count(notification_schedules.id)::int as "total",
+      count(notification_schedules.id) filter (where notification_schedules.status = 'active')::int as "active"
+    from app_scope
+    left join public.notification_schedules
+      on notification_schedules.platform = app_scope.platform
+      and (
+        notification_schedules.app_mapping_id::text = app_scope.mapping_id
+        or notification_schedules.app_id = any(app_scope.app_ids)
+        or notification_schedules.package_name = any(app_scope.package_names)
+        or notification_schedules.bundle_id = any(app_scope.bundle_ids)
+        or (
+          notification_schedules.app_name = app_scope.app_name
+          and notification_schedules.store_account_name = app_scope.store_account_name
+        )
+      )
+    group by app_scope.mapping_id
+  `);
+
+  rows.forEach((row) => {
+    stats[row.mappingId] = {
+      active: Number(row.active),
+      lastSeenAt: null,
+      total: Number(row.total),
+    };
+  });
+
+  return stats;
+}
+
+const getCachedNotificationScheduleStatsForScopeApps = unstable_cache(
+  getNotificationScheduleStatsForScopeApps,
+  ["notification-schedule-stats-v2"],
+  {
+    revalidate: 30,
+    tags: [
+      CACHE_TAGS.androidStoreMappings,
+      CACHE_TAGS.iosStoreMappings,
+      CACHE_TAGS.notificationSchedules,
+    ],
+  },
+);
+
+export async function getNotificationScheduleStatsForApps(apps: StoreMapping[]) {
+  return getCachedNotificationScheduleStatsForScopeApps(statsScopeApps(apps));
 }
 
 export async function getActiveDeviceIdsForNotificationTarget(

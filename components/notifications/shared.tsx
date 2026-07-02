@@ -964,6 +964,7 @@ export function AppSelectionTable({
   devices,
   fillHeight = false,
   schedules,
+  scheduleStats,
   search,
   selectedAppIdSet,
   updateAppSelection,
@@ -975,6 +976,7 @@ export function AppSelectionTable({
   devices: DeviceToken[];
   fillHeight?: boolean;
   schedules: NotificationSchedule[];
+  scheduleStats?: NotificationsPageData["notificationScheduleStats"];
   search: string;
   selectedAppIdSet: Set<string>;
   updateAppSelection: (appId: string, checked?: boolean) => void;
@@ -988,13 +990,19 @@ export function AppSelectionTable({
     () =>
       apps
         .filter((app) => appMatchesSearch(app, search))
-        .map((app) => ({
-          app,
-          credentials: matchingFirebaseCredentials(app, credentials),
-          schedules: schedules.filter((schedule) => scheduleMatchesApp(schedule, app)),
-          totalTokens: deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length,
-        })),
-    [apps, credentials, deviceCounts, devices, schedules, search],
+        .map((app) => {
+          const localSchedules = schedules.filter((schedule) => scheduleMatchesApp(schedule, app));
+          const stat = scheduleStats?.[app.id];
+
+          return {
+            activeSchedules: (stat?.active ?? 0) + localSchedules.filter((schedule) => schedule.status === "active").length,
+            app,
+            credentials: matchingFirebaseCredentials(app, credentials),
+            totalSchedules: (stat?.total ?? 0) + localSchedules.length,
+            totalTokens: deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length,
+          };
+        }),
+    [apps, credentials, deviceCounts, devices, scheduleStats, schedules, search],
   );
 
   return (
@@ -1033,7 +1041,7 @@ export function AppSelectionTable({
             </TableHeader>
             <TableBody>
               {filteredApps.length ? (
-                filteredApps.map(({ app, credentials: appCredentials, schedules: appSchedules, totalTokens }) => {
+                filteredApps.map(({ activeSchedules, app, credentials: appCredentials, totalSchedules, totalTokens }) => {
                   const selected = selectedAppIdSet.has(app.id);
 
                   return (
@@ -1085,8 +1093,8 @@ export function AppSelectionTable({
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm font-medium">{appSchedules.length}</div>
-                        <div className="text-xs text-muted-foreground">{appSchedules.filter((schedule) => schedule.status === "active").length} active</div>
+                        <div className="text-sm font-medium">{totalSchedules}</div>
+                        <div className="text-xs text-muted-foreground">{activeSchedules} active</div>
                       </TableCell>
                     </TableRow>
                   );

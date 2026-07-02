@@ -64,6 +64,9 @@ export async function handleAdminNotificationOverviewAppsGet(request: Request) {
       },
       {
         deviceTokens: data.deviceTokens,
+        notificationDeviceCounts: data.notificationDeviceCounts,
+        notificationScheduleStats: data.notificationScheduleStats,
+        notificationTokenStats: data.notificationTokenStats,
         notificationSchedules: data.notificationSchedules,
         storeOptions: data.notificationStoreOptions,
         summary: data.notificationSummary,
