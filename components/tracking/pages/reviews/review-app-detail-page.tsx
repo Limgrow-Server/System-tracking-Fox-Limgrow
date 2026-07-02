@@ -971,8 +971,24 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       announceBackgroundJob(payload.backgroundJob);
 
       if (payload.result.status === "queued") {
-        void showToast("success",
-          `Queued ${payload.result.enqueued ?? 0} comment fetch job(s).`,
+        const enqueued = payload.result.enqueued ?? 0;
+        const skipped = payload.result.skipped ?? 0;
+        void showToast(
+          enqueued > 0 ? "success" : "info",
+          enqueued > 0
+            ? `Queued ${enqueued} comment fetch job(s).`
+            : `${skipped} comment fetch job(s) are already running or queued.`,
+        );
+        return;
+      }
+
+      if (payload.result.status === "empty") {
+        const skipped = payload.result.skipped ?? 0;
+        void showToast(
+          skipped > 0 ? "info" : "warning",
+          skipped > 0
+            ? `${skipped} comment fetch job(s) are already running or queued.`
+            : "No comment fetch job was queued.",
         );
         return;
       } else {

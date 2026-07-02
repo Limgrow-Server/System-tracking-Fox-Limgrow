@@ -220,7 +220,7 @@ function BackgroundJobRow({
 }) {
   const percent = progressPercent(job);
   const isActive = ACTIVE_STATUSES.has(job.status);
-  const canOpen = Boolean(job.result_url) && FINAL_STATUSES.has(job.status);
+  const canOpen = Boolean(job.result_url);
 
   const content = (
     <>
@@ -310,6 +310,7 @@ export function BackgroundJobTray() {
   const [loading, setLoading] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [trayPosition, setTrayPosition] = useState<TrayPosition | null>(null);
+  const dismissedJobIdsRef = useRef<Set<string>>(new Set());
   const dragStateRef = useRef<TrayDragState | null>(null);
   const hydratedRef = useRef(false);
   const jobsSignatureRef = useRef("");
@@ -366,21 +367,25 @@ export function BackgroundJobTray() {
   }, [open, trayPosition, visibleJobs.length]);
 
   const updateJobs = useCallback((nextJobs: BackgroundJob[]) => {
-    statusRef.current = new Map(nextJobs.map((job) => [job.id, job.status]));
-    const nextActiveCount = nextJobs.filter((job) =>
+    const visibleNextJobs = nextJobs.filter(
+      (job) => !dismissedJobIdsRef.current.has(job.id),
+    );
+    statusRef.current = new Map(visibleNextJobs.map((job) => [job.id, job.status]));
+    const nextActiveCount = visibleNextJobs.filter((job) =>
       ACTIVE_STATUSES.has(job.status),
     ).length;
-    const nextSignature = jobsSignature(nextJobs);
+    const nextSignature = jobsSignature(visibleNextJobs);
     setActiveCount((current) =>
       current === nextActiveCount ? current : nextActiveCount,
     );
     if (jobsSignatureRef.current === nextSignature) return;
     jobsSignatureRef.current = nextSignature;
-    setJobs(nextJobs);
+    setJobs(visibleNextJobs);
   }, []);
 
   const prependJob = useCallback(
     (job: BackgroundJob) => {
+      dismissedJobIdsRef.current.delete(job.id);
       setHidden(false);
       setOpen(true);
       setJobs((current) => {
@@ -406,7 +411,7 @@ export function BackgroundJobTray() {
 
   const openJobResult = useCallback(
     (job: BackgroundJob) => {
-      if (!job.result_url || !FINAL_STATUSES.has(job.status)) return;
+      if (!job.result_url) return;
       setOpen(false);
       router.push(job.result_url);
     },
@@ -429,6 +434,13 @@ export function BackgroundJobTray() {
 
   const hideTray = useCallback(() => {
     dragStateRef.current = null;
+    setJobs((current) => {
+      current.forEach((job) => dismissedJobIdsRef.current.add(job.id));
+      statusRef.current = new Map();
+      jobsSignatureRef.current = "";
+      return [];
+    });
+    setActiveCount(0);
     setDragging(false);
     setHidden(true);
     setOpen(false);
