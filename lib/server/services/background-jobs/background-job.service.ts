@@ -47,6 +47,7 @@ export type BackgroundJobTracking = {
   platform: string | null;
   progress_current: number;
   progress_total: number | null;
+  result_url: string | null;
   source_job_id: string | null;
   source_run_ids: string[];
   started_at: string | null;
@@ -101,6 +102,52 @@ function isFinalStatus(status: BackgroundJobTracking["status"]) {
   return status === "succeeded" || status === "failed" || status === "partial";
 }
 
+function metadataRecord(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function metadataString(value: unknown, key: string) {
+  const field = metadataRecord(value)[key];
+  return typeof field === "string" && field.trim() ? field.trim() : null;
+}
+
+function backgroundJobResultUrl(job: BackgroundJob) {
+  if (job.type === "NOTIFICATION_SEND") {
+    const notificationJobId =
+      job.sourceJobId ?? metadataString(job.metadata, "notificationJobId");
+    return notificationJobId
+      ? `/notifications/history/${encodeURIComponent(notificationJobId)}`
+      : "/notifications/history";
+  }
+
+  const mappingId =
+    metadataString(job.metadata, "storeMappingId") ??
+    metadataString(job.metadata, "mappingId");
+  if (mappingId) return `/comments/${encodeURIComponent(mappingId)}`;
+
+  return metadataString(job.metadata, "scope") === "all" ? "/comments" : null;
+}
+
+function mergeMetadata(
+  current: unknown,
+  next: Record<string, string | number | null>,
+): Prisma.InputJsonObject {
+  return {
+    ...metadataRecord(current),
+    ...next,
+  } as Prisma.InputJsonObject;
+}
+
+function metadataChanged(current: unknown, next: unknown) {
+  return JSON.stringify(metadataRecord(current)) !== JSON.stringify(metadataRecord(next));
+}
+
+function hasReviewResultUrl(job: BackgroundJob) {
+  return Boolean(backgroundJobResultUrl(job));
+}
+
 function toTracking(job: BackgroundJob): BackgroundJobTracking {
   return {
     id: job.id,
@@ -115,6 +162,7 @@ function toTracking(job: BackgroundJob): BackgroundJobTracking {
     platform: job.platform,
     progress_current: job.progressCurrent,
     progress_total: job.progressTotal,
+    result_url: backgroundJobResultUrl(job),
     source_job_id: job.sourceJobId,
     source_run_ids: job.sourceRunIds,
     started_at: iso(job.startedAt),
@@ -281,10 +329,17 @@ async function hydrateReviewJobs(jobs: BackgroundJob[]) {
     where: { id: { in: runIds } },
     select: {
       errorMessage: true,
+      appTarget: {
+        select: {
+          androidStoreMappingId: true,
+          iosStoreMappingId: true,
+        },
+      },
       finishedAt: true,
       id: true,
       startedAt: true,
       status: true,
+      platform: true,
       updatedAt: true,
     },
   });
@@ -328,6 +383,26 @@ async function hydrateReviewJobs(jobs: BackgroundJob[]) {
       .filter((value): value is Date => Boolean(value))
       .sort((left, right) => right.getTime() - left.getTime())[0];
     const failedRun = jobRuns.find((run) => run.errorMessage);
+    const mappingIds = Array.from(
+      new Set(
+        jobRuns
+          .map((run) =>
+            run.platform === "IOS"
+              ? run.appTarget.iosStoreMappingId
+              : run.appTarget.androidStoreMappingId,
+          )
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const metadata =
+      mappingIds.length === 1
+        ? mergeMetadata(job.metadata, {
+            mappingId: mappingIds[0],
+            storeMappingId: mappingIds[0],
+          })
+        : mappingIds.length > 1
+          ? mergeMetadata(job.metadata, { scope: "all" })
+          : undefined;
 
     hydrated.set(job.id, {
       finished_at: isFinalStatus(status) ? iso(latestFinishedAt ?? newestRun.updatedAt) : null,
@@ -336,6 +411,7 @@ async function hydrateReviewJobs(jobs: BackgroundJob[]) {
       progress_total: total,
       started_at: iso(firstStartedAt),
       status,
+      ...(metadata ? { metadata } : {}),
       updated_at: newestRun.updatedAt.toISOString(),
     });
   }
@@ -357,6 +433,8 @@ async function persistHydratedJob(
       : hydrated.progress_total;
   const nextLastError =
     hydrated.last_error === undefined ? job.lastError : hydrated.last_error;
+  const nextMetadata =
+    hydrated.metadata === undefined ? job.metadata : hydrated.metadata;
   const nextStartedAt = hydrated.started_at
     ? new Date(hydrated.started_at)
     : job.startedAt;
@@ -369,6 +447,7 @@ async function persistHydratedJob(
     nextProgressCurrent !== job.progressCurrent ||
     nextProgressTotal !== job.progressTotal ||
     nextLastError !== job.lastError ||
+    metadataChanged(job.metadata, nextMetadata) ||
     Number(nextStartedAt) !== Number(job.startedAt) ||
     Number(nextFinishedAt) !== Number(job.finishedAt);
 
@@ -379,6 +458,7 @@ async function persistHydratedJob(
     data: {
       finishedAt: nextFinishedAt,
       lastError: nextLastError,
+      metadata: nextMetadata as Prisma.InputJsonValue,
       progressCurrent: nextProgressCurrent,
       progressTotal: nextProgressTotal,
       startedAt: nextStartedAt,
@@ -401,9 +481,20 @@ export async function listBackgroundJobsForSession(session: ConsoleSession) {
     take: 30,
   });
 
+  const activeJobs = jobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));
+  const reviewJobsNeedingDestination = jobs.filter((job) =>
+    job.type === "REVIEW_FETCH" && !hasReviewResultUrl(job),
+  );
+  const reviewHydrationTargets = Array.from(
+    new Map(
+      [...activeJobs.filter((job) => job.type === "REVIEW_FETCH"), ...reviewJobsNeedingDestination]
+        .map((job) => [job.id, job]),
+    ).values(),
+  );
+
   const [notificationHydration, reviewHydration] = await Promise.all([
-    hydrateNotificationJobs(jobs.filter((job) => job.type === "NOTIFICATION_SEND")),
-    hydrateReviewJobs(jobs.filter((job) => job.type === "REVIEW_FETCH")),
+    hydrateNotificationJobs(activeJobs.filter((job) => job.type === "NOTIFICATION_SEND")),
+    hydrateReviewJobs(reviewHydrationTargets),
   ]);
 
   const refreshedJobs = await Promise.all(

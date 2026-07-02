@@ -372,7 +372,6 @@ export function ReviewFetchSchedulePage({
       void showToast("success",
         `Queued ${payload.result.enqueued} full scan job(s). ${payload.result.skipped} already running or queued.`,
       );
-      router.refresh();
     } catch (error) {
       void showToast("error",
         error instanceof Error ? error.message : "Full scan could not be queued.",
