@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/select";
 import type {
   IapAppDetailPageData,
+  IapAppMetrics,
   IapAppTransaction,
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
@@ -47,7 +48,7 @@ type IapTransactionListResponse = {
   success?: boolean;
   data?: IapAppTransaction[];
   error?: string;
-  metricTransactions?: IapAppTransaction[];
+  metrics?: IapAppMetrics;
   page?: number;
   pageSize?: number;
   total?: number;
@@ -213,21 +214,6 @@ function receiptDisplayPayload(receipt: unknown) {
   };
 }
 
-function transactionRevenueValue(transaction: IapAppTransaction) {
-  const micros = transactionRevenueMicros(transaction);
-  if (micros === null) return 0;
-  const numericMicros =
-    typeof micros === "number" ? micros : Number.parseInt(micros, 10);
-  return Number.isFinite(numericMicros) ? numericMicros / 1_000_000 : 0;
-}
-
-function transactionTimestamp(transaction: IapAppTransaction) {
-  const dateValue = transactionPurchaseDate(transaction);
-  if (!dateValue) return 0;
-  const timestamp = new Date(dateValue).getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
 function StatusBadge({ status }: { status: string }) {
   const s = status.toLowerCase();
   let cls = "bg-muted border-border text-muted-foreground";
@@ -304,9 +290,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const { app } = data;
   const isIos = app.platform === "ios";
 
-  const [metricTransactions, setMetricTransactions] = useState(
-    data.metricTransactions,
-  );
+  const [metrics, setMetrics] = useState(data.metrics);
   const [transactions, setTransactions] = useState(data.transactions);
   const [transactionPagination, setTransactionPagination] = useState(
     data.transactionPagination,
@@ -364,8 +348,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         total: payload.total ?? payload.data.length,
         totalPages: payload.totalPages ?? 1,
       });
-      if (payload.metricTransactions) {
-        setMetricTransactions(payload.metricTransactions);
+      if (payload.metrics) {
+        setMetrics(payload.metrics);
       }
       if (payload.transactionStates) {
         setTransactionStates(payload.transactionStates);
@@ -382,41 +366,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     }
   }
 
-  const filteredTransactions = metricTransactions;
-
   const stats = useMemo(() => {
-    let rev = 0;
-    let active = 0;
-    let canceled = 0;
-    const latestTimestamp = Math.max(
-      0,
-      ...filteredTransactions.map(transactionTimestamp),
-    );
-    const week = 7 * 24 * 60 * 60 * 1000;
-    let revL7 = 0;
-    let revP7 = 0;
-    let ordL7 = 0;
-    let ordP7 = 0;
-
-    filteredTransactions.forEach((tx) => {
-      const test = transactionIsTest(tx);
-      const st = tx.state.toLowerCase();
-      const value = transactionRevenueValue(tx);
-      const timestamp = transactionTimestamp(tx);
-
-      if (!test && value > 0) {
-        rev += value;
-        if (latestTimestamp && timestamp >= latestTimestamp - week) {
-          revL7 += value;
-          ordL7++;
-        } else if (latestTimestamp && timestamp >= latestTimestamp - 2 * week) {
-          revP7 += value;
-          ordP7++;
-        }
-      }
-      if (st === "active" || st === "purchased") active++;
-      if (st === "canceled" || st === "expired") canceled++;
-    });
+    const rev = metrics.totalRevenue;
+    const active = metrics.activeCount;
+    const canceled = metrics.canceledCount;
+    const total = metrics.totalCount;
+    const revL7 = metrics.last7Revenue;
+    const revP7 = metrics.previous7Revenue;
+    const ordL7 = metrics.last7Orders;
+    const ordP7 = metrics.previous7Orders;
     const sg =
       revP7 > 0 ? ((revL7 - revP7) / revP7) * 100 : revL7 > 0 ? 100 : 0;
     const og =
@@ -425,7 +383,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       rev,
       active,
       canceled,
-      total: filteredTransactions.length,
+      total,
       sg,
       ogDir: og >= 0 ? ("up" as const) : ("down" as const),
       sgDir: sg >= 0 ? ("up" as const) : ("down" as const),
@@ -434,64 +392,19 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       ordL7,
       ordP7,
       og,
-      latestTimestamp,
+      latestTimestamp: metrics.latestTimestamp,
     };
-  }, [filteredTransactions]);
+  }, [metrics]);
 
   // Monthly chart data (12 months)
   const { buckets, maxVal } = useMemo(() => {
-    const months = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-    const b: { label: string; prod: number; sand: number }[] = [];
-    const chartEnd = stats.latestTimestamp
-      ? new Date(stats.latestTimestamp)
-      : new Date("2026-06-01T00:00:00.000Z");
-
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(chartEnd.getFullYear(), chartEnd.getMonth() - i, 1);
-      b.push({ label: months[d.getMonth()], prod: 0, sand: 0 });
-    }
-
-    filteredTransactions.forEach((tx) => {
-      const pd = new Date(transactionPurchaseDate(tx) ?? 0);
-      const value = transactionRevenueValue(tx);
-      if (!value || Number.isNaN(pd.getTime())) return;
-
-      const mIdx = b.findIndex((_, idx) => {
-        const ref = new Date(
-          chartEnd.getFullYear(),
-          chartEnd.getMonth() - (11 - idx),
-          1,
-        );
-        return (
-          ref.getMonth() === pd.getMonth() &&
-          ref.getFullYear() === pd.getFullYear()
-        );
-      });
-
-      if (mIdx >= 0) {
-        if (transactionIsTest(tx)) b[mIdx].sand += value;
-        else b[mIdx].prod += value;
-      }
-    });
+    const b = metrics.revenueBuckets;
     let mx = 1;
     b.forEach((x) => {
       if (x.prod + x.sand > mx) mx = x.prod + x.sand;
     });
     return { buckets: b, maxVal: mx };
-  }, [filteredTransactions, stats.latestTimestamp]);
+  }, [metrics.revenueBuckets]);
 
   const uniqueStates = useMemo(() => {
     return Array.from(

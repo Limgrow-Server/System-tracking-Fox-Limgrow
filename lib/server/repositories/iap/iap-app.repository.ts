@@ -2,6 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { searchTextVariants } from "@/lib/search";
+import type { IapAppMetrics, IapRevenueBucket } from "@/lib/tracking/page-data";
 
 type IapAppMappingOptions = {
   search?: string;
@@ -129,17 +130,6 @@ export async function getIosMappingById(id: string) {
   });
 }
 
-export async function getAndroidTransactionsByPackageAndProfile(packageName: string, storeProfileId: string) {
-  return prisma.iapAndroid.findMany({
-    where: { packageName, storeProfileId },
-    orderBy: { verifiedAt: "desc" },
-    take: 300,
-    include: {
-      storeProfile: true,
-    },
-  });
-}
-
 type AndroidTransactionPageOptions = {
   kind?: string;
   page: number;
@@ -149,6 +139,164 @@ type AndroidTransactionPageOptions = {
   state?: string;
   take: number;
 };
+
+type IapMetricsRow = {
+  activeCount: number | bigint | null;
+  canceledCount: number | bigint | null;
+  latestTimestamp: number | string | null;
+  last7Orders: number | bigint | null;
+  last7Revenue: number | string | null;
+  previous7Orders: number | bigint | null;
+  previous7Revenue: number | string | null;
+  totalCount: number | bigint | null;
+  totalRevenue: number | string | null;
+};
+
+type IapRevenueBucketRow = {
+  label: string | null;
+  prod: number | string | null;
+  sand: number | string | null;
+};
+
+function numberValue(value: number | string | bigint | null | undefined) {
+  if (value === null || value === undefined) return 0;
+  const numeric = typeof value === "bigint" ? Number(value) : Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function joinSql(parts: Prisma.Sql[], separator: Prisma.Sql) {
+  if (!parts.length) return Prisma.empty;
+  return parts.slice(1).reduce(
+    (sql, part) => Prisma.sql`${sql} ${separator} ${part}`,
+    parts[0],
+  );
+}
+
+function searchSql(columns: string[], search: string | undefined) {
+  const variants = searchTextVariants(search?.trim() ?? "");
+  if (!variants.length) return null;
+
+  const clauses = variants.flatMap((variant) =>
+    columns.map((column) => Prisma.sql`${Prisma.raw(column)} ilike ${`%${variant}%`}`),
+  );
+
+  return Prisma.sql`(${joinSql(clauses, Prisma.sql`or`)})`;
+}
+
+function iapMetricsFromRows(
+  rows: IapMetricsRow[],
+  bucketRows: IapRevenueBucketRow[],
+): IapAppMetrics {
+  const row = rows[0];
+  const revenueBuckets: IapRevenueBucket[] = bucketRows.map((bucket) => ({
+    label: bucket.label ?? "",
+    prod: numberValue(bucket.prod),
+    sand: numberValue(bucket.sand),
+  }));
+
+  return {
+    activeCount: numberValue(row?.activeCount),
+    canceledCount: numberValue(row?.canceledCount),
+    latestTimestamp: numberValue(row?.latestTimestamp),
+    last7Orders: numberValue(row?.last7Orders),
+    last7Revenue: numberValue(row?.last7Revenue),
+    previous7Orders: numberValue(row?.previous7Orders),
+    previous7Revenue: numberValue(row?.previous7Revenue),
+    revenueBuckets,
+    totalCount: numberValue(row?.totalCount),
+    totalRevenue: numberValue(row?.totalRevenue),
+  };
+}
+
+async function getIapMetrics(
+  sourceSql: Prisma.Sql,
+  whereSql: Prisma.Sql,
+  testExpression: Prisma.Sql,
+) {
+  const [metricsRows, bucketRows] = await Promise.all([
+    prisma.$queryRaw<IapMetricsRow[]>(Prisma.sql`
+      with filtered as (
+        select
+          state,
+          purchase_date,
+          revenue_micros,
+          ${testExpression} as is_test
+        from ${sourceSql}
+        ${whereSql}
+      ),
+      anchor as (
+        select max(purchase_date) as latest from filtered
+      )
+      select
+        count(*)::int as "totalCount",
+        count(*) filter (where lower(state) in ('active', 'purchased'))::int as "activeCount",
+        count(*) filter (where lower(state) in ('canceled', 'expired'))::int as "canceledCount",
+        coalesce(extract(epoch from (select latest from anchor)) * 1000, 0)::float8 as "latestTimestamp",
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where not is_test and coalesce(revenue_micros, 0) > 0
+        ), 0)::float8 as "totalRevenue",
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where not is_test
+            and coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '7 days'
+        ), 0)::float8 as "last7Revenue",
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where not is_test
+            and coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '14 days'
+            and purchase_date < (select latest from anchor) - interval '7 days'
+        ), 0)::float8 as "previous7Revenue",
+        count(*) filter (
+          where not is_test
+            and coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '7 days'
+        )::int as "last7Orders",
+        count(*) filter (
+          where not is_test
+            and coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '14 days'
+            and purchase_date < (select latest from anchor) - interval '7 days'
+        )::int as "previous7Orders"
+      from filtered
+    `),
+    prisma.$queryRaw<IapRevenueBucketRow[]>(Prisma.sql`
+      with filtered as (
+        select
+          purchase_date,
+          revenue_micros,
+          ${testExpression} as is_test
+        from ${sourceSql}
+        ${whereSql}
+      ),
+      anchor as (
+        select date_trunc('month', coalesce(max(purchase_date), '2026-06-01'::timestamptz)) as chart_end
+        from filtered
+      ),
+      months as (
+        select generate_series(
+          (select chart_end from anchor) - interval '11 months',
+          (select chart_end from anchor),
+          interval '1 month'
+        ) as month_start
+      )
+      select
+        to_char(months.month_start, 'Mon') as label,
+        coalesce(sum((filtered.revenue_micros::numeric / 1000000.0)) filter (
+          where not filtered.is_test and coalesce(filtered.revenue_micros, 0) > 0
+        ), 0)::float8 as prod,
+        coalesce(sum((filtered.revenue_micros::numeric / 1000000.0)) filter (
+          where filtered.is_test and coalesce(filtered.revenue_micros, 0) > 0
+        ), 0)::float8 as sand
+      from months
+      left join filtered
+        on date_trunc('month', filtered.purchase_date) = months.month_start
+      group by months.month_start
+      order by months.month_start
+    `),
+  ]);
+
+  return iapMetricsFromRows(metricsRows, bucketRows);
+}
 
 function androidTransactionWhere(
   packageName: string,
@@ -210,13 +358,30 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
   storeProfileId: string,
   options: Partial<AndroidTransactionPageOptions>,
 ) {
-  return prisma.iapAndroid.findMany({
-    where: androidTransactionWhere(packageName, storeProfileId, options),
-    orderBy: { verifiedAt: "desc" },
-    include: {
-      storeProfile: true,
-    },
-  });
+  const conditions = [
+    Prisma.sql`package_name = ${packageName}`,
+    Prisma.sql`store_profile_id = ${storeProfileId}::uuid`,
+  ];
+  const search = searchSql(
+    ["order_id", "product_id", "purchase_token", "package_name"],
+    options.search,
+  );
+  const state = options.state?.trim();
+  const kind = options.kind?.trim();
+
+  if (search) conditions.push(search);
+  if (state && state !== "all") {
+    conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
+  }
+  if (kind && kind !== "all") {
+    conditions.push(Prisma.sql`lower(purchase_kind) = ${kind.toLowerCase()}`);
+  }
+
+  return getIapMetrics(
+    Prisma.sql`public.iap_android`,
+    Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
+    Prisma.sql`is_test_purchase`,
+  );
 }
 
 export async function getAndroidTransactionStatesByPackageAndProfile(
@@ -230,22 +395,6 @@ export async function getAndroidTransactionStatesByPackageAndProfile(
   });
 
   return rows.map((row) => row.state);
-}
-
-export async function getIosTransactionsByBundleId(
-  bundleId: string,
-  storeProfileId?: string,
-) {
-  return prisma.iosIapTransaction.findMany({
-    where: {
-      bundleId,
-      ...(storeProfileId
-        ? { OR: [{ storeProfileId }, { storeProfileId: null }] }
-        : {}),
-    },
-    orderBy: { verifiedAt: "desc" },
-    take: 300,
-  });
 }
 
 type IosTransactionPageOptions = {
@@ -320,10 +469,28 @@ export function getIosTransactionsByBundleIdMetrics(
   storeProfileId: string | undefined,
   options: Partial<IosTransactionPageOptions>,
 ) {
-  return prisma.iosIapTransaction.findMany({
-    where: iosTransactionWhere(bundleId, storeProfileId, options),
-    orderBy: { verifiedAt: "desc" },
-  });
+  const conditions = [Prisma.sql`bundle_id = ${bundleId}`];
+  const search = searchSql(
+    ["transaction_id", "original_transaction_id", "product_id", "bundle_id", "user_id"],
+    options.search,
+  );
+  const state = options.state?.trim();
+
+  if (storeProfileId) {
+    conditions.push(
+      Prisma.sql`(store_profile_id = ${storeProfileId}::uuid or store_profile_id is null)`,
+    );
+  }
+  if (search) conditions.push(search);
+  if (state && state !== "all") {
+    conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
+  }
+
+  return getIapMetrics(
+    Prisma.sql`public.ios_iap_transactions`,
+    Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
+    Prisma.sql`lower(environment) = 'sandbox'`,
+  );
 }
 
 export async function getIosTransactionStatesByBundleId(

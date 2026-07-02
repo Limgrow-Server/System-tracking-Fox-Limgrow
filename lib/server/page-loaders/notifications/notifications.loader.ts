@@ -14,8 +14,8 @@ import { getAndroidCredentialConfigs } from "@/lib/server/services/credentials/a
 import { getIosCredentialConfigs } from "@/lib/server/services/credentials/ios-credential.service";
 import {
   getActiveDeviceTokenCountsForApps,
+  getDeviceTokenStatsForApps,
   getDeviceTokenPageForApps,
-  getDeviceTokenSummariesForApps,
   getDeviceTokenSummariesForDeviceIds,
   getDeviceTokenSummaryPageForApps,
   getNotificationEventPageForJob,
@@ -24,23 +24,20 @@ import {
   getNotificationJobById,
   getNotificationJobsForApps,
   getNotificationSchedulePage,
+  getNotificationScheduleStatsForApps,
   getNotificationSchedulesForApps,
 } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
-import {
-  searchTextVariants,
-  valuesMatchSearch as fuzzyValuesMatchSearch,
-} from "@/lib/search";
+import { valuesMatchSearch as fuzzyValuesMatchSearch } from "@/lib/search";
 import type {
+  NotificationCountStat,
   NotificationOverviewSummary,
   NotificationsPageData,
   PaginationMeta,
 } from "@/lib/tracking/page-data";
 import { sortMappings } from "@/lib/tracking/mappers/shared";
-import { normalizeScopeKey } from "@/lib/tracking/identity";
 import type {
-  DeviceToken,
   NotificationJob,
   NotificationSchedule,
   StoreMapping,
@@ -51,9 +48,9 @@ const DEFAULT_PAGE_SIZE = 10;
 const DEFAULT_APP_PAGE_SIZE = 10;
 const DEFAULT_TOKEN_PAGE_SIZE = 10;
 const DEFAULT_HISTORY_EVENT_PAGE_SIZE = 10;
+const DETAIL_RECORD_LIMIT = 200;
 const STORE_MAPPING_SCAN_LIMIT = 5000;
-const NOTIFICATION_SCAN_LIMIT = 5000;
-const EVENT_SCAN_LIMIT = 8000;
+const EVENT_SCAN_LIMIT = 2000;
 
 type NotificationListOptions = Partial<PaginationQuery> & {
   appId?: string;
@@ -99,6 +96,8 @@ function emptyNotificationsData(): NotificationsPageData {
     credentialSecrets: [],
     deviceTokens: [],
     notificationDeviceCounts: {},
+    notificationScheduleStats: {},
+    notificationTokenStats: {},
     notificationDeliveryEvents: [],
     notificationEvents: [],
     notificationJobs: [],
@@ -184,8 +183,10 @@ function scopedNotificationsData(
     notificationJobs,
     notificationPagination: data.notificationPagination,
     notificationSchedules,
+    notificationScheduleStats: data.notificationScheduleStats,
     notificationStoreOptions: notificationStoreOptions(data.storeMappings),
     notificationSummary: data.notificationSummary,
+    notificationTokenStats: data.notificationTokenStats,
     storeMappings: data.storeMappings,
   };
 }
@@ -197,36 +198,6 @@ function normalizeFilter(value: string | null | undefined) {
 
 function valuesMatchSearch(values: Array<string | null | undefined>, search?: string) {
   return fuzzyValuesMatchSearch(values, search);
-}
-
-function uniqueClean(values: Array<string | null | undefined>) {
-  return Array.from(
-    new Set(values.map(normalizeScopeKey).filter(Boolean)),
-  );
-}
-
-function uniqueSearchKeys(values: Array<string | null | undefined>) {
-  return uniqueClean(values.flatMap((value) => searchTextVariants(value)));
-}
-
-function recordAppKeys(record: DeviceToken | NotificationJob | NotificationSchedule) {
-  return uniqueSearchKeys([
-    "app_mapping_id" in record ? record.app_mapping_id : null,
-    record.id,
-    record.app_id,
-    "app_identifier" in record ? record.app_identifier : null,
-    "product_app_id" in record ? record.product_app_id : null,
-    "app_name" in record ? record.app_name : null,
-    record.package_name,
-    record.bundle_id,
-  ]);
-}
-
-function recordStoreKeys(record: DeviceToken | NotificationJob | NotificationSchedule) {
-  return uniqueClean([
-    "store_profile_id" in record ? record.store_profile_id : null,
-    record.store_account_name,
-  ]);
 }
 
 function mappingIdentifier(app: StoreMapping) {
@@ -294,82 +265,30 @@ function filterMappings(mappings: StoreMapping[], options?: NotificationListOpti
   });
 }
 
-function appMatchIndex(apps: StoreMapping[]) {
-  return {
-    appKeys: new Set(
-      apps.flatMap((app) =>
-        uniqueSearchKeys([
-          app.id,
-          app.app_id,
-          app.app_name,
-          app.package_name,
-          app.bundle_id,
-        ]),
-      ),
-    ),
-    storeKeys: new Set(
-      apps.flatMap((app) =>
-        uniqueClean([
-          app.store_profile_id,
-          app.store_account_name,
-        ]),
-      ),
-    ),
-  };
+function countStatTotals(stats: Record<string, NotificationCountStat>) {
+  return Object.values(stats).reduce(
+    (total, stat) => ({
+      active: total.active + stat.active,
+      total: total.total + stat.total,
+    }),
+    { active: 0, total: 0 },
+  );
 }
 
-function hasAnyOverlap(values: string[], set: Set<string>) {
-  return values.some((value) => set.has(value));
-}
-
-function filterRecordsForApps<T extends DeviceToken | NotificationJob | NotificationSchedule>(
-  records: T[],
+function notificationSummaryFromStats(
   apps: StoreMapping[],
-) {
-  if (!records.length || !apps.length) return [];
-
-  const index = appMatchIndex(apps);
-  return records.filter((record) => {
-    const appKeys = recordAppKeys(record);
-    const appMatches = hasAnyOverlap(appKeys, index.appKeys);
-
-    if (appKeys.length && index.appKeys.size) {
-      return appMatches;
-    }
-
-    return appMatches || hasAnyOverlap(recordStoreKeys(record), index.storeKeys);
-  });
-}
-
-function filterTokensForApps(tokens: DeviceToken[], apps: StoreMapping[]) {
-  return filterRecordsForApps(tokens, apps);
-}
-
-function filterSchedulesForApps(
-  schedules: NotificationSchedule[],
-  apps: StoreMapping[],
-) {
-  return filterRecordsForApps(schedules, apps);
-}
-
-function notificationSummary(
-  apps: StoreMapping[],
-  tokens: DeviceToken[],
-  schedules: NotificationSchedule[],
+  tokenStats: Record<string, NotificationCountStat>,
+  scheduleStats: Record<string, NotificationCountStat>,
 ): NotificationOverviewSummary {
-  const scopedTokens = filterTokensForApps(tokens, apps);
-  const scopedSchedules = filterSchedulesForApps(schedules, apps);
+  const tokens = countStatTotals(tokenStats);
+  const schedules = countStatTotals(scheduleStats);
 
   return {
-    activeSchedules: scopedSchedules.filter(
-      (schedule) => schedule.status.toLowerCase() === "active",
-    ).length,
-    activeTokens: scopedTokens.filter(
-      (token) => token.status.toLowerCase() === "active",
-    ).length,
+    activeSchedules: schedules.active,
+    activeTokens: tokens.active,
     appCount: apps.length,
-    totalSchedules: scopedSchedules.length,
-    totalTokens: scopedTokens.length,
+    totalSchedules: schedules.total,
+    totalTokens: tokens.total,
   };
 }
 
@@ -385,17 +304,19 @@ export async function getNotificationOverviewPageData(
     filteredMappings.length,
     pagination,
   );
-  const [summaryTokens, pageTokens, summarySchedules, pageSchedules] = await Promise.all([
-    getDeviceTokenSummariesForApps(filteredMappings, NOTIFICATION_SCAN_LIMIT),
-    getDeviceTokenSummariesForApps(appPage.data, NOTIFICATION_SCAN_LIMIT),
-    getNotificationSchedulesForApps(filteredMappings, NOTIFICATION_SCAN_LIMIT),
-    getNotificationSchedulesForApps(appPage.data, NOTIFICATION_SCAN_LIMIT),
+  const [tokenStats, scheduleStats] = await Promise.all([
+    getDeviceTokenStatsForApps(filteredMappings),
+    getNotificationScheduleStatsForApps(filteredMappings),
   ]);
+  const notificationDeviceCounts = Object.fromEntries(
+    Object.entries(tokenStats).map(([mappingId, stat]) => [mappingId, stat.active]),
+  );
   const scoped = scopedNotificationsData(
     session,
     notificationData({
-      deviceTokens: pageTokens,
-      notificationSchedules: pageSchedules,
+      notificationDeviceCounts,
+      notificationScheduleStats: scheduleStats,
+      notificationTokenStats: tokenStats,
       storeMappings,
     }),
   );
@@ -408,10 +329,10 @@ export async function getNotificationOverviewPageData(
     },
     notificationSchedules: scoped.notificationSchedules,
     notificationStoreOptions: notificationStoreOptions(scoped.storeMappings),
-    notificationSummary: notificationSummary(
+    notificationSummary: notificationSummaryFromStats(
       filteredMappings,
-      summaryTokens,
-      summarySchedules,
+      tokenStats,
+      scheduleStats,
     ),
     storeMappings: appPage.data,
   };
@@ -442,8 +363,8 @@ export async function getNotificationTokenDetailPageData(
         pageSize: pagination.pageSize,
         search: options?.search,
       }),
-      getNotificationSchedulesForApps([selectedApp], NOTIFICATION_SCAN_LIMIT),
-      getNotificationJobsForApps([selectedApp], NOTIFICATION_SCAN_LIMIT),
+      getNotificationSchedulesForApps([selectedApp], DETAIL_RECORD_LIMIT),
+      getNotificationJobsForApps([selectedApp], DETAIL_RECORD_LIMIT),
     ]);
   }
 
@@ -489,8 +410,8 @@ export async function getNotificationSendPageData(
     getNotificationStoreMappings(session),
     getFirebaseCredentialSecrets(),
   ]);
-  const [notificationSchedules, deviceCounts] = await Promise.all([
-    getNotificationSchedulesForApps(storeMappings, NOTIFICATION_SCAN_LIMIT),
+  const [scheduleStats, deviceCounts] = await Promise.all([
+    getNotificationScheduleStatsForApps(storeMappings),
     getActiveDeviceTokenCountsForApps(storeMappings),
   ]);
 
@@ -499,7 +420,7 @@ export async function getNotificationSendPageData(
     notificationData({
       credentialSecrets,
       notificationDeviceCounts: deviceCounts,
-      notificationSchedules,
+      notificationScheduleStats: scheduleStats,
       storeMappings,
     }),
   );
@@ -699,38 +620,5 @@ export async function getNotificationHistoryDetailPageData(
 export async function getNotificationsPageData(
   session: ConsoleSession,
 ): Promise<NotificationsPageData> {
-  const [storeMappings, credentialSecrets] = await Promise.all([
-    getNotificationStoreMappings(session),
-    getFirebaseCredentialSecrets(),
-  ]);
-  const apps = hasAllAppAccess(session) ? undefined : storeMappings;
-  const [jobResult, scheduleResult, deviceTokens] = await Promise.all([
-    getNotificationJobPage({
-      apps,
-      page: 1,
-      pageSize: NOTIFICATION_SCAN_LIMIT,
-    }),
-    getNotificationSchedulePage({
-      apps,
-      page: 1,
-      pageSize: NOTIFICATION_SCAN_LIMIT,
-    }),
-    getDeviceTokenSummariesForApps(storeMappings, NOTIFICATION_SCAN_LIMIT),
-  ]);
-  const notificationEvents = await getNotificationEventsForJobs(
-    jobResult.data.map((job) => job.id),
-    EVENT_SCAN_LIMIT,
-  );
-
-  return scopedNotificationsData(
-    session,
-    notificationData({
-      credentialSecrets,
-      deviceTokens,
-      notificationEvents,
-      notificationJobs: jobResult.data,
-      notificationSchedules: scheduleResult.data,
-      storeMappings,
-    }),
-  );
+  return getNotificationOverviewPageData(session);
 }

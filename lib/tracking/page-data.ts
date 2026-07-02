@@ -37,6 +37,8 @@ export type ConfigsPageData = {
 export type NotificationsPageData = {
   credentialSecrets: CredentialSecretMetadata[];
   notificationDeviceCounts: Record<string, number>;
+  notificationScheduleStats: Record<string, NotificationCountStat>;
+  notificationTokenStats: Record<string, NotificationCountStat>;
   deviceTokens: DeviceToken[];
   notificationDeliveryEvents: NotificationEvent[];
   notificationEvents: NotificationEvent[];
@@ -69,7 +71,46 @@ export type IapAppGridPageData = {
   storeNames: string[];
 };
 
+export type StoreListingApp = {
+  mappingId: string;
+  platform: "android";
+  appId: string | null;
+  appName: string;
+  appIconUrl: string | null;
+  appLink: string | null;
+  packageName: string;
+  storeAccountName: string;
+  storeProfileId: string;
+  credentialRef: string | null;
+  credentialProjectId: string | null;
+  credentialClientEmail: string | null;
+  hasActiveCredential: boolean;
+};
+
+export type StoreListingPageData = {
+  apps: StoreListingApp[];
+};
+
 export type IapAppTransaction = IapAndroidDto | IosIapTransactionSummary;
+
+export type IapRevenueBucket = {
+  label: string;
+  prod: number;
+  sand: number;
+};
+
+export type IapAppMetrics = {
+  activeCount: number;
+  canceledCount: number;
+  latestTimestamp: number;
+  last7Orders: number;
+  last7Revenue: number;
+  previous7Orders: number;
+  previous7Revenue: number;
+  revenueBuckets: IapRevenueBucket[];
+  totalCount: number;
+  totalRevenue: number;
+};
 
 export type IapAppDetailPageData = {
   app: IapAppCard;
@@ -78,7 +119,7 @@ export type IapAppDetailPageData = {
     search: string;
     state: string;
   };
-  metricTransactions: IapAppTransaction[];
+  metrics: IapAppMetrics;
   transactionPagination: PaginationMeta;
   transactionStates: string[];
   transactions: IapAppTransaction[];
@@ -338,4 +379,10 @@ export type NotificationOverviewSummary = {
   appCount: number;
   totalSchedules: number;
   totalTokens: number;
+};
+
+export type NotificationCountStat = {
+  active: number;
+  lastSeenAt: string | null;
+  total: number;
 };

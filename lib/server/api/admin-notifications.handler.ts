@@ -19,7 +19,7 @@ import {
   enqueueNotificationDeviceJob,
   notificationDirectDeviceLimit,
 } from "@/lib/server/services/notifications/notification-batch-queue.service";
-import { getActiveDeviceIdsForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
+import { getActiveDeviceIdsForNotificationTarget, getActiveDeviceTokenIdsForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import { createClient } from "@/lib/supabase/server";
@@ -52,6 +52,7 @@ const LANGUAGES = [
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
 const HCM_OFFSET_MINUTES = 7 * 60;
+const EDGE_DIRECT_DEVICE_TARGET_LIMIT = 1000;
 const SCHEDULE_DEVICE_TARGET_LIMIT = 5000;
 const notificationManageRoles = ["Admin"] as const;
 
@@ -367,16 +368,17 @@ export async function handleAdminNotificationSendPost(request: Request) {
       payload.queueByApp === true ||
       clean(payload.queueMode).toLowerCase() === "app" ||
       clean(payload.queueMode).toLowerCase() === "app_filter";
-    const directDeviceLimit = notificationDirectDeviceLimit();
+    const directDeviceLimit = Math.min(notificationDirectDeviceLimit(), EDGE_DIRECT_DEVICE_TARGET_LIMIT);
 
     if (targetType === "device" && (queueByApp || !deviceIds.length)) {
-      const resolvedDeviceIds = await getActiveDeviceIdsForNotificationTarget(payload, directDeviceLimit + 1);
-      if (!resolvedDeviceIds.length) throw badRequest("No active FCM tokens matched this notification target.");
+      const resolvedTokenIds = await getActiveDeviceTokenIdsForNotificationTarget(payload, directDeviceLimit + 1);
+      if (!resolvedTokenIds.length) throw badRequest("No active FCM tokens matched this notification target.");
 
-      if (resolvedDeviceIds.length <= directDeviceLimit) {
+      if (resolvedTokenIds.length <= directDeviceLimit) {
         const result = await callEdgeFunction("send-notification", {
           ...payload,
-          deviceIds: resolvedDeviceIds,
+          deviceIds: [],
+          deviceTokenIds: resolvedTokenIds,
           queueByApp: false,
           targetType,
         });

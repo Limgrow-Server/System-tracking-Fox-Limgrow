@@ -95,14 +95,6 @@ export function getAndroidReviewReplyGroups(mappingIds: string[]) {
   });
 }
 
-export function getAndroidReviewsForMapping(mappingId: string, take = 300) {
-  return prisma.androidStoreReview.findMany({
-    where: { storeMappingId: mappingId },
-    orderBy: [{ userCommentUpdatedAt: "desc" }, { fetchedAt: "desc" }],
-    take,
-  });
-}
-
 type AndroidReviewPageOptions = {
   rating?: string;
   reply?: string;
