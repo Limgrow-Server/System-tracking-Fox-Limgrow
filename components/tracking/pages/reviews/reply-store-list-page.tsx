@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ChevronRight,
+  Apple,
   ExternalLink,
   Search,
   Smartphone,
@@ -12,15 +12,21 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import {
-  EmptyPanel,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   PageHeader,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
-import { compactNumber } from "@/lib/tracking/format";
+import { compactNumber, dateTime } from "@/lib/tracking/format";
 import { cn } from "@/lib/utils";
 import type {
   PaginationMeta,
@@ -28,6 +34,8 @@ import type {
   ReplyStoreSummary,
 } from "@/lib/tracking/page-data";
 import { showToast } from "@/lib/client/toast";
+
+const REPLY_STORE_SKELETON_COUNT = 10;
 
 function platformBadgeClass(platform: ReplyStoreSummary["platform"]) {
   return platform === "ios"
@@ -39,87 +47,51 @@ function platformLabel(platform: ReplyStoreSummary["platform"]) {
   return platform === "ios" ? "iOS" : "Android";
 }
 
-function StoreCard({
-  isPending,
-  onOpen,
-  store,
-}: {
-  isPending: boolean;
-  onOpen: () => void;
-  store: ReplyStoreSummary;
-}) {
+function PlatformBadge({ platform }: { platform: ReplyStoreSummary["platform"] }) {
+  const Icon = platform === "ios" ? Apple : Smartphone;
+
   return (
-    <Card
-      aria-busy={isPending}
-      className={cn(
-        "relative h-full cursor-pointer gap-0 rounded-lg py-0 transition hover:bg-muted/40",
-        isPending && "pointer-events-none border-primary/50 bg-muted/30",
-      )}
-      onClick={onOpen}
+    <Badge
+      variant="outline"
+      className={cn("gap-1.5", platformBadgeClass(platform))}
     >
-      <CardHeader className="flex items-center justify-between gap-4 p-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <Avatar className="size-12 rounded-xl border">
-            {store.storeAvatarUrl ? (
-              <AvatarImage
-                src={store.storeAvatarUrl}
-                alt={store.storeAccountName}
-                className="rounded-xl"
-              />
-            ) : null}
-            <AvatarFallback className="rounded-xl text-sm font-medium">
-              {store.storeAccountName.slice(0, 2).toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1">
-            <CardTitle className="truncate text-lg">
-              {store.storeAccountName}
-            </CardTitle>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Badge
-                variant="outline"
-                className={cn("gap-1", platformBadgeClass(store.platform))}
-              >
-                <Smartphone size={11} />
-                {platformLabel(store.platform)}
-              </Badge>
-              <span>{compactNumber(store.appCount)} apps</span>
-            </div>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {store.storeLink ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              asChild
-              onClick={(event) => event.stopPropagation()}
-            >
-              <a
-                href={store.storeLink}
-                target="_blank"
-                rel="noreferrer"
-                title={store.storeLink}
-                aria-label={`Open store link for ${store.storeAccountName}`}
-              >
-                <ExternalLink size={15} />
-              </a>
-            </Button>
-          ) : null}
-          <div className="flex size-10 items-center justify-center rounded-xl border bg-background">
-            <ChevronRight size={17} />
-          </div>
-        </div>
-      </CardHeader>
-      {isPending ? (
-        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-[1px]">
-          <div className="flex size-10 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm">
-            <Spinner />
-          </div>
-        </div>
-      ) : null}
-    </Card>
+      <Icon size={14} />
+      {platformLabel(platform)}
+    </Badge>
+  );
+}
+
+function ContactBadges({ store }: { store: ReplyStoreSummary }) {
+  const contacts = [
+    store.contactEmail ? { label: "Email", value: store.contactEmail } : null,
+    store.supportPhone ? { label: "Phone", value: store.supportPhone } : null,
+    store.websiteUrl ? { label: "Web", value: store.websiteUrl } : null,
+  ].filter((item): item is { label: string; value: string } => Boolean(item));
+
+  if (!contacts.length) {
+    return (
+      <Badge
+        variant="outline"
+        className="border-slate-200 bg-slate-50 text-slate-600"
+      >
+        Missing contact
+      </Badge>
+    );
+  }
+
+  return (
+    <div className="flex max-w-[15rem] flex-wrap gap-1.5">
+      {contacts.map((contact) => (
+        <Badge
+          key={contact.label}
+          variant="outline"
+          title={contact.value}
+          className="border-slate-200 bg-slate-50 text-slate-700"
+        >
+          {contact.label}
+        </Badge>
+      ))}
+    </div>
   );
 }
 
@@ -141,6 +113,7 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
     useState<PaginationMeta>(data.storePagination);
   const [search, setSearch] = useState(data.filters.search);
   const [loadingStores, setLoadingStores] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [pendingStoreProfileId, setPendingStoreProfileId] = useState<
     string | null
   >(null);
@@ -154,6 +127,7 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
 
     setLoadingStores(true);
+    setLoadingPage(page);
 
     try {
       const response = await fetch(`/api/reply/stores?${params.toString()}`);
@@ -176,6 +150,7 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
       );
     } finally {
       setLoadingStores(false);
+      setLoadingPage(null);
     }
   }
 
@@ -185,6 +160,8 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
       router.push(`/reply/${store.storeProfileId}`);
     });
   }
+
+  const tableStartIndex = (storePagination.page - 1) * storePagination.pageSize;
 
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
@@ -212,33 +189,169 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
         </div>
       </div>
 
-      {stores.length ? (
-        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-          {stores.map((store) => (
-            <StoreCard
-              key={store.storeProfileId}
-              isPending={pendingStoreProfileId === store.storeProfileId}
-              onOpen={() => openStoreConfig(store)}
-              store={store}
-            />
-          ))}
+      <div className="overflow-hidden rounded-lg border bg-card">
+        <div className="overflow-x-auto">
+          <Table className="min-w-[74rem]">
+            <TableHeader className="bg-muted/40">
+              <TableRow>
+                <TableHead>Store</TableHead>
+                <TableHead>Platform</TableHead>
+                <TableHead>Apps</TableHead>
+                <TableHead>Comments</TableHead>
+                <TableHead>Pending Replies</TableHead>
+                <TableHead>Contact Info</TableHead>
+                <TableHead>Last Fetch</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loadingStores
+                ? Array.from({ length: REPLY_STORE_SKELETON_COUNT }).map(
+                    (_, index) => (
+                      <TableRow key={`reply-store-skeleton-${index}`}>
+                        <TableCell>
+                          <div className="flex animate-pulse items-center gap-3">
+                            <div className="size-10 rounded-lg bg-muted" />
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <div className="h-4 w-48 max-w-full rounded bg-muted" />
+                              <div className="h-3 w-36 max-w-full rounded bg-muted/70" />
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-12 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-12 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-12 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-6 w-40 animate-pulse rounded-full bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                      </TableRow>
+                    ),
+                  )
+                : stores.map((store) => {
+                    const isPending =
+                      pendingStoreProfileId === store.storeProfileId;
+
+                    return (
+                      <TableRow
+                        key={store.storeProfileId}
+                        aria-busy={isPending}
+                        role="link"
+                        tabIndex={0}
+                        className={cn(
+                          "cursor-pointer transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none",
+                          isPending && "pointer-events-none bg-muted/30",
+                        )}
+                        onClick={() => openStoreConfig(store)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            openStoreConfig(store);
+                          }
+                        }}
+                      >
+                        <TableCell>
+                          <div className="flex min-w-[18rem] items-center gap-3">
+                            <Avatar className="size-10 rounded-lg border">
+                              {store.storeAvatarUrl ? (
+                                <AvatarImage
+                                  src={store.storeAvatarUrl}
+                                  alt={store.storeAccountName}
+                                  className="rounded-lg"
+                                />
+                              ) : null}
+                              <AvatarFallback className="rounded-lg text-xs">
+                                {store.storeAccountName.slice(0, 2).toUpperCase()}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span
+                                  className="truncate font-medium text-foreground"
+                                  title={store.storeAccountName}
+                                >
+                                  {store.storeAccountName}
+                                </span>
+                                {isPending ? <Spinner /> : null}
+                                {store.storeLink ? (
+                                  <Button
+                                    asChild
+                                    type="button"
+                                    variant="outline"
+                                    size="icon-sm"
+                                    className="size-7 shrink-0"
+                                  >
+                                    <a
+                                      href={store.storeLink}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      title={store.storeLink}
+                                      aria-label={`Open store link for ${store.storeAccountName}`}
+                                      onClick={(event) => event.stopPropagation()}
+                                    >
+                                      <ExternalLink size={14} />
+                                    </a>
+                                  </Button>
+                                ) : null}
+                              </div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {compactNumber(store.appCount)} apps
+                              </div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <PlatformBadge platform={store.platform} />
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {compactNumber(store.appCount)}
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {compactNumber(store.reviewCount)}
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {compactNumber(store.pendingReplyCount)}
+                        </TableCell>
+                        <TableCell>
+                          <ContactBadges store={store} />
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {dateTime(store.lastFetchedAt)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+              {!loadingStores && stores.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={7}
+                    className="py-12 text-center text-muted-foreground"
+                  >
+                    No stores found.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
         </div>
-      ) : (
-        <EmptyPanel
-          icon={Search}
-          title={loadingStores ? "Loading stores" : "No stores found"}
-          description={
-            loadingStores
-              ? "The current page is being loaded."
-              : "No store matches the current search."
-          }
-          className="rounded-lg border"
-        />
-      )}
+      </div>
       <TablePaginationFooter
+        from={tableStartIndex + 1}
+        loadingPage={loadingPage}
         onPageChange={(page) => void loadStoresPage(page)}
         page={storePagination.page}
         shown={stores.length}
+        to={tableStartIndex + stores.length}
         total={storePagination.total}
         totalPages={storePagination.totalPages}
       />

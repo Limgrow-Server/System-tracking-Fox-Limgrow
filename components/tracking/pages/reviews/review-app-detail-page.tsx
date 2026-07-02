@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Calendar as CalendarIcon,
@@ -38,6 +37,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
+import { announceBackgroundJob } from "@/lib/client/background-jobs";
 import {
   Select,
   SelectContent,
@@ -822,7 +822,6 @@ type ReviewCommentsResponse = {
   error?: string;
   fetchRuns?: ReviewFetchRunDto[];
   fetchSchedule?: ReviewFetchScheduleDto | null;
-  isMockData?: boolean;
   page?: number;
   pageSize?: number;
   replyTemplates?: ReviewReplyTemplatePreviewDto[];
@@ -835,7 +834,6 @@ type ReviewCommentsResponse = {
 };
 
 export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData }) {
-  const router = useRouter();
   const [fetchingReviews, setFetchingReviews] = useState(false);
   const [fetchFromDate, setFetchFromDate] = useState(defaultFetchFromDate);
   const [fetchToDate, setFetchToDate] = useState(defaultFetchToDate);
@@ -847,7 +845,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
   const [fetchRuns, setFetchRuns] = useState(data.fetchRuns);
   const [fetchSchedule, setFetchSchedule] = useState(data.fetchSchedule);
   const [replyTemplates, setReplyTemplates] = useState(data.replyTemplates);
-  const [isMockData, setIsMockData] = useState(Boolean(data.isMockData));
   const [search, setSearch] = useState(data.reviewFilters.search);
   const [ratingFilter, setRatingFilter] = useState(data.reviewFilters.rating);
   const [replyFilter, setReplyFilter] = useState(data.reviewFilters.reply);
@@ -861,7 +858,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     ...data,
     fetchRuns,
     fetchSchedule,
-    isMockData,
     replyTemplates,
     reviews,
     stats,
@@ -888,7 +884,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
     if (nextRating !== "all") params.set("rating", nextRating);
     if (nextReply !== "all") params.set("reply", nextReply);
-    if (isMockData) params.set("mock", "1");
 
     setLoadingComments(true);
 
@@ -914,7 +909,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         setFetchSchedule(payload.fetchSchedule);
       }
       if (payload.replyTemplates) setReplyTemplates(payload.replyTemplates);
-      if (payload.isMockData !== undefined) setIsMockData(payload.isMockData);
     } catch (error) {
       void showToast("error",
         error instanceof Error ? error.message : "Comments could not be loaded.",
@@ -974,10 +968,13 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         throw new Error(payload.error ?? "Reviews could not be fetched.");
       }
 
+      announceBackgroundJob(payload.backgroundJob);
+
       if (payload.result.status === "queued") {
         void showToast("success",
           `Queued ${payload.result.enqueued ?? 0} comment fetch job(s).`,
         );
+        return;
       } else {
         const moreText = payload.result.hasMore ? " More pages are available." : "";
         void showToast("success",
@@ -985,7 +982,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         );
         await loadReviewPage(1);
       }
-      router.refresh();
     } catch (error) {
       void showToast("error", fetchReviewErrorToast(error));
     } finally {
@@ -1049,14 +1045,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         description={data.app.identifier}
         action={
           <div className="flex flex-wrap items-center gap-2">
-            {isMockData ? (
-              <Badge
-                variant="outline"
-                className="border-amber-200 bg-amber-50 text-amber-700"
-              >
-                Mock data
-              </Badge>
-            ) : null}
             <Badge
               variant="outline"
               className={cn("gap-1", storeBadgeClass(data.app.platform))}

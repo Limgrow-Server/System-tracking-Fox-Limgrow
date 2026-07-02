@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Activity, Bell, ChevronRight, Clock3, Languages, Send, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { announceBackgroundJob } from "@/lib/client/background-jobs";
 import { showToast } from "@/lib/client/toast";
 
 import { PageHeader, StatusBadge } from "@/components/tracking/primitives";
@@ -302,6 +303,7 @@ export function NotificationSendPage({
           });
           const payload = (await response.json()) as SendResponse;
           if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Send notification failed.");
+          announceBackgroundJob(payload.result?.backgroundJob);
 
           const queued = payload.result?.queued === true;
           const results = payload.result?.results ?? [];

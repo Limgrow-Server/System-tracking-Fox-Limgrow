@@ -21,8 +21,10 @@ import {
   enqueueManualAndroidReviewFetchRuns,
   finishAndroidReviewFetchRun,
   finishAndroidReviewSyncState,
-  getActiveAndroidReviewMappings,
+  getActiveAndroidReviewMappingSummaries,
   getActiveAndroidCredentialForStoreProfile,
+  getAndroidReviewMappingSummariesByIds,
+  getAndroidReviewMappingSummaryById,
   getAndroidReviewFingerprints,
   getAndroidReviewMappingById,
   getAndroidReviewSyncState,
@@ -770,9 +772,9 @@ export async function enqueueAndroidReviewFullScanRuns(input: {
   storeMappingIds?: string[];
 }) {
   const requestedIds = new Set(input.storeMappingIds ?? []);
-  const mappings = (await getActiveAndroidReviewMappings()).filter(
-    (mapping) => !requestedIds.size || requestedIds.has(mapping.id),
-  );
+  const mappings = requestedIds.size
+    ? await getAndroidReviewMappingSummariesByIds(Array.from(requestedIds))
+    : await getActiveAndroidReviewMappingSummaries();
   if (!mappings.length) {
     throw notFound("No active Android apps were found for full scan.");
   }
@@ -807,6 +809,11 @@ export async function enqueueAndroidReviewFetchRuns(input: {
   storeMappingId: string;
   toDate?: string;
 }) {
+  const mapping = await getAndroidReviewMappingSummaryById(input.storeMappingId);
+  if (!mapping || mapping.status !== "ACTIVE") {
+    throw notFound("No active Android app was found for comment fetch.");
+  }
+
   const scheduledFor = new Date();
   const result = await enqueueManualAndroidReviewFetchRuns([
     {

@@ -16,6 +16,7 @@ export type BackgroundJob = {
   platform: string | null;
   progress_current: number;
   progress_total: number | null;
+  result_url: string | null;
   source_job_id: string | null;
   source_run_ids: string[];
   started_at: string | null;

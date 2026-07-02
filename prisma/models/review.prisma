@@ -145,11 +145,13 @@ model ReviewFetchRun {
   sourceSchedule      ReviewFetchSchedule?   @relation(fields: [sourceScheduleId], references: [id], onDelete: SetNull)
 
   @@unique([reviewAppTargetId, triggerType, scheduledFor], map: "review_fetch_runs_app_trigger_scheduled_key")
+  @@index([reviewAppTargetId, platform, scanMode, status], map: "review_fetch_runs_app_platform_scan_status_idx")
   @@index([status, nextAttemptAt], map: "review_fetch_runs_status_next_attempt_idx")
   @@index([status, lockedAt], map: "review_fetch_runs_status_locked_idx")
   @@index([reviewAppTargetId, createdAt], map: "review_fetch_runs_app_created_idx")
   @@index([sourceScheduleId, scheduledFor], map: "review_fetch_runs_schedule_for_idx")
   @@index([platform, status, createdAt], map: "review_fetch_runs_platform_status_created_idx")
+  @@index([platform, status, nextAttemptAt, createdAt], map: "review_fetch_runs_platform_status_next_created_idx")
   @@index([createdAt], map: "review_fetch_runs_created_idx")
   @@map("review_fetch_runs")
 }

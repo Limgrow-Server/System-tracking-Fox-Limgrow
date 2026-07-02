@@ -409,24 +409,33 @@ function TemplateEditor({
         </div>
       ) : null}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-2">
-        <span className="text-xs font-medium text-muted-foreground">
-          Variables
-        </span>
-        {REVIEW_REPLY_TEMPLATE_TOKENS.map((item) => (
-          <Button
-            key={item.token}
-            type="button"
-            variant="outline"
-            size="sm"
-            title={`${item.description}: ${item.token}`}
-            className="h-7 rounded-full bg-background px-3 text-xs"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => insertVariable(item.token)}
-          >
-            {item.label}
-          </Button>
-        ))}
+      <div className="mt-3 rounded-lg border bg-muted/20 p-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="shrink-0 sm:w-44">
+            <div className="text-xs font-medium text-muted-foreground">
+              Variables
+            </div>
+            <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+              Type @ in the template to search variables.
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {REVIEW_REPLY_TEMPLATE_TOKENS.map((item) => (
+              <Button
+                key={item.token}
+                type="button"
+                variant="outline"
+                size="sm"
+                title={`${item.description}: ${item.token}`}
+                className="h-7 rounded-full bg-background px-3 text-xs"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => insertVariable(item.token)}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="mt-3 rounded-lg border bg-card p-3">

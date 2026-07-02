@@ -1,13 +1,21 @@
 import "server-only";
 
+import type { Prisma } from "@prisma/client";
+
 import { canAccessScopedRecord, hasAllAppAccess } from "@/lib/auth/app-scope";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import { createBackgroundJob } from "@/lib/server/services/background-jobs/background-job.service";
-import { getActiveAndroidReviewMappings } from "@/lib/server/repositories/reviews/android-review.repository";
-import { getActiveIosReviewMappings } from "@/lib/server/repositories/reviews/ios-review.repository";
+import {
+  getActiveAndroidReviewMappingSummaries,
+  getAndroidReviewMappingSummaryById,
+} from "@/lib/server/repositories/reviews/android-review.repository";
+import {
+  getActiveIosReviewMappingSummaries,
+  getIosReviewMappingSummaryById,
+} from "@/lib/server/repositories/reviews/ios-review.repository";
 import {
   enqueueAndroidReviewFetchRuns,
   enqueueAndroidReviewFullScanRuns,
@@ -62,6 +70,27 @@ function reviewBackgroundTitle(input: {
     : "Fetch comments · Android app";
 }
 
+type ReviewMappingMetadata = {
+  appName?: string | null;
+  storeAccountName?: string | null;
+  storeProfile?: {
+    storeAccountName?: string | null;
+  } | null;
+};
+
+function reviewMappingStoreName(mapping: ReviewMappingMetadata | null | undefined) {
+  return mapping?.storeAccountName ?? mapping?.storeProfile?.storeAccountName ?? null;
+}
+
+async function getReviewMappingMetadata(
+  platform: "android" | "ios",
+  storeMappingId: string,
+) {
+  return platform === "ios"
+    ? getIosReviewMappingSummaryById(storeMappingId)
+    : getAndroidReviewMappingSummaryById(storeMappingId);
+}
+
 async function createReviewBackgroundJob(input: {
   appName?: string | null;
   createdBy: string;
@@ -69,21 +98,33 @@ async function createReviewBackgroundJob(input: {
   platform: "android" | "ios" | "mixed";
   result: ReviewQueueResult;
   scope?: string;
+  storeMappingId?: string | null;
   storeAccountName?: string | null;
 }) {
   const runIds = input.result.runIds ?? [];
   if (!runIds.length) return null;
+
+  const metadata: Record<string, number | string> = {
+    requested: input.result.requested,
+    scanMode: input.result.scanMode,
+    skipped: input.result.skipped,
+  };
+
+  if (input.scope) {
+    metadata.scope = input.scope;
+  }
+
+  if (input.storeMappingId) {
+    metadata.mappingId = input.storeMappingId;
+    metadata.storeMappingId = input.storeMappingId;
+  }
 
   return createBackgroundJob({
     appName: input.appName ?? null,
     createdBy: input.createdBy,
     description: `${input.result.enqueued} comment fetch run(s) queued. ${input.result.skipped} already running or queued.`,
     memberId: input.memberId,
-    metadata: {
-      requested: input.result.requested,
-      scanMode: input.result.scanMode,
-      skipped: input.result.skipped,
-    },
+    metadata: metadata as Prisma.InputJsonObject,
     platform: input.platform,
     progressTotal: runIds.length,
     sourceRunIds: runIds,
@@ -115,8 +156,8 @@ export async function handleReviewFetchRunsPost(request: Request) {
     if (isFullScan(payload)) {
       if (isAllAppsScope(payload)) {
         const [androidMappings, iosMappings] = await Promise.all([
-          getActiveAndroidReviewMappings(),
-          getActiveIosReviewMappings(),
+          getActiveAndroidReviewMappingSummaries(),
+          getActiveIosReviewMappingSummaries(),
         ]);
         const scopedAndroidMappings = hasAllAppAccess(session)
           ? androidMappings
@@ -196,11 +237,7 @@ export async function handleReviewFetchRunsPost(request: Request) {
       ) {
         throw forbidden("This review app is outside your assigned app scope.");
       }
-      const mappings =
-        platform === "ios"
-          ? await getActiveIosReviewMappings()
-          : await getActiveAndroidReviewMappings();
-      const mapping = mappings.find((item) => item.id === storeMappingId);
+      const mapping = await getReviewMappingMetadata(platform, storeMappingId);
       const result =
         platform === "ios"
           ? await enqueueIosReviewFullScanRuns({
@@ -215,7 +252,8 @@ export async function handleReviewFetchRunsPost(request: Request) {
         memberId: session.memberId,
         platform,
         result,
-        storeAccountName: mapping?.storeAccountName,
+        storeAccountName: reviewMappingStoreName(mapping),
+        storeMappingId,
       });
 
       return okJson({
@@ -232,11 +270,7 @@ export async function handleReviewFetchRunsPost(request: Request) {
       throw forbidden("This review app is outside your assigned app scope.");
     }
     const storeMappingId = clean(payload.storeMappingId);
-    const mappings =
-      platform === "ios"
-        ? await getActiveIosReviewMappings()
-        : await getActiveAndroidReviewMappings();
-    const mapping = mappings.find((item) => item.id === storeMappingId);
+    const mapping = await getReviewMappingMetadata(platform, storeMappingId);
     const result =
       platform === "ios"
         ? await enqueueIosReviewFetchRuns({
@@ -263,7 +297,8 @@ export async function handleReviewFetchRunsPost(request: Request) {
       memberId: session.memberId,
       platform,
       result,
-      storeAccountName: mapping?.storeAccountName,
+      storeAccountName: reviewMappingStoreName(mapping),
+      storeMappingId,
     });
 
     return okJson({

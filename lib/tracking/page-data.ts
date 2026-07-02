@@ -373,7 +373,6 @@ export type ReviewAppDetailPageData = {
   syncState: ReviewSyncStateDto | null;
   fetchRuns: ReviewFetchRunDto[];
   fetchSchedule: ReviewFetchScheduleDto | null;
-  isMockData?: boolean;
 };
 
 export type ReviewReplyTemplateDto = {

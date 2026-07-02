@@ -57,7 +57,6 @@ export async function handleReviewCommentsGet(request: Request) {
     if (!mappingId) throw badRequest("Comment app mapping id is required.");
 
     const data = await getReviewAppDetailPageData(mappingId, session, {
-      includeMockData: ["1", "true"].includes(clean(url.searchParams.get("mock")).toLowerCase()),
       rating: clean(url.searchParams.get("rating")) || "all",
       reply: clean(url.searchParams.get("reply")) || "all",
       reviewPagination: reviewPagination(url, 10),
@@ -73,7 +72,6 @@ export async function handleReviewCommentsGet(request: Request) {
       {
         fetchRuns: data.fetchRuns,
         fetchSchedule: data.fetchSchedule,
-        isMockData: data.isMockData,
         replyTemplates: data.replyTemplates,
         reviewFilters: data.reviewFilters,
         stats: data.stats,
