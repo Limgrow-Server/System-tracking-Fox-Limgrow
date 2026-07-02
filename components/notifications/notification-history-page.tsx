@@ -33,6 +33,7 @@ import {
   jobSuccessRate,
   localePayloadForRows,
   localeRowsFromPayload,
+  notificationJobCompletionPercent,
   notificationJobBadgeStatus,
   notificationImpressionEventCount,
   notificationOpenEventCount,
@@ -668,6 +669,8 @@ export function NotificationHistoryPage({
                     const impressions = notificationUniqueImpressionCount(jobEvents);
                     const impressionEvents = notificationImpressionEventCount(jobEvents);
                     const isPending = pendingHistoryJobId === job.id;
+                    const badgeStatus = notificationJobBadgeStatus(job);
+                    const completionPercent = notificationJobCompletionPercent(job);
 
                     return (
                       <TableRow
@@ -717,7 +720,12 @@ export function NotificationHistoryPage({
                           <div className="text-xs text-muted-foreground">{rateLabel(jobSuccessRate(job))} success</div>
                         </TableCell>
                         <TableCell>
-                          <StatusBadge status={notificationJobBadgeStatus(job)} />
+                          <StatusBadge status={badgeStatus} />
+                          {badgeStatus === "processing" ? (
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {completionPercent}% complete
+                            </div>
+                          ) : null}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{dateTime(job.sent_at ?? job.created_at)}</TableCell>
                         <TableCell>
@@ -770,6 +778,11 @@ export function NotificationHistoryPage({
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="font-heading text-lg font-semibold">{historyDetailJob.app_name}</h2>
                       <StatusBadge status={notificationJobBadgeStatus(historyDetailJob)} />
+                      {notificationJobBadgeStatus(historyDetailJob) === "processing" ? (
+                        <span className="text-xs text-muted-foreground">
+                          {notificationJobCompletionPercent(historyDetailJob)}% complete
+                        </span>
+                      ) : null}
                       <PlatformBadge platform={historyDetailJob.platform} />
                     </div>
                     <div className="mt-1 truncate text-sm text-muted-foreground">

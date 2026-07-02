@@ -134,6 +134,10 @@ export type NotificationJob = {
   project_id: string | null;
   target_type: string;
   target_values: string[];
+  batch_done_count?: number;
+  batch_processed_target_count?: number;
+  batch_target_count?: number;
+  batch_total_count?: number;
   title: string | null;
   message: string | null;
   image_url: string | null;

@@ -606,6 +606,11 @@ export function rateLabel(value: number) {
   return `${Math.round(value)}%`;
 }
 
+function percentValue(value: number, total: number) {
+  if (!total) return 0;
+  return Math.min(100, Math.round((value / total) * 100));
+}
+
 function dayKey(date: Date) {
   return [
     date.getFullYear(),
@@ -624,12 +629,26 @@ function dayLabel(date: Date) {
 export function jobRequestedCount(job: NotificationJob) {
   const counted = Math.max(0, job.sent_count) + Math.max(0, job.error_count);
   const targetCount = job.target_type === "device" ? job.target_values.length : 0;
-  return Math.max(counted, targetCount);
+  const batchTargetCount = Math.max(0, job.batch_target_count ?? 0);
+  return Math.max(counted, targetCount, batchTargetCount);
 }
 
 export function jobFailedCount(job: NotificationJob) {
   const requested = jobRequestedCount(job);
-  return Math.min(requested, Math.max(Math.max(0, job.error_count), requested - Math.max(0, job.sent_count)));
+  const explicitErrors = Math.max(0, job.error_count);
+  const batchTotal = Math.max(0, job.batch_total_count ?? 0);
+  const batchDone = Math.max(0, job.batch_done_count ?? 0);
+  if (
+    (batchTotal > 0 && batchDone < batchTotal) ||
+    ["queued", "retrying", "processing", "materializing"].includes(job.status)
+  ) {
+    return Math.min(requested, explicitErrors);
+  }
+
+  return Math.min(
+    requested,
+    Math.max(explicitErrors, requested - Math.max(0, job.sent_count)),
+  );
 }
 
 export function jobSuccessRate(job: NotificationJob) {
@@ -638,12 +657,28 @@ export function jobSuccessRate(job: NotificationJob) {
 }
 
 export function notificationJobBadgeStatus(job: NotificationJob) {
+  const batchTotal = Math.max(0, job.batch_total_count ?? 0);
+  const batchDone = Math.max(0, job.batch_done_count ?? 0);
+  if (batchTotal > 0 && batchDone < batchTotal) return "processing";
+
   if (["queued", "retrying", "processing", "materializing"].includes(job.status)) {
     return "processing";
   }
 
   if (Math.max(0, job.sent_count) > 0 && Math.max(0, job.error_count) > 0) return "sent_with_issues";
   return job.status;
+}
+
+export function notificationJobCompletionPercent(job: NotificationJob) {
+  const batchTotal = Math.max(0, job.batch_total_count ?? 0);
+  const batchDone = Math.max(0, job.batch_done_count ?? 0);
+  if (batchTotal > 0) return percentValue(batchDone, batchTotal);
+
+  const requested = jobRequestedCount(job);
+  if (!requested) return 0;
+
+  const completed = Math.max(0, job.sent_count) + Math.max(0, job.error_count);
+  return percentValue(Math.min(completed, requested), requested);
 }
 
 export function valuesMatchSearch(values: Array<string | null | undefined>, search: string) {
