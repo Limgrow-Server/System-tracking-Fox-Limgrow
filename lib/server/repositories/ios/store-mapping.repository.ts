@@ -39,6 +39,7 @@ export function getIosStoreMappings(options?: { take?: number }) {
 }
 
 type IosStoreMappingPageOptions = {
+  includeTotal?: boolean;
   search?: string;
   skip: number;
   storeProfileId?: string;
@@ -72,21 +73,26 @@ function iosStoreMappingWhere(options: IosStoreMappingPageOptions): Prisma.IosSt
 
 export function getIosStoreMappingsPage(options: IosStoreMappingPageOptions) {
   const where = iosStoreMappingWhere(options);
-
-  return prisma.$transaction([
-    prisma.iosStoreMapping.findMany({
-      where,
-      include: {
-        storeProfile: {
-          select: {
-            storeAccountName: true,
-          },
+  const rows = prisma.iosStoreMapping.findMany({
+    where,
+    include: {
+      storeProfile: {
+        select: {
+          storeAccountName: true,
         },
       },
-      orderBy: { updatedAt: "desc" },
-      skip: options.skip,
-      take: options.take,
-    }),
+    },
+    orderBy: { updatedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
+
+  if (options.includeTotal === false) {
+    return rows.then((mappings) => [mappings, null] as const);
+  }
+
+  return prisma.$transaction([
+    rows,
     prisma.iosStoreMapping.count({ where }),
   ]);
 }

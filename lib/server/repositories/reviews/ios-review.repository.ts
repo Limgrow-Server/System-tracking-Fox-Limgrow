@@ -162,6 +162,11 @@ const iosReviewMappingSummarySelect = {
   status: true,
   storeAccountName: true,
   storeProfileId: true,
+  storeProfile: {
+    select: {
+      storeAccountName: true,
+    },
+  },
 } satisfies Prisma.IosStoreMappingSelect;
 
 export function getActiveIosReviewMappingSummaries() {
@@ -196,6 +201,28 @@ export function getIosReviewMappingSummaryById(mappingId: string) {
 export function getIosReviewMappingById(mappingId: string) {
   return prisma.iosStoreMapping.findUnique({
     where: { id: mappingId },
+    include: {
+      reviewTarget: {
+        include: {
+          storeTarget: true,
+          syncState: true,
+          _count: { select: { iosReviews: true } },
+        },
+      },
+      storeProfile: true,
+    },
+  });
+}
+
+export function getIosReviewMappingsByIds(mappingIds: string[]) {
+  const uniqueMappingIds = Array.from(new Set(mappingIds));
+  if (!uniqueMappingIds.length) return Promise.resolve([]);
+
+  return prisma.iosStoreMapping.findMany({
+    where: {
+      id: { in: uniqueMappingIds },
+      status: "ACTIVE",
+    },
     include: {
       reviewTarget: {
         include: {
@@ -321,6 +348,7 @@ export async function getIosReviewsForMappingPage(
       orderBy: [{ reviewUpdatedAt: "desc" }, { reviewCreatedAt: "desc" }, { fetchedAt: "desc" }],
       skip: options.skip,
       take: options.take,
+      omit: { rawReview: true },
     }),
     prisma.iosStoreReview.count({ where }),
   ]);
@@ -333,6 +361,15 @@ export async function getLatestIosReviewForMapping(mappingId: string) {
     where: { reviewAppTargetId },
     orderBy: [{ reviewUpdatedAt: "desc" }, { reviewCreatedAt: "desc" }, { fetchedAt: "desc" }],
   });
+}
+
+export async function getRawIosReview(mappingId: string, reviewId: string) {
+  const reviewAppTargetId = await iosReviewAppTargetId(mappingId);
+  const review = await prisma.iosStoreReview.findFirst({
+    where: { reviewAppTargetId, reviewId },
+    select: { rawReview: true },
+  });
+  return review?.rawReview ?? null;
 }
 
 export function getIosReviewFetchRuns(mappingId: string, take = 10) {

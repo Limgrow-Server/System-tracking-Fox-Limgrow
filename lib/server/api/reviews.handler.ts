@@ -55,8 +55,10 @@ export async function handleReviewCommentsGet(request: Request) {
     const url = new URL(request.url);
     const mappingId = clean(url.searchParams.get("mappingId"));
     if (!mappingId) throw badRequest("Comment app mapping id is required.");
+    const context = url.searchParams.get("context") !== "false";
 
     const data = await getReviewAppDetailPageData(mappingId, session, {
+      context,
       rating: clean(url.searchParams.get("rating")) || "all",
       reply: clean(url.searchParams.get("reply")) || "all",
       reviewPagination: reviewPagination(url, 10),
@@ -69,17 +71,44 @@ export async function handleReviewCommentsGet(request: Request) {
         data: data.reviews,
         ...data.reviewPagination,
       },
-      {
-        fetchRuns: data.fetchRuns,
-        fetchSchedule: data.fetchSchedule,
-        replyTemplates: data.replyTemplates,
-        reviewFilters: data.reviewFilters,
-        stats: data.stats,
-        syncState: data.syncState,
-      },
+      context
+        ? {
+            fetchRuns: data.fetchRuns,
+            fetchSchedule: data.fetchSchedule,
+            replyTemplates: data.replyTemplates,
+            reviewFilters: data.reviewFilters,
+            stats: data.stats,
+            syncState: data.syncState,
+          }
+        : {
+            reviewFilters: data.reviewFilters,
+          },
     );
   } catch (error) {
     return errorJson(error, "List comments failed.");
+  }
+}
+
+export async function handleReviewRawGet(request: Request) {
+  try {
+    await requireConsoleApiSession([...reviewRoles]);
+    const url = new URL(request.url);
+    const mappingId = clean(url.searchParams.get("mappingId"));
+    const reviewId = clean(url.searchParams.get("reviewId"));
+
+    if (!mappingId || !reviewId) {
+      throw badRequest("Comment mapping id and review id are required.");
+    }
+
+    // Dynamic import to avoid circular dependencies if any
+    const { getRawReview } = await import("@/lib/server/services/reviews/review.service");
+    const rawReview = await getRawReview(mappingId, reviewId);
+
+    if (!rawReview) throw notFound("Raw review not found.");
+
+    return Response.json({ success: true, rawReview });
+  } catch (error) {
+    return errorJson(error, "Get raw review failed.");
   }
 }
 

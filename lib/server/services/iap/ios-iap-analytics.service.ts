@@ -64,9 +64,10 @@ function isPaidContinuation(transaction: IosIapTransaction, trial: IosIapTransac
   if (transaction.transactionId === trial.transactionId) return false;
   if (isTrialTransaction(transaction)) return false;
   if (paidAmount(transaction) <= BigInt(0)) return false;
-  if (!trial.purchaseDate || !transaction.purchaseDate) return true;
+  const continuationStart = trial.expiresDate ?? trial.purchaseDate;
+  if (!continuationStart || !transaction.purchaseDate) return true;
 
-  return transaction.purchaseDate.getTime() >= trial.purchaseDate.getTime();
+  return transaction.purchaseDate.getTime() >= continuationStart.getTime();
 }
 
 function chainKey(transaction: IosIapTransaction) {

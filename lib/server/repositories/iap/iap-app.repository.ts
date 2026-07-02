@@ -131,6 +131,7 @@ export async function getIosMappingById(id: string) {
 }
 
 type AndroidTransactionPageOptions = {
+  includeTotal?: boolean;
   kind?: string;
   page: number;
   pageSize: number;
@@ -212,8 +213,13 @@ async function getIapMetrics(
         from ${sourceSql}
         ${whereSql}
       ),
+      production as (
+        select *
+        from filtered
+        where not is_test
+      ),
       anchor as (
-        select max(purchase_date) as latest from filtered
+        select max(purchase_date) as latest from production
       )
       select
         count(*)::int as "totalCount",
@@ -221,31 +227,27 @@ async function getIapMetrics(
         count(*) filter (where lower(state) in ('canceled', 'expired'))::int as "canceledCount",
         coalesce(extract(epoch from (select latest from anchor)) * 1000, 0)::float8 as "latestTimestamp",
         coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
-          where not is_test and coalesce(revenue_micros, 0) > 0
+          where coalesce(revenue_micros, 0) > 0
         ), 0)::float8 as "totalRevenue",
         coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
-          where not is_test
-            and coalesce(revenue_micros, 0) > 0
+          where coalesce(revenue_micros, 0) > 0
             and purchase_date >= (select latest from anchor) - interval '7 days'
         ), 0)::float8 as "last7Revenue",
         coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
-          where not is_test
-            and coalesce(revenue_micros, 0) > 0
+          where coalesce(revenue_micros, 0) > 0
             and purchase_date >= (select latest from anchor) - interval '14 days'
             and purchase_date < (select latest from anchor) - interval '7 days'
         ), 0)::float8 as "previous7Revenue",
         count(*) filter (
-          where not is_test
-            and coalesce(revenue_micros, 0) > 0
+          where coalesce(revenue_micros, 0) > 0
             and purchase_date >= (select latest from anchor) - interval '7 days'
         )::int as "last7Orders",
         count(*) filter (
-          where not is_test
-            and coalesce(revenue_micros, 0) > 0
+          where coalesce(revenue_micros, 0) > 0
             and purchase_date >= (select latest from anchor) - interval '14 days'
             and purchase_date < (select latest from anchor) - interval '7 days'
         )::int as "previous7Orders"
-      from filtered
+      from production
     `),
     prisma.$queryRaw<IapRevenueBucketRow[]>(Prisma.sql`
       with filtered as (
@@ -256,9 +258,14 @@ async function getIapMetrics(
         from ${sourceSql}
         ${whereSql}
       ),
+      production as (
+        select *
+        from filtered
+        where not is_test
+      ),
       anchor as (
         select date_trunc('month', coalesce(max(purchase_date), '2026-06-01'::timestamptz)) as chart_end
-        from filtered
+        from production
       ),
       months as (
         select generate_series(
@@ -269,15 +276,13 @@ async function getIapMetrics(
       )
       select
         to_char(months.month_start, 'Mon') as label,
-        coalesce(sum((filtered.revenue_micros::numeric / 1000000.0)) filter (
-          where not filtered.is_test and coalesce(filtered.revenue_micros, 0) > 0
+        coalesce(sum((production.revenue_micros::numeric / 1000000.0)) filter (
+          where coalesce(production.revenue_micros, 0) > 0
         ), 0)::float8 as prod,
-        coalesce(sum((filtered.revenue_micros::numeric / 1000000.0)) filter (
-          where filtered.is_test and coalesce(filtered.revenue_micros, 0) > 0
-        ), 0)::float8 as sand
+        0::float8 as sand
       from months
-      left join filtered
-        on date_trunc('month', filtered.purchase_date) = months.month_start
+      left join production
+        on date_trunc('month', production.purchase_date) = months.month_start
       group by months.month_start
       order by months.month_start
     `),
@@ -291,7 +296,11 @@ function androidTransactionWhere(
   storeProfileId: string,
   options?: Partial<AndroidTransactionPageOptions>,
 ): Prisma.IapAndroidWhereInput {
-  const where: Prisma.IapAndroidWhereInput = { packageName, storeProfileId };
+  const where: Prisma.IapAndroidWhereInput = {
+    packageName,
+    storeProfileId,
+    isTestPurchase: false,
+  };
   const state = options?.state?.trim();
   const kind = options?.kind?.trim();
 
@@ -312,19 +321,26 @@ export async function getAndroidTransactionsByPackageAndProfilePage(
   options: AndroidTransactionPageOptions,
 ) {
   const where = androidTransactionWhere(packageName, storeProfileId, options);
+  const rowsPromise = prisma.iapAndroid.findMany({
+    where,
+    orderBy: { verifiedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+    include: {
+      storeProfile: true,
+    },
+  });
 
-  return prisma.$transaction([
-    prisma.iapAndroid.findMany({
-      where,
-      orderBy: { verifiedAt: "desc" },
-      skip: options.skip,
-      take: options.take,
-      include: {
-        storeProfile: true,
-      },
-    }),
+  if (options.includeTotal === false) {
+    return [await rowsPromise, null] as const;
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    rowsPromise,
     prisma.iapAndroid.count({ where }),
   ]);
+
+  return [rows, total] as const;
 }
 
 export function getAndroidTransactionsByPackageAndProfileMetrics(
@@ -335,6 +351,7 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
   const conditions = [
     Prisma.sql`package_name = ${packageName}`,
     Prisma.sql`store_profile_id = ${storeProfileId}::uuid`,
+    Prisma.sql`not is_test_purchase`,
   ];
   const state = options.state?.trim();
   const kind = options.kind?.trim();
@@ -367,6 +384,7 @@ export async function getAndroidTransactionStatesByPackageAndProfile(
 }
 
 type IosTransactionPageOptions = {
+  includeTotal?: boolean;
   page: number;
   pageSize: number;
   skip: number;
@@ -396,29 +414,30 @@ function iosTransactionWhere(
 ): Prisma.IosIapTransactionWhereInput {
   const where: Prisma.IosIapTransactionWhereInput = {
     bundleId,
-    ...(storeProfileId
-      ? { OR: [{ storeProfileId }, { storeProfileId: null }] }
-      : {}),
+    environment: { equals: "production", mode: "insensitive" },
   };
   const state = options?.state?.trim();
   const trial = options?.trial?.trim();
+  const andConditions: Prisma.IosIapTransactionWhereInput[] = [];
+
+  if (storeProfileId) {
+    andConditions.push({ OR: [{ storeProfileId }, { storeProfileId: null }] });
+  }
 
   if (state && state !== "all") {
     where.state = { equals: state, mode: "insensitive" };
   }
 
   if (trial === "trial") {
-    where.AND = [
-      ...(where.AND instanceof Array ? where.AND : []),
-      iosFreeTrialWhere(),
-    ];
+    andConditions.push(iosFreeTrialWhere());
   }
 
   if (trial === "non_trial") {
-    where.AND = [
-      ...(where.AND instanceof Array ? where.AND : []),
-      { NOT: iosFreeTrialWhere() },
-    ];
+    andConditions.push({ NOT: iosFreeTrialWhere() });
+  }
+
+  if (andConditions.length) {
+    where.AND = andConditions;
   }
 
   return where;
@@ -430,16 +449,23 @@ export async function getIosTransactionsByBundleIdPage(
   options: IosTransactionPageOptions,
 ) {
   const where = iosTransactionWhere(bundleId, storeProfileId, options);
+  const rowsPromise = prisma.iosIapTransaction.findMany({
+    where,
+    orderBy: { verifiedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
 
-  return prisma.$transaction([
-    prisma.iosIapTransaction.findMany({
-      where,
-      orderBy: { verifiedAt: "desc" },
-      skip: options.skip,
-      take: options.take,
-    }),
+  if (options.includeTotal === false) {
+    return [await rowsPromise, null] as const;
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    rowsPromise,
     prisma.iosIapTransaction.count({ where }),
   ]);
+
+  return [rows, total] as const;
 }
 
 export function getIosTransactionsByBundleIdMetrics(
@@ -447,7 +473,10 @@ export function getIosTransactionsByBundleIdMetrics(
   storeProfileId: string | undefined,
   options: Partial<IosTransactionPageOptions>,
 ) {
-  const conditions = [Prisma.sql`bundle_id = ${bundleId}`];
+  const conditions = [
+    Prisma.sql`bundle_id = ${bundleId}`,
+    Prisma.sql`lower(environment) = 'production'`,
+  ];
   const state = options.state?.trim();
   const trial = options.trial?.trim();
 
@@ -511,6 +540,7 @@ export function getIosIapNotificationEventsByBundleId(
   return prisma.iosIapNotificationEvent.findMany({
     where: {
       bundleId,
+      environment: { equals: "production", mode: "insensitive" },
       ...(storeProfileId ? { storeProfileId } : {}),
     },
     orderBy: { receivedAt: "desc" },
@@ -524,6 +554,7 @@ export async function getIosIapNotificationEventSummaryByBundleId(
 ) {
   const where: Prisma.IosIapNotificationEventWhereInput = {
     bundleId,
+    environment: { equals: "production", mode: "insensitive" },
     ...(storeProfileId ? { storeProfileId } : {}),
   };
   const [counts, latest] = await Promise.all([

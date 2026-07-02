@@ -1,9 +1,9 @@
 "use client";
 
 import { FormEvent, type ReactNode, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Cable, Eye, Link2, Pencil, Plus, Power, PowerOff, Search, Trash2 } from "lucide-react";
 import { showToast } from "@/lib/client/toast";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 import { PageHeader, StatusBadge, TableEmptyState, TablePaginationFooter } from "@/components/tracking/primitives";
 import { Button } from "@/components/ui/button";
@@ -34,10 +34,6 @@ type StoreMappingForm = {
 
 type StoreMappingPlatformFilter = "android" | "ios";
 type DrawerMode = "create" | "edit" | "view";
-type StoreOption = {
-  id: string;
-  name: string;
-};
 type StoreMappingListResponse = {
   success?: boolean;
   data?: StoreMapping[];
@@ -145,7 +141,6 @@ export function StoreMappingPage({
   data: StoreMappingPageData;
   platformFilter?: StoreMappingPlatformFilter;
 }) {
-  const router = useRouter();
   const [mappings, setMappings] = useState(data.storeMappings);
   const [tablePagination, setTablePagination] = useState(
     data.storeMappingPagination,
@@ -164,25 +159,11 @@ export function StoreMappingPage({
   const [storeFilter, setStoreFilter] = useState("all");
   const [tableLoading, setTableLoading] = useState(false);
   const storeOptions = useMemo(() => {
-    const options = new Map<string, StoreOption>();
-
-    for (const credential of data.credentialSecrets) {
-      if (credential.platform !== form.platform || !credential.store_profile_id)
-        continue;
-
-      const name = credential.store_account_name?.trim();
-      if (!name || options.has(credential.store_profile_id)) continue;
-
-      options.set(credential.store_profile_id, {
-        id: credential.store_profile_id,
-        name,
-      });
-    }
-
-    return Array.from(options.values()).sort((left, right) =>
-      left.name.localeCompare(right.name),
-    );
-  }, [data.credentialSecrets, form.platform]);
+    return data.storeOptions
+      .filter((store) => store.platform === form.platform)
+      .map(({ id, name }) => ({ id, name }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }, [data.storeOptions, form.platform]);
 
   function openCreate() {
     setDrawerMode("create");
@@ -232,9 +213,13 @@ export function StoreMappingPage({
     }));
   }
 
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadMappingsPage(1, { searchQuery: value });
+  }, 500);
+
   function updateSearchQuery(nextValue: string) {
     setSearchQuery(nextValue);
-    void loadMappingsPage(1, { searchQuery: nextValue });
+    debouncedSearch(nextValue);
   }
 
   function updateStoreFilter(nextValue: string) {
@@ -244,7 +229,7 @@ export function StoreMappingPage({
 
   async function loadMappingsPage(
     page: number,
-    overrides?: { searchQuery?: string; storeFilter?: string },
+    overrides?: { knownTotal?: number; searchQuery?: string; storeFilter?: string },
   ) {
     const nextSearchQuery = overrides?.searchQuery ?? searchQuery;
     const nextStoreFilter = overrides?.storeFilter ?? storeFilter;
@@ -258,6 +243,8 @@ export function StoreMappingPage({
     if (cleanedSearch) params.set("search", cleanedSearch);
     if (nextStoreFilter !== "all")
       params.set("storeProfileId", nextStoreFilter);
+    if (overrides?.knownTotal !== undefined)
+      params.set("knownTotal", String(overrides.knownTotal));
 
     setTableLoading(true);
 
@@ -311,7 +298,6 @@ export function StoreMappingPage({
       void showToast("success", payload.message ?? "Store mapping saved.");
       setDrawerOpen(false);
       await loadMappingsPage(editingId ? tablePagination.page : 1);
-      router.refresh();
     } catch (error) {
       void showToast("error",
         error instanceof Error
@@ -345,7 +331,6 @@ export function StoreMappingPage({
     }
 
     setMappings((current) => current.map((item) => (item.id === payload.mapping!.id ? payload.mapping! : item)));
-    router.refresh();
     return payload.mapping;
   }
 
@@ -392,7 +377,6 @@ export function StoreMappingPage({
       setDeleteTarget(null);
       setDeleteConfirmationName("");
       await loadMappingsPage(mappings.length <= 1 && tablePagination.page > 1 ? tablePagination.page - 1 : tablePagination.page);
-      router.refresh();
     } catch (error) {
       setMappings(previous);
       void showToast("error", error instanceof Error ? error.message : "Delete store mapping failed.");
@@ -722,7 +706,9 @@ export function StoreMappingPage({
           </Table>
           <TablePaginationFooter
             from={tableStartIndex + 1}
-            onPageChange={(page) => void loadMappingsPage(page)}
+            onPageChange={(page) =>
+              void loadMappingsPage(page, { knownTotal: tablePagination.total })
+            }
             page={currentTablePage}
             shown={visibleMappings.length}
             to={tableStartIndex + visibleMappings.length}

@@ -11,6 +11,7 @@ import {
   deleteAndroidCredentialsByIds,
   getAndroidCredentials,
   getAndroidCredentialsPage,
+  getAndroidCredentialStoreRefs,
   getAndroidCredentialsByIds,
   getAndroidCredentialTarget,
   getCurrentAndroidCredentialForStoreProfile,
@@ -45,6 +46,7 @@ import {
 } from "@/lib/server/services/credentials/credential.shared";
 import type { CredentialPayload } from "@/lib/server/services/credentials/credential.types";
 import { androidCredentialToMetadata } from "@/lib/tracking/mappers/android";
+import type { StoreMappingStoreOption } from "@/lib/tracking/page-data";
 
 type ExistingAndroidCredential = Awaited<ReturnType<typeof import("@/lib/server/repositories/android/credential.repository").getAndroidCredentialTarget>>;
 
@@ -67,16 +69,47 @@ export function getAndroidCredentialConfigs(take = 200) {
   return getCachedAndroidCredentialConfigs(take);
 }
 
+export async function getAndroidCredentialStoreOptions(take = 300): Promise<StoreMappingStoreOption[]> {
+  const credentials = await getAndroidCredentialStoreRefs(take);
+  const options = new Map<string, StoreMappingStoreOption>();
+
+  for (const credential of credentials) {
+    const name =
+      credential.storeProfile?.storeAccountName?.trim() ||
+      credential.storeAccountName?.trim();
+
+    if (!credential.storeProfileId || !name || options.has(credential.storeProfileId)) {
+      continue;
+    }
+
+    options.set(credential.storeProfileId, {
+      id: credential.storeProfileId,
+      name,
+      platform: "android",
+    });
+  }
+
+  return Array.from(options.values()).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
 export async function getAndroidCredentialConfigsPage(options: PaginationQuery & {
+  knownTotal?: number;
   search?: string;
 }) {
   const [credentials, total] = await getAndroidCredentialsPage({
+    includeTotal: options.knownTotal === undefined,
     search: options.search,
     skip: options.skip,
     take: options.take,
   });
 
-  return paginatedResult(credentials.map(androidCredentialToMetadata), total, options);
+  return paginatedResult(
+    credentials.map(androidCredentialToMetadata),
+    total ?? options.knownTotal ?? credentials.length,
+    options,
+  );
 }
 
 export async function getAndroidCredentialSecret(input: {

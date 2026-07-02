@@ -6,13 +6,20 @@ import { badRequest, forbidden } from "@/lib/server/api/errors";
 import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
 import { errorJson } from "@/lib/server/api/responses";
 import {
+  getIapAppContext,
   getIapAppCards,
   getIapAppCardsPage,
-  getIapAppDetail,
+  getIapAppTrialAnalytics,
+  getIapAppTransactionsPage,
 } from "@/lib/server/services/iap/iap-app.service";
 
 function clean(value: string | null) {
   return value?.trim() ?? "";
+}
+
+function optionalPositiveInt(value: string | null) {
+  const parsed = Number.parseInt(clean(value), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function platformFromSearch(value: string) {
@@ -87,8 +94,10 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
 
     if (!mappingId) throw badRequest("IAP mapping id is required.");
 
-    const detail = await getIapAppDetail(mappingId, platform, {
+    const detail = await getIapAppTransactionsPage(mappingId, platform, {
       ...pagination,
+      includeContext: clean(url.searchParams.get("context")) !== "false",
+      knownTotal: optionalPositiveInt(url.searchParams.get("knownTotal")),
       kind: clean(url.searchParams.get("kind")) || "all",
       state: clean(url.searchParams.get("state")) || "all",
       trial: clean(url.searchParams.get("trial")) || "all",
@@ -104,5 +113,66 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
     });
   } catch (error) {
     return errorJson(error, "List IAP transactions failed.");
+  }
+}
+
+export async function handleAdminIapAppContextGet(request: Request) {
+  try {
+    const session = await requireConsoleApiSession([
+      "Admin",
+      "Dev",
+      "Marketing",
+    ]);
+    const url = new URL(request.url);
+    const mappingId = clean(url.searchParams.get("mappingId"));
+    const platform = platformFromSearch(clean(url.searchParams.get("platform")));
+
+    if (!mappingId) throw badRequest("IAP mapping id is required.");
+
+    const detail = await getIapAppContext(mappingId, platform, {
+      kind: clean(url.searchParams.get("kind")) || "all",
+      state: clean(url.searchParams.get("state")) || "all",
+      trial: clean(url.searchParams.get("trial")) || "all",
+    });
+
+    if (!canAccessIapApp(session, detail.appCard)) {
+      throw forbidden("You do not have access to this IAP app.");
+    }
+
+    return Response.json({
+      success: true,
+      metrics: detail.metrics,
+      transactionStates: detail.transactionStates,
+    });
+  } catch (error) {
+    return errorJson(error, "Load IAP app context failed.");
+  }
+}
+
+export async function handleAdminIapTrialAnalyticsGet(request: Request) {
+  try {
+    const session = await requireConsoleApiSession([
+      "Admin",
+      "Dev",
+      "Marketing",
+    ]);
+    const url = new URL(request.url);
+    const mappingId = clean(url.searchParams.get("mappingId"));
+    const platform = platformFromSearch(clean(url.searchParams.get("platform")));
+
+    if (!mappingId) throw badRequest("IAP mapping id is required.");
+
+    const detail = await getIapAppTrialAnalytics(mappingId, platform);
+
+    if (!canAccessIapApp(session, detail.appCard)) {
+      throw forbidden("You do not have access to this IAP app.");
+    }
+
+    return Response.json({
+      success: true,
+      trialAnalytics: detail.trialAnalytics,
+    });
+  } catch (error) {
+    return errorJson(error, "Load IAP trial analytics failed.");
   }
 }
