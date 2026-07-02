@@ -638,6 +638,10 @@ export function jobSuccessRate(job: NotificationJob) {
 }
 
 export function notificationJobBadgeStatus(job: NotificationJob) {
+  if (["queued", "retrying", "processing", "materializing"].includes(job.status)) {
+    return "processing";
+  }
+
   if (Math.max(0, job.sent_count) > 0 && Math.max(0, job.error_count) > 0) return "sent_with_issues";
   return job.status;
 }
