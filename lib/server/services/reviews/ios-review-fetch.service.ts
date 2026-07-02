@@ -627,9 +627,15 @@ export async function enqueueIosReviewFullScanRuns(input: {
   storeMappingIds?: string[];
 }) {
   const requestedIds = new Set(input.storeMappingIds ?? []);
-  const mappings = (await getActiveIosReviewMappings()).filter(
-    (mapping) => !requestedIds.size || requestedIds.has(mapping.id),
-  );
+  const mappings = requestedIds.size
+    ? (await Promise.all(
+        Array.from(requestedIds).map((storeMappingId) =>
+          getIosReviewMappingById(storeMappingId),
+        ),
+      )).filter((mapping): mapping is NonNullable<typeof mapping> =>
+        mapping?.status === "ACTIVE",
+      )
+    : await getActiveIosReviewMappings();
   if (!mappings.length) {
     throw notFound("No active iOS apps were found for full scan.");
   }
@@ -662,6 +668,11 @@ export async function enqueueIosReviewFetchRuns(input: {
   scanMode?: string;
   storeMappingId: string;
 }) {
+  const mapping = await getIosReviewMappingById(input.storeMappingId);
+  if (!mapping || mapping.status !== "ACTIVE") {
+    throw notFound("No active iOS app was found for comment fetch.");
+  }
+
   const scheduledFor = new Date();
   const result = await enqueueManualIosReviewFetchRuns([
     {

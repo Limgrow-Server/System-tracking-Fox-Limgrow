@@ -38,6 +38,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
+import { announceBackgroundJob } from "@/lib/client/background-jobs";
 import {
   Select,
   SelectContent,
@@ -973,6 +974,8 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       if (!response.ok || !payload.ok || !payload.result) {
         throw new Error(payload.error ?? "Reviews could not be fetched.");
       }
+
+      announceBackgroundJob(payload.backgroundJob);
 
       if (payload.result.status === "queued") {
         void showToast("success",

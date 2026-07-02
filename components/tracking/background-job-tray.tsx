@@ -11,10 +11,11 @@ import {
   Send,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { subscribeBackgroundJobs } from "@/lib/client/background-jobs";
 import { showToast } from "@/lib/client/toast";
 import { cn } from "@/lib/utils";
 import type { BackgroundJob } from "@/lib/tracking/types";
@@ -179,12 +180,52 @@ export function BackgroundJobTray() {
   const [activeCount, setActiveCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const hydratedRef = useRef(false);
   const statusRef = useRef<Map<string, BackgroundJob["status"]>>(new Map());
 
   const hasJobs = jobs.length > 0;
-  const pollingMs = activeCount > 0 ? 4000 : 12000;
+  const pollingMs = activeCount > 0 ? 1500 : 10000;
   const visibleJobs = useMemo(() => jobs.slice(0, 8), [jobs]);
+
+  const updateJobs = useCallback((nextJobs: BackgroundJob[]) => {
+    statusRef.current = new Map(nextJobs.map((job) => [job.id, job.status]));
+    setJobs(nextJobs);
+    setActiveCount(
+      nextJobs.filter((job) => ACTIVE_STATUSES.has(job.status)).length,
+    );
+  }, []);
+
+  const prependJob = useCallback(
+    (job: BackgroundJob) => {
+      setOpen(true);
+      setJobs((current) => {
+        const nextJobs = [
+          job,
+          ...current.filter((currentJob) => currentJob.id !== job.id),
+        ].slice(0, 30);
+        statusRef.current = new Map(
+          nextJobs.map((nextJob) => [nextJob.id, nextJob.status]),
+        );
+        setActiveCount(
+          nextJobs.filter((nextJob) => ACTIVE_STATUSES.has(nextJob.status))
+            .length,
+        );
+        return nextJobs;
+      });
+      hydratedRef.current = true;
+      setRefreshVersion((current) => current + 1);
+    },
+    [],
+  );
+
+  useEffect(() => subscribeBackgroundJobs(prependJob), [prependJob]);
+
+  useEffect(() => {
+    const onFocus = () => setRefreshVersion((current) => current + 1);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -220,10 +261,8 @@ export function BackgroundJobTray() {
           }
         }
 
-        statusRef.current = new Map(nextJobs.map((job) => [job.id, job.status]));
         hydratedRef.current = true;
-        setJobs(nextJobs);
-        setActiveCount(payload.activeCount ?? 0);
+        updateJobs(nextJobs);
       } catch {
         if (!cancelled) {
           setJobs((current) => current);
@@ -242,7 +281,7 @@ export function BackgroundJobTray() {
       cancelled = true;
       if (timeoutId) window.clearTimeout(timeoutId);
     };
-  }, [pollingMs]);
+  }, [pollingMs, refreshVersion, updateJobs]);
 
   if (!hasJobs && !loading) return null;
 

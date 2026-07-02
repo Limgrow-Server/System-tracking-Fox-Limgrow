@@ -17,6 +17,7 @@ import {
   Smartphone,
   Trash2,
 } from "lucide-react";
+import { announceBackgroundJob } from "@/lib/client/background-jobs";
 import { showToast } from "@/lib/client/toast";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -109,6 +110,7 @@ type ScheduleAppsResponse = {
 };
 
 type FullScanResponse = {
+  backgroundJob?: unknown;
   error?: string;
   ok?: boolean;
   result?: {
@@ -365,6 +367,7 @@ export function ReviewFetchSchedulePage({
         throw new Error(payload.error ?? "Full scan could not be queued.");
       }
 
+      announceBackgroundJob(payload.backgroundJob);
       setFullScanTarget(null);
       void showToast("success",
         `Queued ${payload.result.enqueued} full scan job(s). ${payload.result.skipped} already running or queued.`,
