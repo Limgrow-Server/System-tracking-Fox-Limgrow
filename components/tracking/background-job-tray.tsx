@@ -7,12 +7,16 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  GripHorizontal,
   Loader2,
   MessageSquareText,
+  RotateCcw,
   Send,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +37,79 @@ type BackgroundJobsResponse = {
 
 const ACTIVE_STATUSES = new Set(["queued", "running"]);
 const FINAL_STATUSES = new Set(["succeeded", "failed", "partial"]);
+const TRAY_MARGIN = 16;
+const TRAY_POSITION_STORAGE_KEY = "tracking-background-job-tray-position";
+
+type TrayPosition = {
+  x: number;
+  y: number;
+};
+
+type TrayDragState = {
+  originX: number;
+  originY: number;
+  pointerId: number;
+  startX: number;
+  startY: number;
+};
+
+function isTrayPosition(value: unknown): value is TrayPosition {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as TrayPosition).x === "number" &&
+    typeof (value as TrayPosition).y === "number" &&
+    Number.isFinite((value as TrayPosition).x) &&
+    Number.isFinite((value as TrayPosition).y)
+  );
+}
+
+function readStoredTrayPosition() {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(TRAY_POSITION_STORAGE_KEY) ?? "null",
+    );
+    return isTrayPosition(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistTrayPosition(position: TrayPosition | null) {
+  if (typeof window === "undefined") return;
+
+  if (!position) {
+    window.localStorage.removeItem(TRAY_POSITION_STORAGE_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(
+    TRAY_POSITION_STORAGE_KEY,
+    JSON.stringify(position),
+  );
+}
+
+function clampTrayPosition(
+  position: TrayPosition,
+  element: HTMLDivElement | null,
+) {
+  if (typeof window === "undefined") return position;
+
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const fallbackWidth = Math.max(0, Math.min(384, viewportWidth - TRAY_MARGIN * 2));
+  const width = element?.offsetWidth ?? fallbackWidth;
+  const height = element?.offsetHeight ?? 48;
+  const maxX = Math.max(TRAY_MARGIN, viewportWidth - width - TRAY_MARGIN);
+  const maxY = Math.max(TRAY_MARGIN, viewportHeight - height - TRAY_MARGIN);
+
+  return {
+    x: Math.min(Math.max(position.x, TRAY_MARGIN), maxX),
+    y: Math.min(Math.max(position.y, TRAY_MARGIN), maxY),
+  };
+}
 
 function statusLabel(status: BackgroundJob["status"]) {
   switch (status) {
@@ -227,16 +304,66 @@ export function BackgroundJobTray() {
   const router = useRouter();
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);
   const [activeCount, setActiveCount] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [hidden, setHidden] = useState(false);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [trayPosition, setTrayPosition] = useState<TrayPosition | null>(null);
+  const dragStateRef = useRef<TrayDragState | null>(null);
   const hydratedRef = useRef(false);
   const jobsSignatureRef = useRef("");
+  const latestTrayPositionRef = useRef<TrayPosition | null>(null);
   const statusRef = useRef<Map<string, BackgroundJob["status"]>>(new Map());
+  const trayRef = useRef<HTMLDivElement | null>(null);
 
   const hasJobs = jobs.length > 0;
   const pollingMs = activeCount > 0 ? 1500 : 10000;
   const visibleJobs = useMemo(() => jobs.slice(0, 8), [jobs]);
+
+  useEffect(() => {
+    const storedPosition = readStoredTrayPosition();
+    if (!storedPosition) return;
+
+    const nextPosition = clampTrayPosition(storedPosition, trayRef.current);
+    latestTrayPositionRef.current = nextPosition;
+    setTrayPosition(nextPosition);
+  }, []);
+
+  useEffect(() => {
+    if (!trayPosition) return;
+
+    const onResize = () => {
+      setTrayPosition((current) => {
+        if (!current) return current;
+
+        const nextPosition = clampTrayPosition(current, trayRef.current);
+        latestTrayPositionRef.current = nextPosition;
+        persistTrayPosition(nextPosition);
+        return nextPosition.x === current.x && nextPosition.y === current.y
+          ? current
+          : nextPosition;
+      });
+    };
+
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [trayPosition]);
+
+  useEffect(() => {
+    if (!trayPosition) return;
+
+    setTrayPosition((current) => {
+      if (!current) return current;
+
+      const nextPosition = clampTrayPosition(current, trayRef.current);
+      latestTrayPositionRef.current = nextPosition;
+      persistTrayPosition(nextPosition);
+      return nextPosition.x === current.x && nextPosition.y === current.y
+        ? current
+        : nextPosition;
+    });
+  }, [open, trayPosition, visibleJobs.length]);
 
   const updateJobs = useCallback((nextJobs: BackgroundJob[]) => {
     statusRef.current = new Map(nextJobs.map((job) => [job.id, job.status]));
@@ -254,6 +381,7 @@ export function BackgroundJobTray() {
 
   const prependJob = useCallback(
     (job: BackgroundJob) => {
+      setHidden(false);
       setOpen(true);
       setJobs((current) => {
         const nextJobs = [
@@ -283,6 +411,80 @@ export function BackgroundJobTray() {
       router.push(job.result_url);
     },
     [router],
+  );
+
+  const moveTray = useCallback((position: TrayPosition) => {
+    const nextPosition = clampTrayPosition(position, trayRef.current);
+    latestTrayPositionRef.current = nextPosition;
+    setTrayPosition(nextPosition);
+  }, []);
+
+  const resetTrayPosition = useCallback(() => {
+    dragStateRef.current = null;
+    latestTrayPositionRef.current = null;
+    persistTrayPosition(null);
+    setDragging(false);
+    setTrayPosition(null);
+  }, []);
+
+  const hideTray = useCallback(() => {
+    dragStateRef.current = null;
+    setDragging(false);
+    setHidden(true);
+    setOpen(false);
+  }, []);
+
+  const startTrayDrag = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      if (event.button !== 0) return;
+
+      const rect = trayRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragStateRef.current = {
+        originX: rect.left,
+        originY: rect.top,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+      };
+      setDragging(true);
+      moveTray({ x: rect.left, y: rect.top });
+    },
+    [moveTray],
+  );
+
+  const dragTray = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) return;
+
+      event.preventDefault();
+      moveTray({
+        x: dragState.originX + event.clientX - dragState.startX,
+        y: dragState.originY + event.clientY - dragState.startY,
+      });
+    },
+    [moveTray],
+  );
+
+  const stopTrayDrag = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const dragState = dragStateRef.current;
+      if (!dragState || dragState.pointerId !== event.pointerId) return;
+
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+
+      dragStateRef.current = null;
+      setDragging(false);
+      persistTrayPosition(latestTrayPositionRef.current);
+    },
+    [],
   );
 
   useEffect(() => subscribeBackgroundJobs(prependJob), [prependJob]);
@@ -349,52 +551,101 @@ export function BackgroundJobTray() {
     };
   }, [pollingMs, refreshVersion, updateJobs]);
 
-  if (!hasJobs && !loading) return null;
+  if (hidden || (!hasJobs && !loading)) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-[calc(100vw-2rem)] max-w-sm">
+    <div
+      ref={trayRef}
+      className={cn(
+        "fixed z-50 w-[calc(100vw-2rem)] max-w-sm",
+        !trayPosition && "bottom-4 right-4",
+      )}
+      style={
+        trayPosition
+          ? { left: `${trayPosition.x}px`, top: `${trayPosition.y}px` }
+          : undefined
+      }
+    >
       <div className="overflow-hidden rounded-lg border bg-background shadow-lg">
-        <button
-          type="button"
-          onClick={() => setOpen((current) => !current)}
-          className="flex h-12 w-full items-center justify-between gap-3 px-3 text-left"
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+        <div className="flex h-12 w-full items-center gap-1 px-3">
+          <button
+            type="button"
+            onClick={() => setOpen((current) => !current)}
+            className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+                {activeCount > 0 ? (
+                  <Activity size={15} className="animate-pulse text-sky-700" />
+                ) : (
+                  <Bell size={15} />
+                )}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">
+                  Background jobs
+                </span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {activeCount > 0
+                    ? `${activeCount} running`
+                    : `${jobs.length} recent`}
+                </span>
+              </span>
+            </span>
+            <span className="flex items-center gap-2">
               {activeCount > 0 ? (
-                <Activity size={15} className="animate-pulse text-sky-700" />
-              ) : (
-                <Bell size={15} />
-              )}
+                <Badge className="h-5 rounded-md px-1.5 text-[11px]">
+                  {activeCount}
+                </Badge>
+              ) : null}
+              <Button
+                asChild
+                variant="ghost"
+                size="icon-sm"
+                tabIndex={-1}
+                className="pointer-events-none"
+              >
+                <span>{open ? <ChevronDown size={15} /> : <ChevronUp size={15} />}</span>
+              </Button>
             </span>
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-medium">
-                Background jobs
-              </span>
-              <span className="block truncate text-xs text-muted-foreground">
-                {activeCount > 0
-                  ? `${activeCount} running`
-                  : `${jobs.length} recent`}
-              </span>
-            </span>
-          </span>
-          <span className="flex items-center gap-2">
-            {activeCount > 0 ? (
-              <Badge className="h-5 rounded-md px-1.5 text-[11px]">
-                {activeCount}
-              </Badge>
-            ) : null}
+          </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Move background jobs panel"
+            title="Move panel"
+            onPointerDown={startTrayDrag}
+            onPointerMove={dragTray}
+            onPointerUp={stopTrayDrag}
+            onPointerCancel={stopTrayDrag}
+            className={cn("cursor-grab touch-none", dragging && "cursor-grabbing")}
+          >
+            <GripHorizontal size={15} />
+          </Button>
+          {trayPosition ? (
             <Button
-              asChild
+              type="button"
               variant="ghost"
               size="icon-sm"
-              tabIndex={-1}
-              className="pointer-events-none"
+              aria-label="Reset background jobs panel position"
+              title="Reset position"
+              onClick={resetTrayPosition}
             >
-              <span>{open ? <ChevronDown size={15} /> : <ChevronUp size={15} />}</span>
+              <RotateCcw size={14} />
             </Button>
-          </span>
-        </button>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Hide background jobs panel"
+            title="Hide panel"
+            onClick={hideTray}
+          >
+            <X size={14} />
+          </Button>
+        </div>
         <div
           className={cn(
             "grid transition-[grid-template-rows] duration-200",
