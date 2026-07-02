@@ -3,10 +3,10 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Apple,
   Check,
   ChevronsUpDown,
   Link2,
-  MessageSquareText,
   Search,
   Smartphone,
   Star,
@@ -15,7 +15,6 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Command,
@@ -39,6 +38,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   PageHeader,
   StatusBadge,
   TablePaginationFooter,
@@ -51,6 +58,8 @@ import type {
 } from "@/lib/tracking/page-data";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
 import { showToast } from "@/lib/client/toast";
+
+const REVIEW_APP_SKELETON_COUNT = 12;
 
 function ratingLabel(value: number | null) {
   return value ? value.toFixed(1) : "N/A";
@@ -80,6 +89,20 @@ function platformLabel(platform: ReviewAppCard["platform"]) {
   return platform === "ios" ? "iOS" : "Android";
 }
 
+function PlatformBadge({ platform }: { platform: ReviewAppCard["platform"] }) {
+  const Icon = platform === "ios" ? Apple : Smartphone;
+
+  return (
+    <Badge
+      variant="outline"
+      className={cn("gap-1.5", platformBadgeClass(platform))}
+    >
+      <Icon size={14} />
+      {platformLabel(platform)}
+    </Badge>
+  );
+}
+
 export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -96,6 +119,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   );
   const [openStoreCombobox, setOpenStoreCombobox] = useState(false);
   const [loadingApps, setLoadingApps] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [pendingMappingId, setPendingMappingId] = useState<string | null>(null);
 
   const selectedStoreLabel =
@@ -125,6 +149,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
     if (nextStore !== "all") params.set("storeProfileId", nextStore);
 
     setLoadingApps(true);
+    setLoadingPage(page);
 
     try {
       const response = await fetch(`/api/comments/apps?${params.toString()}`);
@@ -148,6 +173,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
       );
     } finally {
       setLoadingApps(false);
+      setLoadingPage(null);
     }
   }
 
@@ -168,6 +194,8 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
       router.push(`/comments/${app.mappingId}`);
     });
   }
+
+  const tableStartIndex = (appPagination.page - 1) * appPagination.pageSize;
 
   return (
     <div className="flex h-full flex-col gap-6 p-6">
@@ -268,152 +296,177 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
         </Popover>
       </div>
 
-      <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {apps.map((app) => {
-          const isPending = pendingMappingId === app.mappingId;
+      <div className="overflow-hidden rounded-lg border bg-card">
+        <div className="overflow-x-auto">
+          <Table className="min-w-[76rem]">
+            <TableHeader className="bg-muted/40">
+              <TableRow>
+                <TableHead>App</TableHead>
+                <TableHead>Platform</TableHead>
+                <TableHead>Store</TableHead>
+                <TableHead>Comments</TableHead>
+                <TableHead>Rating</TableHead>
+                <TableHead>Replies</TableHead>
+                <TableHead>Last Sync</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loadingApps
+                ? Array.from({ length: REVIEW_APP_SKELETON_COUNT }).map(
+                    (_, index) => (
+                      <TableRow key={`review-app-skeleton-${index}`}>
+                        <TableCell>
+                          <div className="flex animate-pulse items-center gap-3">
+                            <div className="size-10 rounded-lg bg-muted" />
+                            <div className="min-w-0 flex-1 space-y-2">
+                              <div className="h-4 w-48 max-w-full rounded bg-muted" />
+                              <div className="h-3 w-64 max-w-full rounded bg-muted/70" />
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-12 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-12 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-4 w-12 animate-pulse rounded bg-muted" />
+                        </TableCell>
+                        <TableCell>
+                          <div className="h-6 w-36 animate-pulse rounded-full bg-muted" />
+                        </TableCell>
+                      </TableRow>
+                    ),
+                  )
+                : apps.map((app) => {
+                    const isPending = pendingMappingId === app.mappingId;
 
-          return (
-            <li key={app.mappingId}>
-              <Card
-                aria-busy={isPending}
-                className={cn(
-                  "relative h-full cursor-pointer rounded-lg transition-colors hover:bg-muted/50",
-                  isPending &&
-                    "pointer-events-none border-primary/50 bg-muted/30",
-                )}
-                onClick={() => openAppDetail(app)}
-              >
-                <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
-                  <Avatar className="size-11 rounded-lg border">
-                    {app.appIconUrl ? (
-                      <AvatarImage
-                        src={app.appIconUrl}
-                        alt={app.appName}
-                        className="rounded-lg"
-                      />
-                    ) : null}
-                    <AvatarFallback className="rounded-lg text-xs">
-                      {app.appName.substring(0, 2).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <Badge
-                    variant="outline"
-                    className={cn("gap-1", platformBadgeClass(app.platform))}
-                  >
-                    <Smartphone size={12} />
-                    {platformLabel(app.platform)}
-                  </Badge>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <CardTitle
-                        className="line-clamp-1 flex-1 text-lg"
-                        title={app.appName}
+                    return (
+                      <TableRow
+                        key={app.mappingId}
+                        aria-busy={isPending}
+                        role="link"
+                        tabIndex={0}
+                        className={cn(
+                          "cursor-pointer transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none",
+                          isPending && "pointer-events-none bg-muted/30",
+                        )}
+                        onClick={() => openAppDetail(app)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            openAppDetail(app);
+                          }
+                        }}
                       >
-                        {app.appName}
-                      </CardTitle>
-                      {app.appLink ? (
-                        <Button
-                          variant="outline"
-                          size="icon-sm"
-                          asChild
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          <a
-                            href={app.appLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title={app.appLink}
-                          >
-                            <Link2 size={14} />
-                          </a>
-                        </Button>
-                      ) : null}
-                    </div>
-                    <div className="mt-1 truncate text-xs text-muted-foreground">
-                      {app.identifier}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 text-sm">
-                    <div className="rounded-md border bg-muted/20 p-2">
-                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <MessageSquareText size={12} />
-                        Comments
-                      </div>
-                      <div className="mt-1 font-semibold">
-                        {compactNumber(app.reviewCount)}
-                      </div>
-                    </div>
-                    <div className="rounded-md border bg-muted/20 p-2">
-                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <Star size={12} />
-                        Rating
-                      </div>
-                      <div className="mt-1 font-semibold">
-                        {ratingLabel(app.averageRating)}
-                      </div>
-                    </div>
-                    <div className="rounded-md border bg-muted/20 p-2">
-                      <div className="text-xs text-muted-foreground">Replies</div>
-                      <div className="mt-1 font-semibold">
-                        {compactNumber(app.repliedCount)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <StatusBadge status={app.lastSyncStatus ?? "not_found"} />
-                    <span className="truncate text-muted-foreground">
-                      {dateTime(app.lastFetchedAt)}
-                    </span>
-                  </div>
-                </CardContent>
-                {isPending ? (
-                  <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-[1px]">
-                    <div className="flex size-10 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm">
-                      <Spinner />
-                    </div>
-                  </div>
-                ) : null}
-              </Card>
-            </li>
-          );
-        })}
-        {!apps.length && loadingApps
-          ? Array.from({ length: 8 }).map((_, index) => (
-              <li key={`review-app-loading-${index}`}>
-                <Card className="h-full rounded-lg">
-                  <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0 pb-3">
-                    <div className="size-11 animate-pulse rounded-lg bg-muted" />
-                    <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="space-y-2">
-                      <div className="h-5 w-3/4 animate-pulse rounded bg-muted" />
-                      <div className="h-3 w-1/2 animate-pulse rounded bg-muted/70" />
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="h-14 animate-pulse rounded-md bg-muted/70" />
-                      <div className="h-14 animate-pulse rounded-md bg-muted/70" />
-                      <div className="h-14 animate-pulse rounded-md bg-muted/70" />
-                    </div>
-                  </CardContent>
-                </Card>
-              </li>
-            ))
-          : null}
-        {!apps.length && !loadingApps ? (
-          <div className="col-span-full py-12 text-center text-muted-foreground">
-            No applications found.
-          </div>
-        ) : null}
-      </ul>
+                        <TableCell>
+                          <div className="flex min-w-[18rem] items-center gap-3">
+                            <Avatar className="size-10 rounded-lg border">
+                              {app.appIconUrl ? (
+                                <AvatarImage
+                                  src={app.appIconUrl}
+                                  alt={app.appName}
+                                  className="rounded-lg"
+                                />
+                              ) : null}
+                              <AvatarFallback className="rounded-lg text-xs">
+                                {app.appName.substring(0, 2).toUpperCase()}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span
+                                  className="truncate font-medium text-foreground"
+                                  title={app.appName}
+                                >
+                                  {app.appName}
+                                </span>
+                                {isPending ? <Spinner /> : null}
+                                {app.appLink ? (
+                                  <Button
+                                    asChild
+                                    type="button"
+                                    variant="outline"
+                                    size="icon-sm"
+                                    className="size-7 shrink-0"
+                                  >
+                                    <a
+                                      href={app.appLink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title={app.appLink}
+                                      onClick={(event) => event.stopPropagation()}
+                                    >
+                                      <Link2 size={14} />
+                                    </a>
+                                  </Button>
+                                ) : null}
+                              </div>
+                              <div className="mt-1 truncate text-xs text-muted-foreground">
+                                {app.identifier}
+                              </div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <PlatformBadge platform={app.platform} />
+                        </TableCell>
+                        <TableCell>
+                          <div className="max-w-[14rem] truncate text-sm">
+                            {app.storeAccountName}
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {compactNumber(app.reviewCount)}
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-1.5">
+                            <Star className="size-4 fill-amber-400 text-amber-400" />
+                            <span>{ratingLabel(app.averageRating)}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {compactNumber(app.repliedCount)}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex min-w-[11rem] flex-col gap-1.5">
+                            <StatusBadge status={app.lastSyncStatus ?? "not_found"} />
+                            <span className="text-xs text-muted-foreground">
+                              {dateTime(app.lastFetchedAt)}
+                            </span>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+              {!loadingApps && apps.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={7}
+                    className="py-12 text-center text-muted-foreground"
+                  >
+                    No applications found.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
       <TablePaginationFooter
+        from={tableStartIndex + 1}
+        loadingPage={loadingPage}
         onPageChange={(page) => void loadAppsPage(page)}
         page={appPagination.page}
         shown={apps.length}
+        to={tableStartIndex + apps.length}
         total={appPagination.total}
         totalPages={appPagination.totalPages}
       />
