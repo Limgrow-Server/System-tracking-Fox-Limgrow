@@ -10,7 +10,6 @@ export async function getReviewAppDetailPageData(
   mappingId: string,
   session: ConsoleSession,
   options?: {
-    includeMockData?: boolean;
     rating?: string;
     reply?: string;
     reviewPagination?: PaginationQuery;

@@ -449,19 +449,6 @@ function fetchRunDto(run: ReviewFetchRun): ReviewFetchRunDto {
   };
 }
 
-function buildRatingBuckets(reviews: StoreReviewDto[]): ReviewRatingBucket[] {
-  const total = Math.max(reviews.filter((review) => review.rating).length, 1);
-
-  return RATINGS.map((rating) => {
-    const count = reviews.filter((review) => review.rating === rating).length;
-    return {
-      count,
-      rating,
-      share: Math.round((count / total) * 100),
-    };
-  });
-}
-
 function buildRatingBucketsFromGroups(groups: RatingGroup[]): ReviewRatingBucket[] {
   const total = Math.max(
     groups.reduce((sum, group) => sum + group._count._all, 0),
@@ -481,226 +468,6 @@ function buildRatingBucketsFromGroups(groups: RatingGroup[]): ReviewRatingBucket
       share: Math.round((count / total) * 100),
     };
   });
-}
-
-function mockReview(
-  storeMappingId: string,
-  reviewId: string,
-  rating: number,
-  daysAgo: number,
-  payload: {
-    appVersionName: string;
-    authorName: string;
-    developerReplyText?: string;
-    device: string;
-    deviceMetadata?: ReviewDeviceMetadataDto;
-    originalText?: string;
-    reviewText: string;
-    thumbsDownCount: number;
-    thumbsUpCount: number;
-  },
-): StoreReviewDto {
-  const updatedAt = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
-  const replyUpdatedAt = payload.developerReplyText
-    ? new Date(updatedAt.getTime() + 8 * 60 * 60 * 1000)
-    : null;
-
-  return {
-    appVersionCode: 124,
-    appVersionName: payload.appVersionName,
-    authorName: payload.authorName,
-    developerReplyText: payload.developerReplyText ?? null,
-    developerReplyUpdatedAt: iso(replyUpdatedAt),
-    device: payload.device,
-    deviceMetadata: payload.deviceMetadata ?? null,
-    fetchedAt: new Date().toISOString(),
-    id: `mock-${storeMappingId}-${reviewId}`,
-    originalText: payload.originalText ?? null,
-    osVersionLabel: "Android 35",
-    rating,
-    rawReview: {
-      mock: true,
-      reviewId,
-      comments: [
-        {
-          userComment: {
-            starRating: rating,
-            text: payload.reviewText,
-            device: payload.device,
-            deviceMetadata: payload.deviceMetadata ?? null,
-            lastModified: {
-              seconds: Math.floor(updatedAt.getTime() / 1000),
-            },
-          },
-        },
-      ],
-    },
-    reviewerLanguage: "en",
-    reviewId,
-    reviewText: payload.reviewText,
-    thumbsDownCount: payload.thumbsDownCount,
-    thumbsUpCount: payload.thumbsUpCount,
-    userCommentUpdatedAt: updatedAt.toISOString(),
-  };
-}
-
-function mockStoreReviews(mappingId: string): StoreReviewDto[] {
-  return [
-    mockReview(mappingId, "mock-review-5-star", 5, 1, {
-      appVersionName: "2.8.1",
-      authorName: "Mia Turner",
-      developerReplyText:
-        "Thank you for the kind review. We are glad the latest keyboard theme works well for you.",
-      device: "Pixel 8",
-      deviceMetadata: {
-        cpuMake: "Google",
-        cpuModel: "Tensor G3",
-        deviceClass: "phone",
-        glEsVersion: null,
-        manufacturer: "Google",
-        nativePlatform: "arm64-v8a",
-        productName: "Pixel 8",
-        ramMb: 8192,
-        screenDensityDpi: 428,
-        screenHeightPx: 2400,
-        screenWidthPx: 1080,
-      },
-      reviewText:
-        "The LED keyboard looks clean and the typing sound feels much better after the latest update.",
-      thumbsDownCount: 0,
-      thumbsUpCount: 18,
-    }),
-    mockReview(mappingId, "mock-review-4-star", 4, 2, {
-      appVersionName: "2.8.1",
-      authorName: "Duc Nguyen",
-      device: "Galaxy S24",
-      deviceMetadata: {
-        cpuMake: "Qualcomm",
-        cpuModel: "Snapdragon 8 Gen 3",
-        deviceClass: "phone",
-        glEsVersion: null,
-        manufacturer: "Samsung",
-        nativePlatform: "arm64-v8a",
-        productName: "Galaxy S24",
-        ramMb: 8192,
-        screenDensityDpi: 416,
-        screenHeightPx: 2340,
-        screenWidthPx: 1080,
-      },
-      reviewText:
-        "Nice themes and easy setup. I would like more Vietnamese color presets in the next release.",
-      thumbsDownCount: 1,
-      thumbsUpCount: 9,
-    }),
-    mockReview(mappingId, "mock-review-3-star", 3, 4, {
-      appVersionName: "2.8.0",
-      authorName: "Sofia Lee",
-      developerReplyText:
-        "Thanks for reporting this. Please update to the newest version and contact support if the delay remains.",
-      device: "Xiaomi 13",
-      deviceMetadata: {
-        cpuMake: "Qualcomm",
-        cpuModel: "Snapdragon 8 Gen 2",
-        deviceClass: "phone",
-        glEsVersion: null,
-        manufacturer: "Xiaomi",
-        nativePlatform: "arm64-v8a",
-        productName: "Xiaomi 13",
-        ramMb: 12288,
-        screenDensityDpi: 414,
-        screenHeightPx: 2400,
-        screenWidthPx: 1080,
-      },
-      reviewText:
-        "The app is useful, but the keyboard sometimes opens slowly when switching from chat apps.",
-      thumbsDownCount: 2,
-      thumbsUpCount: 5,
-    }),
-    mockReview(mappingId, "mock-review-2-star", 2, 7, {
-      appVersionName: "2.7.9",
-      authorName: "Alex Morgan",
-      device: "OnePlus 12",
-      originalText:
-        "Battery use increased after enabling animated background and haptic feedback.",
-      reviewText:
-        "Battery use increased after enabling animated background and haptic feedback.",
-      thumbsDownCount: 4,
-      thumbsUpCount: 3,
-    }),
-    mockReview(mappingId, "mock-review-1-star", 1, 10, {
-      appVersionName: "2.7.8",
-      authorName: "Anonymous reviewer",
-      device: "Samsung A55",
-      reviewText:
-        "Ads appear too often and interrupt keyboard customization. Please reduce the frequency.",
-      thumbsDownCount: 6,
-      thumbsUpCount: 2,
-    }),
-  ];
-}
-
-function filterMockReviews(
-  reviews: StoreReviewDto[],
-  filters: {
-    rating?: string;
-    reply?: string;
-    search?: string;
-  },
-) {
-  const search = filters.search;
-
-  return reviews.filter((review) => {
-    const matchesSearch = valuesMatchSearch([
-      review.reviewText,
-      review.originalText,
-      review.authorName,
-      review.reviewId,
-    ], search);
-    const matchesRating =
-      !filters.rating ||
-      filters.rating === "all" ||
-      String(review.rating ?? "") === filters.rating;
-    const hasReply = Boolean(review.developerReplyText);
-    const matchesReply =
-      !filters.reply ||
-      filters.reply === "all" ||
-      (filters.reply === "replied" && hasReply) ||
-      (filters.reply === "pending" && !hasReply);
-
-    return matchesSearch && matchesRating && matchesReply;
-  });
-}
-
-function buildReviewStats(
-  app: ReviewAppCard,
-  reviewDtos: StoreReviewDto[],
-  averageRating?: number | null,
-): ReviewAppStats {
-  const repliedCount = reviewDtos.filter((review) => review.developerReplyText).length;
-  const totalReviews = reviewDtos.length;
-  const ratingSummaryForReviews = ratingSummary(
-    reviewDtos.map((review) => ({
-      _count: { _all: 1 },
-      rating: review.rating,
-      storeMappingId: app.mappingId,
-    })),
-  );
-  const latestReviewAt =
-    reviewDtos
-      .map((review) => review.userCommentUpdatedAt)
-      .filter(Boolean)
-      .sort()
-      .at(-1) ?? null;
-
-  return {
-    averageRating: averageRating ?? ratingSummaryForReviews.averageRating,
-    latestReviewAt,
-    pendingReplyCount: Math.max(totalReviews - repliedCount, 0),
-    ratingBuckets: buildRatingBuckets(reviewDtos),
-    repliedCount,
-    replyCoverage: totalReviews ? Math.round((repliedCount / totalReviews) * 100) : 0,
-    totalReviews,
-  };
 }
 
 function buildReviewStatsFromGroups(
@@ -765,7 +532,6 @@ function replyTemplatePreviewDto(
 async function getIosReviewAppDetail(
   mappingId: string,
   options?: {
-    includeMockData?: boolean;
     rating?: string;
     reply?: string;
     reviewPagination?: PaginationQuery;
@@ -814,7 +580,6 @@ async function getIosReviewAppDetail(
     app,
     fetchSchedule: reviewFetchScheduleDto(fetchSchedule),
     fetchRuns: fetchRuns.map(fetchRunDto),
-    isMockData: false,
     replyTemplates: RATINGS.map((rating) =>
       replyTemplatePreviewDto(
         templates.find((template) => template.rating === rating) ?? null,
@@ -853,7 +618,6 @@ async function getIosReviewAppDetail(
 export async function getReviewAppDetail(
   mappingId: string,
   options?: {
-    includeMockData?: boolean;
     rating?: string;
     reply?: string;
     reviewPagination?: PaginationQuery;
@@ -895,36 +659,18 @@ export async function getReviewAppDetail(
   ]);
   const [reviews, reviewTotal] = reviewsPage;
   const app = reviewAppCard(mapping, ratingGroups, replyCountByMapping(replyGroups));
-  const realReviewDtos = reviews.map(androidReviewDto);
-  const useMockData = Boolean(options?.includeMockData && !reviewTotal);
-  let reviewDtos = realReviewDtos;
-  let total = reviewTotal;
-  let stats = buildReviewStatsFromGroups(
+  const reviewDtos = reviews.map(androidReviewDto);
+  const stats = buildReviewStatsFromGroups(
     app,
     ratingGroups,
     iso(latestReview?.userCommentUpdatedAt ?? latestReview?.fetchedAt),
   );
-
-  if (useMockData) {
-    const mockReviews = filterMockReviews(mockStoreReviews(mappingId), {
-      rating: options?.rating,
-      reply: options?.reply,
-      search: options?.search,
-    });
-    reviewDtos = mockReviews.slice(
-      reviewPagination.skip,
-      reviewPagination.skip + reviewPagination.take,
-    );
-    total = mockReviews.length;
-    stats = buildReviewStats(app, mockStoreReviews(mappingId));
-  }
-  const paginatedReviews = paginatedResult(reviewDtos, total, reviewPagination);
+  const paginatedReviews = paginatedResult(reviewDtos, reviewTotal, reviewPagination);
 
   return {
     app,
     fetchSchedule: reviewFetchScheduleDto(fetchSchedule),
     fetchRuns: fetchRuns.map(fetchRunDto),
-    isMockData: useMockData,
     replyTemplates: RATINGS.map((rating) =>
       replyTemplatePreviewDto(
         templates.find((template) => template.rating === rating) ?? null,

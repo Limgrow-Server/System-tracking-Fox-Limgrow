@@ -226,44 +226,6 @@ function buildRevenueBuckets(
   return buckets;
 }
 
-function buildMockRevenueBuckets(granularity: RevenueGranularity) {
-  const count = bucketCount(granularity);
-  const endDate = bucketStart(new Date("2026-06-30T00:00:00.000Z"), granularity);
-  const firstDate = addBucket(endDate, granularity, -(count - 1));
-  const productionPattern = [
-    125000,
-    160000,
-    98000,
-    210000,
-    188000,
-    245000,
-    176000,
-    318000,
-    285000,
-    340000,
-    390000,
-    420000,
-    380000,
-    465000,
-  ];
-
-  return Array.from({ length: count }, (_, index): RevenueBucket => {
-    const date = addBucket(firstDate, granularity, index);
-    const production =
-      productionPattern[index % productionPattern.length] *
-      (granularity === "month" ? 9 : granularity === "week" ? 3 : 1);
-
-    return {
-      fullLabel: bucketFullLabel(date, granularity),
-      key: date.toISOString(),
-      label: bucketLabel(date, granularity),
-      orders: 8 + ((index * 3) % 17),
-      production,
-      total: production,
-    };
-  });
-}
-
 function RevenueTooltip({
   active,
   payload,
@@ -312,16 +274,9 @@ export function IapRevenueChart({
     () => buildRevenueBuckets(transactions, granularity),
     [granularity, transactions],
   );
-  const hasRealRevenueData = realBuckets.some((bucket) => bucket.total > 0);
-  const buckets = useMemo(
-    () =>
-      hasRealRevenueData ? realBuckets : buildMockRevenueBuckets(granularity),
-    [granularity, hasRealRevenueData, realBuckets],
-  );
-  const displayRevenue = hasRealRevenueData
-    ? revenue
-    : buckets.reduce((sum, bucket) => sum + bucket.total, 0);
-  const displayTrendPct = hasRealRevenueData ? trendPct : 18;
+  const buckets = realBuckets;
+  const displayRevenue = revenue;
+  const displayTrendPct = trendPct;
   const selectedGranularity = GRANULARITIES.find(
     (item) => item.value === granularity,
   );
@@ -347,14 +302,6 @@ export function IapRevenueChart({
             >
               {trendLabel} last week
             </Badge>
-            {!hasRealRevenueData ? (
-              <Badge
-                variant="outline"
-                className="border-blue-200 bg-blue-50 text-blue-700"
-              >
-                Mock data
-              </Badge>
-            ) : null}
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
             {selectedGranularity?.rangeLabel ?? "Revenue timeline"}

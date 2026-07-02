@@ -97,21 +97,6 @@ function formatRevenue(app: IapAppCard) {
   return microsToMoney(app.revenueMicros, app.revenueCurrency ?? "USD");
 }
 
-function mockMetricSeed(app: IapAppCard) {
-  return `${app.mappingId}${app.identifier}`.split("").reduce(
-    (sum, char) => sum + char.charCodeAt(0),
-    0,
-  );
-}
-
-function mockSubscriptionCount(app: IapAppCard) {
-  return mockMetricSeed(app) % 128;
-}
-
-function mockTrialCount(app: IapAppCard) {
-  return Math.floor(mockMetricSeed(app) / 3) % 36;
-}
-
 export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -311,8 +296,6 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
                 <TableHead>Platform</TableHead>
                 <TableHead>Store</TableHead>
                 <TableHead>Transactions</TableHead>
-                <TableHead>Subscriptions</TableHead>
-                <TableHead>Trials</TableHead>
                 <TableHead>Revenue</TableHead>
               </TableRow>
             </TableHeader>
@@ -337,12 +320,6 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
                       </TableCell>
                       <TableCell>
                         <div className="h-4 w-16 animate-pulse rounded bg-muted" />
-                      </TableCell>
-                      <TableCell>
-                        <div className="h-4 w-20 animate-pulse rounded bg-muted" />
-                      </TableCell>
-                      <TableCell>
-                        <div className="h-4 w-14 animate-pulse rounded bg-muted" />
                       </TableCell>
                       <TableCell>
                         <div className="h-4 w-20 animate-pulse rounded bg-muted" />
@@ -431,12 +408,6 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
                           {formatTransactionCount(app.transactionCount)}
                         </TableCell>
                         <TableCell className="font-medium">
-                          {compactNumber(mockSubscriptionCount(app))}
-                        </TableCell>
-                        <TableCell className="font-medium">
-                          {compactNumber(mockTrialCount(app))}
-                        </TableCell>
-                        <TableCell className="font-medium">
                           {formatRevenue(app)}
                         </TableCell>
                       </TableRow>
@@ -445,7 +416,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
               {!loading && apps.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={7}
+                    colSpan={5}
                     className="py-12 text-center text-muted-foreground"
                   >
                     No applications found matching your criteria.

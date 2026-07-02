@@ -823,7 +823,6 @@ type ReviewCommentsResponse = {
   error?: string;
   fetchRuns?: ReviewFetchRunDto[];
   fetchSchedule?: ReviewFetchScheduleDto | null;
-  isMockData?: boolean;
   page?: number;
   pageSize?: number;
   replyTemplates?: ReviewReplyTemplatePreviewDto[];
@@ -848,7 +847,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
   const [fetchRuns, setFetchRuns] = useState(data.fetchRuns);
   const [fetchSchedule, setFetchSchedule] = useState(data.fetchSchedule);
   const [replyTemplates, setReplyTemplates] = useState(data.replyTemplates);
-  const [isMockData, setIsMockData] = useState(Boolean(data.isMockData));
   const [search, setSearch] = useState(data.reviewFilters.search);
   const [ratingFilter, setRatingFilter] = useState(data.reviewFilters.rating);
   const [replyFilter, setReplyFilter] = useState(data.reviewFilters.reply);
@@ -862,7 +860,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     ...data,
     fetchRuns,
     fetchSchedule,
-    isMockData,
     replyTemplates,
     reviews,
     stats,
@@ -889,7 +886,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
     if (nextRating !== "all") params.set("rating", nextRating);
     if (nextReply !== "all") params.set("reply", nextReply);
-    if (isMockData) params.set("mock", "1");
 
     setLoadingComments(true);
 
@@ -915,7 +911,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         setFetchSchedule(payload.fetchSchedule);
       }
       if (payload.replyTemplates) setReplyTemplates(payload.replyTemplates);
-      if (payload.isMockData !== undefined) setIsMockData(payload.isMockData);
     } catch (error) {
       void showToast("error",
         error instanceof Error ? error.message : "Comments could not be loaded.",
@@ -1052,14 +1047,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         description={data.app.identifier}
         action={
           <div className="flex flex-wrap items-center gap-2">
-            {isMockData ? (
-              <Badge
-                variant="outline"
-                className="border-amber-200 bg-amber-50 text-amber-700"
-              >
-                Mock data
-              </Badge>
-            ) : null}
             <Badge
               variant="outline"
               className={cn("gap-1", storeBadgeClass(data.app.platform))}

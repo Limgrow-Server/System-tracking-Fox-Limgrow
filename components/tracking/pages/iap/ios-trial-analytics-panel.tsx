@@ -133,50 +133,6 @@ function TrialConversionTooltip({
   );
 }
 
-const MOCK_TRIAL_CHART_DATA: Record<
-  IapTrialConversionGranularity,
-  TrialConversionDatum[]
-> = {
-  day: [
-    { continued: 4, label: "17 Jun", rate: 44.4, trials: 9 },
-    { continued: 5, label: "18 Jun", rate: 45.5, trials: 11 },
-    { continued: 7, label: "19 Jun", rate: 53.8, trials: 13 },
-    { continued: 6, label: "20 Jun", rate: 46.2, trials: 13 },
-    { continued: 8, label: "21 Jun", rate: 57.1, trials: 14 },
-    { continued: 7, label: "22 Jun", rate: 50.0, trials: 14 },
-    { continued: 9, label: "23 Jun", rate: 56.3, trials: 16 },
-    { continued: 10, label: "24 Jun", rate: 58.8, trials: 17 },
-    { continued: 12, label: "25 Jun", rate: 63.2, trials: 19 },
-    { continued: 11, label: "26 Jun", rate: 55.0, trials: 20 },
-    { continued: 13, label: "27 Jun", rate: 61.9, trials: 21 },
-    { continued: 14, label: "28 Jun", rate: 63.6, trials: 22 },
-    { continued: 16, label: "29 Jun", rate: 66.7, trials: 24 },
-    { continued: 17, label: "30 Jun", rate: 68.0, trials: 25 },
-  ],
-  month: [
-    { continued: 18, label: "Jan", rate: 42.9, trials: 42 },
-    { continued: 24, label: "Feb", rate: 46.2, trials: 52 },
-    { continued: 31, label: "Mar", rate: 50.8, trials: 61 },
-    { continued: 29, label: "Apr", rate: 47.5, trials: 61 },
-    { continued: 38, label: "May", rate: 55.1, trials: 69 },
-    { continued: 44, label: "Jun", rate: 57.9, trials: 76 },
-  ],
-  week: [
-    { continued: 18, label: "14 Apr - 20 Apr", rate: 43.9, trials: 41 },
-    { continued: 22, label: "21 Apr - 27 Apr", rate: 46.8, trials: 47 },
-    { continued: 24, label: "28 Apr - 04 May", rate: 47.1, trials: 51 },
-    { continued: 29, label: "05 May - 11 May", rate: 52.7, trials: 55 },
-    { continued: 31, label: "12 May - 18 May", rate: 53.4, trials: 58 },
-    { continued: 34, label: "19 May - 25 May", rate: 55.7, trials: 61 },
-    { continued: 33, label: "26 May - 01 Jun", rate: 51.6, trials: 64 },
-    { continued: 37, label: "02 Jun - 08 Jun", rate: 55.2, trials: 67 },
-    { continued: 41, label: "09 Jun - 15 Jun", rate: 58.6, trials: 70 },
-    { continued: 43, label: "16 Jun - 22 Jun", rate: 58.1, trials: 74 },
-    { continued: 48, label: "23 Jun - 29 Jun", rate: 61.5, trials: 78 },
-    { continued: 52, label: "30 Jun - 06 Jul", rate: 64.2, trials: 81 },
-  ],
-};
-
 function TrialConversionAreaChart({ data }: { data: TrialConversionDatum[] }) {
   if (!data.length) {
     return (
@@ -276,10 +232,7 @@ export function IosTrialAnalyticsPanel({
     rate: cohort.conversionRate,
     trials: cohort.trialStarted,
   }));
-  const hasRealTrialData = realTrialChartData.length > 0;
-  const trialChartData = hasRealTrialData
-    ? realTrialChartData
-    : MOCK_TRIAL_CHART_DATA[granularity];
+  const trialChartData = realTrialChartData;
 
   async function retryEvent(event: IapNotificationEventDto) {
     setRetryingEventId(event.id);
@@ -333,14 +286,6 @@ export function IosTrialAnalyticsPanel({
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {!hasRealTrialData ? (
-                <Badge
-                  variant="outline"
-                  className="border-blue-200 bg-blue-50 text-blue-700"
-                >
-                  Mock data
-                </Badge>
-              ) : null}
               <div className="inline-flex w-fit rounded-lg border bg-muted/30 p-1">
                 {TRIAL_GRANULARITIES.map((item) => (
                   <Button
@@ -371,9 +316,7 @@ export function IosTrialAnalyticsPanel({
               </div>
             </div>
             <div className="text-xs text-muted-foreground">
-              {hasRealTrialData
-                ? `${formatNumber(analytics.notConvertedCount)} not converted`
-                : "Mock preview"}
+              {formatNumber(analytics.notConvertedCount)} not converted
             </div>
           </div>
           <TrialConversionAreaChart data={trialChartData} />
