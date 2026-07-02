@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadEnvConfig } from "@next/env";
 
 const DEFAULT_INTERVAL_MS = 3 * 60_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
@@ -313,6 +314,7 @@ function startNotificationQueueCronLoop(): CronLoop {
 }
 
 const { command, forwardedArgs } = resolveRuntimeCommand(process.argv.slice(2));
+loadEnvConfig(projectRoot, command === "dev");
 const port = portFromArgs(forwardedArgs);
 const nextArgs = [command, ...forwardedArgs];
 const nextEnv = {
