@@ -33,6 +33,7 @@ import {
   jobSuccessRate,
   localePayloadForRows,
   localeRowsFromPayload,
+  notificationJobCompletionPercent,
   notificationJobBadgeStatus,
   notificationImpressionEventCount,
   notificationOpenEventCount,
@@ -282,17 +283,13 @@ function niceChartMax(value: number) {
 
 function HistoryJobDashboard({
   failed,
-  impressions,
   opened,
-  received,
   requested,
   rows,
   sent,
 }: {
   failed: number;
-  impressions: number;
   opened: number;
-  received: number;
   requested: number;
   rows: DeliveryRow[];
   sent: number;
@@ -304,8 +301,6 @@ function HistoryJobDashboard({
   const bars = [
     { color: "#c7d137", label: "Requested", value: requested },
     { color: "#54b8be", label: "Sent", value: sent },
-    { color: "#255f76", label: "Received", value: received },
-    { color: "#ef5965", label: "Impressions", value: impressions },
     { color: "#f7b933", label: "Opened", value: opened },
     { color: "#8b73aa", label: "Failed", value: failed },
   ].map((item) => ({
@@ -674,6 +669,8 @@ export function NotificationHistoryPage({
                     const impressions = notificationUniqueImpressionCount(jobEvents);
                     const impressionEvents = notificationImpressionEventCount(jobEvents);
                     const isPending = pendingHistoryJobId === job.id;
+                    const badgeStatus = notificationJobBadgeStatus(job);
+                    const completionPercent = notificationJobCompletionPercent(job);
 
                     return (
                       <TableRow
@@ -723,7 +720,12 @@ export function NotificationHistoryPage({
                           <div className="text-xs text-muted-foreground">{rateLabel(jobSuccessRate(job))} success</div>
                         </TableCell>
                         <TableCell>
-                          <StatusBadge status={notificationJobBadgeStatus(job)} />
+                          <StatusBadge status={badgeStatus} />
+                          {badgeStatus === "processing" ? (
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {completionPercent}% complete
+                            </div>
+                          ) : null}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{dateTime(job.sent_at ?? job.created_at)}</TableCell>
                         <TableCell>
@@ -776,6 +778,11 @@ export function NotificationHistoryPage({
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="font-heading text-lg font-semibold">{historyDetailJob.app_name}</h2>
                       <StatusBadge status={notificationJobBadgeStatus(historyDetailJob)} />
+                      {notificationJobBadgeStatus(historyDetailJob) === "processing" ? (
+                        <span className="text-xs text-muted-foreground">
+                          {notificationJobCompletionPercent(historyDetailJob)}% complete
+                        </span>
+                      ) : null}
                       <PlatformBadge platform={historyDetailJob.platform} />
                     </div>
                     <div className="mt-1 truncate text-sm text-muted-foreground">
@@ -852,9 +859,7 @@ export function NotificationHistoryPage({
                   <TabsContent value="dashboard" className="m-0">
                     <HistoryJobDashboard
                       failed={historyDetailFailed}
-                      impressions={historyDetailImpressionEvents}
                       opened={historyDetailOpenEvents}
-                      received={historyDetailReceivedEvents}
                       requested={historyDetailRequested}
                       rows={historyDeliveryRows}
                       sent={historyDetailSent}
