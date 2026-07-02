@@ -15,9 +15,9 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,8 @@ const ACTIVE_STATUSES = new Set(["queued", "running"]);
 const FINAL_STATUSES = new Set(["succeeded", "failed", "partial"]);
 const TRAY_MARGIN = 16;
 const TRAY_POSITION_STORAGE_KEY = "tracking-background-job-tray-position";
+const DISMISSED_JOBS_STORAGE_KEY = "tracking-background-job-dismissed-ids";
+const MAX_DISMISSED_JOB_IDS = 200;
 
 type TrayPosition = {
   x: number;
@@ -89,6 +91,42 @@ function persistTrayPosition(position: TrayPosition | null) {
     TRAY_POSITION_STORAGE_KEY,
     JSON.stringify(position),
   );
+}
+
+function readDismissedJobIds() {
+  if (typeof window === "undefined") return new Set<string>();
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(DISMISSED_JOBS_STORAGE_KEY) ?? "[]",
+    );
+    if (!Array.isArray(parsed)) return new Set<string>();
+
+    return new Set(
+      parsed.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      ),
+    );
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function persistDismissedJobIds(ids: Set<string>) {
+  if (typeof window === "undefined") return;
+
+  const recentIds = Array.from(ids).slice(-MAX_DISMISSED_JOB_IDS);
+  ids.clear();
+  recentIds.forEach((id) => ids.add(id));
+  try {
+    window.localStorage.setItem(
+      DISMISSED_JOBS_STORAGE_KEY,
+      JSON.stringify(recentIds),
+    );
+  } catch {
+    // Ignore storage failures; in-memory dismissal still keeps this session tidy.
+  }
 }
 
 function clampTrayPosition(
@@ -283,13 +321,13 @@ function BackgroundJobRow({
 
   if (canOpen) {
     return (
-      <button
-        type="button"
+      <Link
+        href={job.result_url ?? "#"}
         onClick={() => onOpen(job)}
         className="block w-full border-b px-3 py-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 last:border-b-0"
       >
         {content}
-      </button>
+      </Link>
     );
   }
 
@@ -301,7 +339,6 @@ function BackgroundJobRow({
 }
 
 export function BackgroundJobTray() {
-  const router = useRouter();
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);
   const [activeCount, setActiveCount] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -310,11 +347,13 @@ export function BackgroundJobTray() {
   const [loading, setLoading] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [trayPosition, setTrayPosition] = useState<TrayPosition | null>(null);
-  const dismissedJobIdsRef = useRef<Set<string>>(new Set());
+  const dismissedJobIdsRef = useRef<Set<string>>(readDismissedJobIds());
   const dragStateRef = useRef<TrayDragState | null>(null);
+  const hiddenRef = useRef(false);
   const hydratedRef = useRef(false);
   const jobsSignatureRef = useRef("");
   const latestTrayPositionRef = useRef<TrayPosition | null>(null);
+  const notifiedFinalJobIdsRef = useRef<Set<string>>(new Set());
   const statusRef = useRef<Map<string, BackgroundJob["status"]>>(new Map());
   const trayRef = useRef<HTMLDivElement | null>(null);
 
@@ -370,22 +409,48 @@ export function BackgroundJobTray() {
     const visibleNextJobs = nextJobs.filter(
       (job) => !dismissedJobIdsRef.current.has(job.id),
     );
-    statusRef.current = new Map(visibleNextJobs.map((job) => [job.id, job.status]));
-    const nextActiveCount = visibleNextJobs.filter((job) =>
+    statusRef.current = new Map(nextJobs.map((job) => [job.id, job.status]));
+    const nextActiveCount = nextJobs.filter((job) =>
       ACTIVE_STATUSES.has(job.status),
     ).length;
-    const nextSignature = jobsSignature(visibleNextJobs);
     setActiveCount((current) =>
       current === nextActiveCount ? current : nextActiveCount,
     );
+
+    if (hiddenRef.current) {
+      jobsSignatureRef.current = "";
+      setJobs((current) => current.length ? [] : current);
+      return;
+    }
+
+    const nextSignature = jobsSignature(visibleNextJobs);
     if (jobsSignatureRef.current === nextSignature) return;
     jobsSignatureRef.current = nextSignature;
     setJobs(visibleNextJobs);
   }, []);
 
+  const dismissJobs = useCallback((jobsToDismiss: BackgroundJob[]) => {
+    if (!jobsToDismiss.length) return;
+
+    const ids = new Set(jobsToDismiss.map((job) => job.id));
+    ids.forEach((id) => {
+      dismissedJobIdsRef.current.delete(id);
+      dismissedJobIdsRef.current.add(id);
+    });
+    persistDismissedJobIds(dismissedJobIdsRef.current);
+
+    setJobs((current) => {
+      const nextJobs = current.filter((job) => !ids.has(job.id));
+      jobsSignatureRef.current = jobsSignature(nextJobs);
+      return nextJobs;
+    });
+  }, []);
+
   const prependJob = useCallback(
     (job: BackgroundJob) => {
       dismissedJobIdsRef.current.delete(job.id);
+      persistDismissedJobIds(dismissedJobIdsRef.current);
+      hiddenRef.current = false;
       setHidden(false);
       setOpen(true);
       setJobs((current) => {
@@ -409,14 +474,11 @@ export function BackgroundJobTray() {
     [],
   );
 
-  const openJobResult = useCallback(
-    (job: BackgroundJob) => {
-      if (!job.result_url) return;
-      setOpen(false);
-      router.push(job.result_url);
-    },
-    [router],
-  );
+  const openJobResult = useCallback((job: BackgroundJob) => {
+    if (!job.result_url) return;
+    dismissJobs([job]);
+    setOpen(false);
+  }, [dismissJobs]);
 
   const moveTray = useCallback((position: TrayPosition) => {
     const nextPosition = clampTrayPosition(position, trayRef.current);
@@ -434,17 +496,14 @@ export function BackgroundJobTray() {
 
   const hideTray = useCallback(() => {
     dragStateRef.current = null;
-    setJobs((current) => {
-      current.forEach((job) => dismissedJobIdsRef.current.add(job.id));
-      statusRef.current = new Map();
-      jobsSignatureRef.current = "";
-      return [];
-    });
+    hiddenRef.current = true;
+    dismissJobs(jobs);
+    jobsSignatureRef.current = "";
     setActiveCount(0);
     setDragging(false);
     setHidden(true);
     setOpen(false);
-  }, []);
+  }, [dismissJobs, jobs]);
 
   const startTrayDrag = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -534,8 +593,10 @@ export function BackgroundJobTray() {
             if (
               previousStatus &&
               ACTIVE_STATUSES.has(previousStatus) &&
-              FINAL_STATUSES.has(job.status)
+              FINAL_STATUSES.has(job.status) &&
+              !notifiedFinalJobIdsRef.current.has(job.id)
             ) {
+              notifiedFinalJobIdsRef.current.add(job.id);
               void showToast(finalToastType(job.status), finalToastMessage(job));
             }
           }

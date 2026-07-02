@@ -14,7 +14,7 @@ import {
   notificationScheduleToTracking,
 } from "@/lib/tracking/mappers/notification";
 import type { NotificationCountStat } from "@/lib/tracking/page-data";
-import type { DeviceToken, StoreMapping } from "@/lib/tracking/types";
+import type { DeviceToken, NotificationJob, StoreMapping } from "@/lib/tracking/types";
 
 const deviceTokenSummarySelect = {
   appId: true,
@@ -63,6 +63,13 @@ type NotificationRecordPageOptions = {
   skip?: number;
   store?: string;
   take?: number;
+};
+
+type NotificationJobBatchProgress = {
+  batchDoneCount: number;
+  batchProcessedTargetCount: number;
+  batchTargetCount: number;
+  batchTotalCount: number;
 };
 
 type NotificationStatsScopeApp = Pick<
@@ -362,13 +369,72 @@ function notificationScheduleWhere(options: NotificationRecordPageOptions = {}):
   return and.length ? { AND: and } : {};
 }
 
+async function getNotificationJobBatchProgress(jobIds: string[]) {
+  if (!jobIds.length) return new Map<string, NotificationJobBatchProgress>();
+
+  const rows = await prisma.$queryRaw<Array<{
+    batch_done_count: number;
+    batch_processed_target_count: number;
+    batch_target_count: number;
+    batch_total_count: number;
+    job_id: string;
+  }>>(Prisma.sql`
+    select
+      job_id::text,
+      count(*)::int as batch_total_count,
+      count(*) filter (
+        where status not in ('queued', 'retrying', 'processing')
+      )::int as batch_done_count,
+      coalesce(sum(cardinality(target_values)), 0)::int as batch_target_count,
+      coalesce(sum(cardinality(target_values)) filter (
+        where status not in ('queued', 'retrying', 'processing')
+      ), 0)::int as batch_processed_target_count
+    from notification_job_batches
+    where job_id::text in (${Prisma.join(jobIds)})
+    group by job_id
+  `);
+
+  return new Map(
+    rows.map((row) => [
+      row.job_id,
+      {
+        batchDoneCount: Number(row.batch_done_count),
+        batchProcessedTargetCount: Number(row.batch_processed_target_count),
+        batchTargetCount: Number(row.batch_target_count),
+        batchTotalCount: Number(row.batch_total_count),
+      },
+    ]),
+  );
+}
+
+async function hydrateNotificationJobBatchProgress(jobs: NotificationJob[]) {
+  if (!jobs.length) return jobs;
+
+  const progressByJobId = await getNotificationJobBatchProgress(
+    jobs.map((job) => job.id),
+  );
+
+  return jobs.map((job) => {
+    const progress = progressByJobId.get(job.id);
+    if (!progress) return job;
+
+    return {
+      ...job,
+      batch_done_count: progress.batchDoneCount,
+      batch_processed_target_count: progress.batchProcessedTargetCount,
+      batch_target_count: progress.batchTargetCount,
+      batch_total_count: progress.batchTotalCount,
+    };
+  });
+}
+
 export async function getNotificationJobs(take = 50) {
   const jobs = await prisma.notificationJob.findMany({
     orderBy: { createdAt: "desc" },
     take,
   });
 
-  return jobs.map(notificationJobToTracking);
+  return hydrateNotificationJobBatchProgress(jobs.map(notificationJobToTracking));
 }
 
 export async function getNotificationJobPage(options: NotificationRecordPageOptions = {}) {
@@ -385,7 +451,7 @@ export async function getNotificationJobPage(options: NotificationRecordPageOpti
   ]);
 
   return {
-    data: jobs.map(notificationJobToTracking),
+    data: await hydrateNotificationJobBatchProgress(jobs.map(notificationJobToTracking)),
     total,
   };
 }
@@ -399,7 +465,7 @@ export async function getNotificationJobsForApps(apps: StoreMapping[], take = 50
     where: notificationJobWhere({ apps }),
   });
 
-  return jobs.map(notificationJobToTracking);
+  return hydrateNotificationJobBatchProgress(jobs.map(notificationJobToTracking));
 }
 
 export async function getNotificationJobById(id: string) {
@@ -407,7 +473,12 @@ export async function getNotificationJobById(id: string) {
     where: { id },
   });
 
-  return job ? notificationJobToTracking(job) : null;
+  if (!job) return null;
+
+  const [hydratedJob] = await hydrateNotificationJobBatchProgress([
+    notificationJobToTracking(job),
+  ]);
+  return hydratedJob ?? null;
 }
 
 export async function getNotificationSchedules(take = 50) {
