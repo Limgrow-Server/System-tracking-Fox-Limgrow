@@ -513,9 +513,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         </div>
 
         <IapRevenueChart
+          buckets={metrics.revenueBuckets}
           revenue={stats.rev}
           trendPct={stats.sg}
-          transactions={transactions}
         />
       </div>
 
