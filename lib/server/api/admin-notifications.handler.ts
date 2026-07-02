@@ -84,14 +84,19 @@ function errorForLog(error: unknown) {
 }
 
 function notificationRequestContext(body: Record<string, unknown>) {
+  const deviceIds = stringArray(body.deviceIds || body.targetValues);
+  const deviceTokenIds = stringArray(body.deviceTokenIds);
+
   return {
     appId: firstAppId(body.appId, body.productAppId),
     appName: clean(body.appName) || null,
     bundleId: clean(body.bundleId) || null,
-    deviceIdsCount: stringArray(body.deviceIds || body.targetValues).length,
+    deviceIdsCount: deviceIds.length,
+    deviceTokenIdsCount: deviceTokenIds.length,
     packageName: clean(body.packageName) || null,
     platform: clean(body.platform) || null,
     scheduleId: clean(body.scheduleId) || null,
+    targetCount: deviceTokenIds.length || deviceIds.length,
     targetType: clean(body.targetType) || null,
   };
 }
@@ -259,6 +264,109 @@ function primaryNotification(notifications: ReturnType<typeof normalizedNotifica
   return notifications.find((notification) => notification.topicCode === "en") ?? notifications[0];
 }
 
+function safeNotifications(payload: Record<string, unknown>) {
+  try {
+    return normalizedNotifications(payload.notifications);
+  } catch {
+    const title = clean(payload.title);
+    const message = clean(payload.message);
+    return title || message ? [{ enabled: true, message, title, topicCode: "en" }] : [];
+  }
+}
+
+function failedSendTargetValues(
+  payload: Record<string, unknown>,
+  targetType: "device" | "topic",
+  notifications: ReturnType<typeof safeNotifications>,
+) {
+  if (targetType === "device") {
+    return [
+      ...stringArray(payload.deviceTokenIds),
+      ...stringArray(payload.deviceIds || payload.targetValues),
+    ];
+  }
+
+  const topicBase = topicSegment(payload.topicBase) || clean(payload.appName) || "notification";
+  return notifications.length
+    ? notifications.map((item) => `${topicBase}-${item.topicCode}`)
+    : [topicBase];
+}
+
+function failedSendErrorCode(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80) || "send_failed";
+}
+
+async function persistFailedSendAttempt(
+  payload: Record<string, unknown>,
+  requestedBy: string,
+  error: unknown,
+) {
+  const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
+  const notifications = safeNotifications(payload);
+  const firstNotification = notifications.length ? primaryNotification(notifications) : null;
+  const targetValues = failedSendTargetValues(payload, targetType, notifications);
+  const appId = firstAppId(payload.appId, payload.productAppId, payload.appName);
+  const platform = clean(payload.platform) || "android";
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorCode = failedSendErrorCode(error);
+  const now = new Date();
+
+  const job = await prisma.notificationJob.create({
+    data: {
+      appId,
+      appName: clean(payload.appName) || clean(payload.productAppId) || "unknown_app",
+      bundleId: platform === "ios" ? clean(payload.bundleId) || null : null,
+      credentialRef: clean(payload.credentialRef) || null,
+      dataPayload: jsonObject(payload.data) as Prisma.InputJsonValue,
+      errorCount: Math.max(targetValues.length, 1),
+      imageUrl: clean(payload.imageUrl) || null,
+      localePayload: notifications as Prisma.InputJsonValue,
+      message: firstNotification?.message || null,
+      packageName: platform === "android" ? clean(payload.packageName) || null : null,
+      platform,
+      requestedBy,
+      scheduleId: clean(payload.scheduleId) || null,
+      sentAt: now,
+      sentCount: 0,
+      status: "failed",
+      storeAccountName: clean(payload.storeAccountName) || null,
+      storePlatform: clean(payload.storePlatform) || null,
+      storeProfileId: clean(payload.storeProfileId) || null,
+      targetType,
+      targetValues,
+      title: firstNotification?.title || null,
+      topicBase: topicSegment(payload.topicBase) || clean(payload.appName) || "device",
+      updatedAt: now,
+    },
+  });
+
+  await prisma.notificationEvent.create({
+    data: {
+      errorCode,
+      errorDetail: errorMessage.slice(0, 500),
+      eventType: "fcm_failed",
+      jobId: job.id,
+      metadata: {
+        context: notificationRequestContext(payload),
+        source: "next_send_api_fallback",
+      } as Prisma.InputJsonValue,
+      notificationId: job.id,
+      platform,
+      status: "failed",
+      targetType,
+      targetValue: targetValues[0] ?? null,
+    },
+  });
+
+  return job;
+}
+
 async function currentAccessToken() {
   const supabase = await createClient();
   const {
@@ -357,11 +465,16 @@ async function callEdgeFunction(functionName: string, body: Record<string, unkno
 
 export async function handleAdminNotificationSendPost(request: Request) {
   let requestPayload: Record<string, unknown> | null = null;
+  let canPersistFailedAttempt = false;
+  let requestedBy: string | null = null;
+
   try {
     const session = await requireConsoleApiSession([...notificationManageRoles]);
+    requestedBy = session.email;
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     await assertNotificationAccess(session, payload);
+    canPersistFailedAttempt = true;
     const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
     const deviceIds = stringArray(payload.deviceIds || payload.targetValues);
     const queueByApp =
@@ -451,6 +564,25 @@ export async function handleAdminNotificationSendPost(request: Request) {
       result,
     });
   } catch (error) {
+    if (requestPayload && requestedBy && canPersistFailedAttempt) {
+      try {
+        const failedJob = await persistFailedSendAttempt(requestPayload, requestedBy, error);
+        revalidateCacheTags([
+          CACHE_TAGS.notificationEvents,
+          CACHE_TAGS.notificationJobs,
+        ]);
+        logNotificationFailure("Persisted failed notification attempt", {
+          context: notificationRequestContext(requestPayload),
+          jobId: failedJob.id,
+        });
+      } catch (historyError) {
+        logNotificationFailure("Failed to persist notification failure history", {
+          context: notificationRequestContext(requestPayload),
+          error: errorForLog(historyError),
+        });
+      }
+    }
+
     logNotificationFailure("Send notification API failed", {
       context: requestPayload ? notificationRequestContext(requestPayload) : null,
       error: errorForLog(error),
