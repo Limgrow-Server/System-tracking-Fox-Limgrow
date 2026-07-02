@@ -3,6 +3,7 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 
 export function getTeamMembers(options?: { take?: number }) {
   return prisma.teamMember.findMany({
@@ -31,11 +32,14 @@ function teamMemberPageWhere(
   }
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
-    where.OR = [
-      { name: contains },
-      { email: contains },
-    ];
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { name: contains },
+        { email: contains },
+      ];
+    });
   }
 
   if (options.appScopeKey || options.storeScopeKey) {

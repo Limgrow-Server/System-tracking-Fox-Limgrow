@@ -245,6 +245,8 @@ model IapAndroid {
 
   @@unique([packageName, purchaseToken])
   @@index([packageName, productId])
+  @@index([packageName, storeProfileId, verifiedAt], map: "iap_android_package_profile_verified_idx")
+  @@index([packageName, storeProfileId, purchaseDate], map: "iap_android_package_profile_purchase_idx")
   @@index([state, purchaseDate])
   @@index([storeProfileId])
   @@map("iap_android")

@@ -3,6 +3,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 
 import { CACHE_TAGS } from "@/lib/server/cache-tags";
+import { valuesMatchSearch } from "@/lib/search";
 import {
   getAllActiveStoreMappings,
   getAndroidMappingById,
@@ -19,7 +20,11 @@ import {
   type PaginatedResult,
   type PaginationQuery,
 } from "@/lib/server/api/pagination";
-import type { IapAppCard, IapAppTransaction } from "@/lib/tracking/page-data";
+import type {
+  IapAppCard,
+  IapAppMetrics,
+  IapAppTransaction,
+} from "@/lib/tracking/page-data";
 import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
 import { getIosTrialConversionAnalytics } from "@/lib/server/services/iap/ios-iap-analytics.service";
 import { iosIapTransactionToSummary } from "@/lib/tracking/mappers/ios";
@@ -52,7 +57,7 @@ function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions
     options?.platform === "android" || options?.platform === "ios"
       ? options.platform
       : "";
-  const search = options?.search?.trim().toLowerCase();
+  const search = options?.search;
   const storeAccountName = options?.storeAccountName?.trim().toLowerCase();
 
   return apps.filter((app) => {
@@ -60,12 +65,12 @@ function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions
     const matchesStore =
       !storeAccountName ||
       app.storeAccountName.toLowerCase() === storeAccountName;
-    const matchesSearch =
-      !search ||
-      app.appName.toLowerCase().includes(search) ||
-      app.identifier.toLowerCase().includes(search) ||
-      app.storeAccountName.toLowerCase().includes(search) ||
-      Boolean(app.appId?.toLowerCase().includes(search));
+    const matchesSearch = valuesMatchSearch([
+      app.appName,
+      app.identifier,
+      app.storeAccountName,
+      app.appId,
+    ], search);
 
     return matchesPlatform && matchesStore && matchesSearch;
   });
@@ -140,7 +145,7 @@ export async function getIapAppDetail(
   },
 ): Promise<{
   appCard: IapAppCard;
-  metricTransactions: IapAppTransaction[];
+  metrics: IapAppMetrics;
   trialAnalytics: Awaited<ReturnType<typeof getIosTrialConversionAnalytics>> | null;
   transactionStates: string[];
   transactions: PaginatedResult<IapAppTransaction>;
@@ -161,7 +166,7 @@ export async function getIapAppDetail(
       storeProfileId: mapping.storeProfileId,
     };
 
-    const [[rawTransactions, total], metricTransactions, transactionStates] =
+    const [[rawTransactions, total], metrics, transactionStates] =
       await Promise.all([
         getAndroidTransactionsByPackageAndProfilePage(
           mapping.packageName,
@@ -181,8 +186,8 @@ export async function getIapAppDetail(
 
     return {
       appCard,
-      metricTransactions: metricTransactions.map(iapAndroidToDto),
       trialAnalytics: null,
+      metrics,
       transactionStates,
       transactions: paginatedResult(
         rawTransactions.map(iapAndroidToDto),
@@ -208,7 +213,7 @@ export async function getIapAppDetail(
 
     const [
       [rawTransactions, total],
-      metricTransactions,
+      metrics,
       transactionStates,
       trialAnalytics,
     ] = await Promise.all([
@@ -231,8 +236,8 @@ export async function getIapAppDetail(
 
     return {
       appCard,
-      metricTransactions: metricTransactions.map(iosIapTransactionToSummary),
       trialAnalytics,
+      metrics,
       transactionStates,
       transactions: paginatedResult(
         rawTransactions.map(iosIapTransactionToSummary),

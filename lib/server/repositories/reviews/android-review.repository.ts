@@ -12,6 +12,7 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 import { ensureAndroidReviewTargetsForMapping } from "@/lib/server/repositories/reviews/review.repository";
 
 export type AndroidReviewUpsertInput = {
@@ -168,14 +169,6 @@ export function getAndroidReviewReplyGroups(mappingIds: string[]) {
   });
 }
 
-export function getAndroidReviewsForMapping(mappingId: string, take = 300) {
-  return prisma.androidStoreReview.findMany({
-    where: { storeMappingId: mappingId },
-    orderBy: [{ userCommentUpdatedAt: "desc" }, { fetchedAt: "desc" }],
-    take,
-  });
-}
-
 type AndroidReviewPageOptions = {
   rating?: string;
   reply?: string;
@@ -205,13 +198,16 @@ function androidReviewWhere(
   }
 
   if (search) {
-    const contains = { contains: search, mode: "insensitive" as const };
-    where.OR = [
-      { authorName: contains },
-      { originalText: contains },
-      { reviewId: contains },
-      { reviewText: contains },
-    ];
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { authorName: contains },
+        { originalText: contains },
+        { reviewId: contains },
+        { reviewText: contains },
+      ];
+    });
   }
 
   return where;

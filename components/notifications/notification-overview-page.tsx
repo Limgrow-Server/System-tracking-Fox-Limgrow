@@ -16,7 +16,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
-import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
+import type { NotificationCountStat, NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
 import type { DeviceToken, NotificationSchedule, StoreMapping } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
@@ -26,8 +26,6 @@ import {
   AppSearchDropdown,
   PlatformBadge,
   numberLabel,
-  scheduleMatchesApp,
-  tokensForApp,
 } from "./shared";
 
 const OVERVIEW_APP_SKELETON_COUNT = 8;
@@ -40,17 +38,13 @@ function appIdentifier(app: StoreMapping) {
   return app.package_name ?? app.bundle_id ?? app.app_id ?? app.app_name;
 }
 
-function latestSeen(tokens: DeviceToken[]) {
-  return tokens
-    .map((token) => new Date(token.last_seen_at).getTime())
-    .filter(Number.isFinite)
-    .sort((first, second) => second - first)[0] ?? null;
-}
-
 type OverviewAppsResponse = {
   data?: StoreMapping[];
   deviceTokens?: DeviceToken[];
   error?: string;
+  notificationDeviceCounts?: Record<string, number>;
+  notificationScheduleStats?: Record<string, NotificationCountStat>;
+  notificationTokenStats?: Record<string, NotificationCountStat>;
   notificationSchedules?: NotificationSchedule[];
   page?: number;
   pageSize?: number;
@@ -72,10 +66,8 @@ export function NotificationOverviewPage({
   const [, startTransition] = useTransition();
   const initialLoadStarted = useRef(false);
   const [storeMappings, setStoreMappings] = useState(data.storeMappings);
-  const [deviceTokens, setDeviceTokens] = useState(data.deviceTokens);
-  const [notificationSchedules, setNotificationSchedules] = useState(
-    data.notificationSchedules,
-  );
+  const [tokenStats, setTokenStats] = useState(data.notificationTokenStats);
+  const [scheduleStats, setScheduleStats] = useState(data.notificationScheduleStats);
   const [overviewPagination, setOverviewPagination] =
     useState<PaginationMeta>(
       data.notificationPagination.overviewApps ?? {
@@ -97,22 +89,19 @@ export function NotificationOverviewPage({
   const appRows = useMemo(() => {
     return storeMappings
       .map((app) => {
-        const tokens = tokensForApp(app, deviceTokens);
-        const activeTokens = tokens.filter((token) => statusValue(token.status) === "active");
-        const schedules = notificationSchedules.filter((schedule) => scheduleMatchesApp(schedule, app));
-        const activeSchedules = schedules.filter((schedule) => statusValue(schedule.status) === "active");
-        const latestSeenAt = latestSeen(tokens);
+        const tokenStat = tokenStats[app.id] ?? { active: 0, lastSeenAt: null, total: 0 };
+        const scheduleStat = scheduleStats[app.id] ?? { active: 0, lastSeenAt: null, total: 0 };
 
         return {
-          activeSchedules,
-          activeTokens,
           app,
-          latestSeenAt,
-          schedules,
-          tokens,
+          latestSeenAt: tokenStat.lastSeenAt,
+          scheduleActive: scheduleStat.active,
+          scheduleTotal: scheduleStat.total,
+          tokenActive: tokenStat.active,
+          tokenTotal: tokenStat.total,
         };
       });
-  }, [deviceTokens, notificationSchedules, storeMappings]);
+  }, [scheduleStats, storeMappings, tokenStats]);
 
   async function loadOverviewPage(
     page: number,
@@ -148,8 +137,8 @@ export function NotificationOverviewPage({
       }
 
       setStoreMappings(payload.data);
-      setDeviceTokens(payload.deviceTokens ?? []);
-      setNotificationSchedules(payload.notificationSchedules ?? []);
+      setTokenStats(payload.notificationTokenStats ?? {});
+      setScheduleStats(payload.notificationScheduleStats ?? {});
       setOverviewPagination({
         page: payload.page ?? page,
         pageSize: payload.pageSize ?? 10,
@@ -366,15 +355,15 @@ export function NotificationOverviewPage({
                         <div className="truncate rounded-md bg-muted px-2 py-1 font-mono text-xs">{appIdentifier(row.app)}</div>
                       </TableCell>
                       <TableCell>
-                        <div className="font-mono text-base font-semibold">{numberLabel(row.tokens.length)}</div>
-                        <div className="text-xs text-muted-foreground">{numberLabel(row.activeTokens.length)} active</div>
+                        <div className="font-mono text-base font-semibold">{numberLabel(row.tokenTotal)}</div>
+                        <div className="text-xs text-muted-foreground">{numberLabel(row.tokenActive)} active</div>
                       </TableCell>
                       <TableCell>
-                        <div className="font-mono text-base font-semibold">{numberLabel(row.schedules.length)}</div>
-                        <div className="text-xs text-muted-foreground">{numberLabel(row.activeSchedules.length)} active</div>
+                        <div className="font-mono text-base font-semibold">{numberLabel(row.scheduleTotal)}</div>
+                        <div className="text-xs text-muted-foreground">{numberLabel(row.scheduleActive)} active</div>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {row.latestSeenAt ? dateTime(new Date(row.latestSeenAt).toISOString()) : "No token"}
+                        {row.latestSeenAt ? dateTime(row.latestSeenAt) : "No token"}
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={statusValue(row.app.status)} />

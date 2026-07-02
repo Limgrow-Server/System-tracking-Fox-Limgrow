@@ -4,7 +4,7 @@ import {
   jsonResponse as json,
 } from "../_shared/edge-config.ts";
 import {
-  requireAdminCaller,
+  requireAdminOrInternalCaller,
   sendNotificationPayload,
   type SendNotificationRequest,
 } from "./notification-sender.ts";
@@ -47,7 +47,7 @@ Deno.serve(async (request) => {
   try {
     const payload = (await request.json()) as SendNotificationRequest;
     const supabase = createAdminClient();
-    const caller = await requireAdminCaller(supabase, request);
+    const caller = await requireAdminOrInternalCaller(supabase, request);
     const result = await sendNotificationPayload(supabase, payload, caller.email);
 
     return json({

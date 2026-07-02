@@ -23,6 +23,10 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  searchTextVariants,
+  valuesMatchSearch as fuzzyValuesMatchSearch,
+} from "@/lib/search";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData } from "@/lib/tracking/page-data";
 import type {
@@ -74,10 +78,13 @@ export type SendResponse = {
   ok?: boolean;
   error?: string;
   result?: {
+    batchCount?: number;
     errorCount?: number;
     job?: NotificationJob;
+    queued?: boolean;
     results?: SendResult[];
     sentCount?: number;
+    targetCount?: number;
   };
 };
 
@@ -107,6 +114,8 @@ export type AppSendSummary = {
   errorCount: number;
   jobId?: string;
   platform: PlatformFilter | string;
+  queued?: boolean;
+  batchCount?: number;
   results: SendResult[];
   sentCount: number;
   totalCount: number;
@@ -291,10 +300,7 @@ export function matchingFirebaseCredentials(app: StoreMapping, credentials: Cred
 }
 
 export function appMatchesSearch(app: StoreMapping, search: string) {
-  const query = search.trim().toLowerCase();
-  if (!query) return true;
-
-  return [
+  return fuzzyValuesMatchSearch([
     app.app_name,
     app.app_id,
     app.store_account_name,
@@ -302,7 +308,7 @@ export function appMatchesSearch(app: StoreMapping, search: string) {
     app.bundle_id,
     app.platform,
     app.status,
-  ].some((value) => value?.toLowerCase().includes(query));
+  ], search);
 }
 
 function normalizedValue(value: string | null | undefined) {
@@ -310,9 +316,14 @@ function normalizedValue(value: string | null | undefined) {
 }
 
 function normalizedValues(values: Array<string | null | undefined>) {
-  return values
-    .map(normalizedValue)
-    .filter((value): value is string => Boolean(value));
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) => searchTextVariants(value))
+        .map(normalizedValue)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
 }
 
 function valuesOverlap(
@@ -339,6 +350,8 @@ export function deviceTokenMatchesApp(
   const appIdentifier = app.platform === "android" ? app.package_name : app.bundle_id;
   const deviceIdentifiers = normalizedValues([device.app_identifier]);
   if (sameValue(appIdentifier, device.app_identifier)) return true;
+  if (sameValue(app.package_name, device.package_name)) return true;
+  if (sameValue(app.bundle_id, device.bundle_id)) return true;
 
   const appIds = normalizedValues([app.app_id]);
   const deviceIds = normalizedValues([device.app_id, device.product_app_id]);
@@ -346,8 +359,6 @@ export function deviceTokenMatchesApp(
     return valuesOverlap(appIds, deviceIds);
   }
 
-  if (sameValue(app.package_name, device.package_name)) return true;
-  if (sameValue(app.bundle_id, device.bundle_id)) return true;
   return !deviceIds.length && !deviceIdentifiers.length && sameValue(device.store_account_name, app.store_account_name);
 }
 
@@ -372,14 +383,15 @@ export function jobMatchesApp(job: NotificationJob, app: StoreMapping) {
   if (job.platform !== app.platform) return false;
   if (job.app_mapping_id) return sameValue(job.app_mapping_id, app.id);
 
+  if (sameValue(app.package_name, job.package_name)) return true;
+  if (sameValue(app.bundle_id, job.bundle_id)) return true;
+
   const appIds = normalizedValues([app.app_id]);
   const jobIds = normalizedValues([job.app_id]);
   if (appIds.length && jobIds.length) {
     return valuesOverlap(appIds, jobIds);
   }
 
-  if (sameValue(app.package_name, job.package_name)) return true;
-  if (sameValue(app.bundle_id, job.bundle_id)) return true;
   if (!jobIds.length && sameValue(job.app_name, app.app_name)) return true;
   return !jobIds.length
     && !job.package_name
@@ -391,14 +403,15 @@ export function scheduleMatchesApp(schedule: NotificationSchedule, app: StoreMap
   if (schedule.platform !== app.platform) return false;
   if (schedule.app_mapping_id) return sameValue(schedule.app_mapping_id, app.id);
 
+  if (sameValue(app.package_name, schedule.package_name)) return true;
+  if (sameValue(app.bundle_id, schedule.bundle_id)) return true;
+
   const appIds = normalizedValues([app.app_id]);
   const scheduleIds = normalizedValues([schedule.app_id]);
   if (appIds.length && scheduleIds.length) {
     return valuesOverlap(appIds, scheduleIds);
   }
 
-  if (sameValue(app.package_name, schedule.package_name)) return true;
-  if (sameValue(app.bundle_id, schedule.bundle_id)) return true;
   if (!scheduleIds.length && sameValue(schedule.app_name, app.app_name)) return true;
   return !scheduleIds.length
     && !schedule.package_name
@@ -482,6 +495,7 @@ export function AppSearchDropdown({
     () => apps.filter((app) => appMatchesSearch(app, query)).slice(0, 8),
     [apps, query],
   );
+  const cleanQuery = query.trim();
 
   function applyValue(nextValue: string) {
     const cleanValue = nextValue.trim();
@@ -556,10 +570,23 @@ export function AppSearchDropdown({
               </button>
             ))}
           </div>
+        ) : cleanQuery ? (
+          <button
+            type="button"
+            onClick={() => applyValue(cleanQuery)}
+            onMouseDown={(event) => event.preventDefault()}
+            className="flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground">
+              <Search size={15} />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">Search all apps</div>
+              <div className="truncate font-mono text-[11px] text-muted-foreground">{cleanQuery}</div>
+            </div>
+          </button>
         ) : (
-          <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-            No matching apps
-          </div>
+          <div className="px-3 py-6 text-center text-sm text-muted-foreground">No apps available</div>
         )}
       </PopoverContent>
     </Popover>
@@ -614,9 +641,7 @@ export function notificationJobBadgeStatus(job: NotificationJob) {
 }
 
 export function valuesMatchSearch(values: Array<string | null | undefined>, search: string) {
-  const query = search.trim().toLowerCase();
-  if (!query) return true;
-  return values.some((value) => value?.toLowerCase().includes(query));
+  return fuzzyValuesMatchSearch(values, search);
 }
 
 function notificationEventText(event: NotificationEvent) {
@@ -935,9 +960,11 @@ function AppStatusDot({ status }: { status: string | null | undefined }) {
 export function AppSelectionTable({
   apps,
   credentials,
+  deviceCounts,
   devices,
   fillHeight = false,
   schedules,
+  scheduleStats,
   search,
   selectedAppIdSet,
   updateAppSelection,
@@ -945,29 +972,37 @@ export function AppSelectionTable({
 }: {
   apps: StoreMapping[];
   credentials: NotificationsPageData["credentialSecrets"];
+  deviceCounts?: Record<string, number>;
   devices: DeviceToken[];
   fillHeight?: boolean;
   schedules: NotificationSchedule[];
+  scheduleStats?: NotificationsPageData["notificationScheduleStats"];
   search: string;
   selectedAppIdSet: Set<string>;
   updateAppSelection: (appId: string, checked?: boolean) => void;
   onSearchChange: (value: string) => void;
 }) {
   const totalDeviceCount = useMemo(
-    () => apps.reduce((total, app) => total + devicesForApp(app, devices).length, 0),
-    [apps, devices],
+    () => apps.reduce((total, app) => total + (deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length), 0),
+    [apps, deviceCounts, devices],
   );
   const filteredApps = useMemo(
     () =>
       apps
         .filter((app) => appMatchesSearch(app, search))
-        .map((app) => ({
-          app,
-          credentials: matchingFirebaseCredentials(app, credentials),
-          devices: devicesForApp(app, devices),
-          schedules: schedules.filter((schedule) => scheduleMatchesApp(schedule, app)),
-        })),
-    [apps, credentials, devices, schedules, search],
+        .map((app) => {
+          const localSchedules = schedules.filter((schedule) => scheduleMatchesApp(schedule, app));
+          const stat = scheduleStats?.[app.id];
+
+          return {
+            activeSchedules: (stat?.active ?? 0) + localSchedules.filter((schedule) => schedule.status === "active").length,
+            app,
+            credentials: matchingFirebaseCredentials(app, credentials),
+            totalSchedules: (stat?.total ?? 0) + localSchedules.length,
+            totalTokens: deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length,
+          };
+        }),
+    [apps, credentials, deviceCounts, devices, scheduleStats, schedules, search],
   );
 
   return (
@@ -999,14 +1034,14 @@ export function AppSelectionTable({
                 <TableHead className="h-9 w-[30%] min-w-56">App</TableHead>
                 <TableHead className="h-9 w-28">Platform</TableHead>
                 <TableHead className="h-9 w-[32%] min-w-56">Identifier</TableHead>
-                <TableHead className="h-9 w-24">Tokens</TableHead>
+                <TableHead className="h-9 w-32">Tokens</TableHead>
                 <TableHead className="h-9 w-24">Config</TableHead>
                 <TableHead className="h-9 w-24">Schedules</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredApps.length ? (
-                filteredApps.map(({ app, credentials: appCredentials, devices: appDevices, schedules: appSchedules }) => {
+                filteredApps.map(({ activeSchedules, app, credentials: appCredentials, totalSchedules, totalTokens }) => {
                   const selected = selectedAppIdSet.has(app.id);
 
                   return (
@@ -1042,7 +1077,7 @@ export function AppSelectionTable({
                         <div className="max-w-full truncate rounded-md bg-muted px-2 py-1 font-mono text-xs">{compactIdentifier(app)}</div>
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm font-medium">{appDevices.length}</div>
+                        <div className="text-sm font-medium">{totalTokens}</div>
                         <div className="text-xs text-muted-foreground">active</div>
                       </TableCell>
                       <TableCell>
@@ -1058,8 +1093,8 @@ export function AppSelectionTable({
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm font-medium">{appSchedules.length}</div>
-                        <div className="text-xs text-muted-foreground">{appSchedules.filter((schedule) => schedule.status === "active").length} active</div>
+                        <div className="text-sm font-medium">{totalSchedules}</div>
+                        <div className="text-xs text-muted-foreground">{activeSchedules} active</div>
                       </TableCell>
                     </TableRow>
                   );

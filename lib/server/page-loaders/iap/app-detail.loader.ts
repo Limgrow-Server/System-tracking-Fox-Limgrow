@@ -32,13 +32,7 @@ export async function getIapAppDetailPageData(
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
   const trial = clean(options?.trial) || "all";
-  const {
-    appCard,
-    metricTransactions,
-    transactions,
-    transactionStates,
-    trialAnalytics,
-  } =
+  const { appCard, metrics, transactions, transactionStates, trialAnalytics } =
     await getIapAppDetail(mappingId, platform, {
       kind,
       page,
@@ -57,8 +51,8 @@ export async function getIapAppDetailPageData(
       state,
       trial,
     },
-    metricTransactions,
     trialAnalytics,
+    metrics,
     transactionPagination: {
       page: transactions.page,
       pageSize: transactions.pageSize,

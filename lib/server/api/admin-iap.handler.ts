@@ -99,7 +99,7 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
     }
 
     return paginatedJson(detail.transactions, {
-      metricTransactions: detail.metricTransactions,
+      metrics: detail.metrics,
       transactionStates: detail.transactionStates,
     });
   } catch (error) {

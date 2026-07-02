@@ -43,6 +43,7 @@ import {
   type ReviewReplyTemplateRecord,
 } from "@/lib/server/repositories/reviews/review.repository";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
+import { valuesMatchSearch } from "@/lib/search";
 import {
   appleAppStoreConnectToken,
   readAppleJson,
@@ -326,15 +327,15 @@ export function filterReviewAppCards<T extends ReviewAppCard>(
     filters.platform === "android" || filters.platform === "ios"
       ? filters.platform
       : "";
-  const search = filters.search?.trim().toLowerCase();
+  const search = filters.search;
 
   return apps.filter((app) => {
     const matchesPlatform = !platform || app.platform === platform;
-    const matchesSearch =
-      !search ||
-      app.appName.toLowerCase().includes(search) ||
-      app.identifier.toLowerCase().includes(search) ||
-      app.storeAccountName.toLowerCase().includes(search);
+    const matchesSearch = valuesMatchSearch([
+      app.appName,
+      app.identifier,
+      app.storeAccountName,
+    ], search);
     const matchesStore =
       !filters.storeProfileId ||
       filters.storeProfileId === "all" ||
@@ -646,15 +647,15 @@ function filterMockReviews(
     search?: string;
   },
 ) {
-  const search = filters.search?.trim().toLowerCase();
+  const search = filters.search;
 
   return reviews.filter((review) => {
-    const matchesSearch =
-      !search ||
-      (review.reviewText ?? "").toLowerCase().includes(search) ||
-      (review.originalText ?? "").toLowerCase().includes(search) ||
-      (review.authorName ?? "").toLowerCase().includes(search) ||
-      review.reviewId.toLowerCase().includes(search);
+    const matchesSearch = valuesMatchSearch([
+      review.reviewText,
+      review.originalText,
+      review.authorName,
+      review.reviewId,
+    ], search);
     const matchesRating =
       !filters.rating ||
       filters.rating === "all" ||

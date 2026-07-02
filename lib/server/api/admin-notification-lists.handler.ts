@@ -11,6 +11,7 @@ import {
   getNotificationHistoryDetailPageData,
   getNotificationHistoryPageData,
   getNotificationOverviewPageData,
+  getNotificationSendDevicePageData,
   getNotificationSchedulesPageData,
   getNotificationTokenDetailPageData,
 } from "@/lib/server/page-loaders/notifications/notifications.loader";
@@ -63,6 +64,9 @@ export async function handleAdminNotificationOverviewAppsGet(request: Request) {
       },
       {
         deviceTokens: data.deviceTokens,
+        notificationDeviceCounts: data.notificationDeviceCounts,
+        notificationScheduleStats: data.notificationScheduleStats,
+        notificationTokenStats: data.notificationTokenStats,
         notificationSchedules: data.notificationSchedules,
         storeOptions: data.notificationStoreOptions,
         summary: data.notificationSummary,
@@ -132,6 +136,37 @@ export async function handleAdminNotificationTokensDelete(request: Request) {
     });
   } catch (error) {
     return errorJson(error, "Delete notification token failed.");
+  }
+}
+
+export async function handleAdminNotificationSendDevicesGet(request: Request) {
+  try {
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
+    const url = new URL(request.url);
+    const appId = normalizeAppId(url.searchParams.get("appId"));
+    if (!appId) throw badRequest("Notification app id is required.");
+
+    const data = await getNotificationSendDevicePageData(session, appId, {
+      ...pagination(url, 100),
+      search: clean(url.searchParams.get("search")) || undefined,
+    });
+    const page = data.notificationPagination.tokens;
+
+    return paginatedJson(
+      {
+        data: data.deviceTokens,
+        page: page?.page ?? 1,
+        pageSize: page?.pageSize ?? 100,
+        total: page?.total ?? data.deviceTokens.length,
+        totalPages: page?.totalPages ?? 1,
+      },
+      {
+        notificationDeviceCounts: data.notificationDeviceCounts,
+        summary: data.notificationSummary,
+      },
+    );
+  } catch (error) {
+    return errorJson(error, "List notification send devices failed.");
   }
 }
 
