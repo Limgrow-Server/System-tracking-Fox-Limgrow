@@ -2,6 +2,8 @@ import {
   AlertCircle,
   Apple,
   CheckCircle2,
+  ChevronsLeft,
+  ChevronsRight,
   Circle,
   Globe2,
   LucideIcon,
@@ -22,6 +24,7 @@ import {
 import {
   Pagination,
   PaginationContent,
+  PaginationEllipsis,
   PaginationItem,
   PaginationLink,
   PaginationNext,
@@ -242,6 +245,45 @@ export function TableEmptyState({
   );
 }
 
+function paginationItems(currentPage: number, lastPage: number) {
+  if (lastPage <= 7) {
+    return Array.from({ length: lastPage }, (_, index) => index + 1);
+  }
+
+  const pageNumbers = new Set([
+    1,
+    lastPage,
+    currentPage,
+    currentPage - 1,
+    currentPage + 1,
+  ]);
+
+  if (currentPage <= 3) {
+    pageNumbers.add(2);
+    pageNumbers.add(3);
+    pageNumbers.add(4);
+  }
+
+  if (currentPage >= lastPage - 2) {
+    pageNumbers.add(lastPage - 3);
+    pageNumbers.add(lastPage - 2);
+    pageNumbers.add(lastPage - 1);
+  }
+
+  const sortedPages = Array.from(pageNumbers)
+    .filter((pageNumber) => pageNumber >= 1 && pageNumber <= lastPage)
+    .sort((left, right) => left - right);
+
+  return sortedPages.flatMap((pageNumber, index) => {
+    const previousPage = sortedPages[index - 1];
+    if (previousPage && pageNumber - previousPage > 1) {
+      return [`ellipsis-${previousPage}-${pageNumber}`, pageNumber];
+    }
+
+    return [pageNumber];
+  });
+}
+
 export function TablePaginationFooter({
   from,
   loadingPage,
@@ -266,13 +308,39 @@ export function TablePaginationFooter({
   const currentPage = page ?? 1;
   const lastPage = Math.max(totalPages ?? 1, 1);
   const pendingPage = typeof loadingPage === "number" ? loadingPage : null;
+  const isBusy = pendingPage !== null;
   const previousPage = currentPage - 1;
   const nextPage = currentPage + 1;
   const previousLoading = pendingPage === previousPage;
   const nextLoading = pendingPage === nextPage;
-  const canGoPrevious = Boolean(onPageChange && currentPage > 1 && !pendingPage);
-  const canGoNext = Boolean(onPageChange && currentPage < lastPage && !pendingPage);
+  const canGoFirst = Boolean(onPageChange && currentPage > 1 && !isBusy);
+  const canGoPrevious = Boolean(onPageChange && currentPage > 1 && !isBusy);
+  const canGoNext = Boolean(onPageChange && currentPage < lastPage && !isBusy);
+  const canGoLast = Boolean(onPageChange && currentPage < lastPage && !isBusy);
   const rangeLabel = from && to ? `Showing ${from}-${to} of ${total}` : `Showing ${shown} of ${total}`;
+  const items = paginationItems(currentPage, lastPage);
+
+  function canGoToPage(targetPage: number) {
+    return Boolean(
+      onPageChange &&
+        !isBusy &&
+        targetPage >= 1 &&
+        targetPage <= lastPage &&
+        targetPage !== currentPage
+    );
+  }
+
+  function goToPage(targetPage: number) {
+    return (event: MouseEvent<HTMLAnchorElement>) => {
+      event.preventDefault();
+      if (canGoToPage(targetPage)) onPageChange?.(targetPage);
+    };
+  }
+
+  function goFirst(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (canGoFirst) onPageChange?.(1);
+  }
 
   function goPrevious(event: MouseEvent<HTMLAnchorElement>) {
     event.preventDefault();
@@ -284,11 +352,28 @@ export function TablePaginationFooter({
     if (canGoNext) onPageChange?.(currentPage + 1);
   }
 
+  function goLast(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (canGoLast) onPageChange?.(lastPage);
+  }
+
   return (
     <div className="flex flex-col gap-3 border-t px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
       <span>{rangeLabel}</span>
       <Pagination className="mx-0 w-auto justify-start sm:justify-end">
-        <PaginationContent>
+        <PaginationContent className="flex-wrap justify-start sm:justify-end">
+          <PaginationItem>
+            <PaginationLink
+              aria-disabled={!canGoFirst}
+              aria-label="Go to first page"
+              href="#"
+              size="icon"
+              className={cn(!canGoFirst && "pointer-events-none opacity-50")}
+              onClick={goFirst}
+            >
+              <ChevronsLeft size={16} />
+            </PaginationLink>
+          </PaginationItem>
           <PaginationItem>
             <PaginationPrevious
               href="#"
@@ -301,17 +386,32 @@ export function TablePaginationFooter({
               onClick={goPrevious}
             />
           </PaginationItem>
-          <PaginationItem>
-            <PaginationLink
-              href="#"
-              isActive
-              size="default"
-              className="min-w-24 px-3"
-              onClick={(event) => event.preventDefault()}
-            >
-              {currentPage} / {lastPage}
-            </PaginationLink>
-          </PaginationItem>
+          {items.map((item) =>
+            typeof item === "string" ? (
+              <PaginationItem key={item}>
+                <PaginationEllipsis />
+              </PaginationItem>
+            ) : (
+              <PaginationItem key={item}>
+                <PaginationLink
+                  aria-disabled={!canGoToPage(item)}
+                  aria-label={`Go to page ${item}`}
+                  href="#"
+                  isActive={item === currentPage}
+                  size="icon"
+                  className={cn(
+                    "min-w-8 px-2",
+                    !canGoToPage(item) &&
+                      item !== currentPage &&
+                      "pointer-events-none opacity-50"
+                  )}
+                  onClick={goToPage(item)}
+                >
+                  {item}
+                </PaginationLink>
+              </PaginationItem>
+            )
+          )}
           <PaginationItem>
             <PaginationNext
               href="#"
@@ -323,6 +423,18 @@ export function TablePaginationFooter({
               )}
               onClick={goNext}
             />
+          </PaginationItem>
+          <PaginationItem>
+            <PaginationLink
+              aria-disabled={!canGoLast}
+              aria-label="Go to last page"
+              href="#"
+              size="icon"
+              className={cn(!canGoLast && "pointer-events-none opacity-50")}
+              onClick={goLast}
+            >
+              <ChevronsRight size={16} />
+            </PaginationLink>
           </PaginationItem>
         </PaginationContent>
       </Pagination>

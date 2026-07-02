@@ -134,7 +134,6 @@ type AndroidTransactionPageOptions = {
   kind?: string;
   page: number;
   pageSize: number;
-  search?: string;
   skip: number;
   state?: string;
   take: number;
@@ -170,17 +169,6 @@ function joinSql(parts: Prisma.Sql[], separator: Prisma.Sql) {
     (sql, part) => Prisma.sql`${sql} ${separator} ${part}`,
     parts[0],
   );
-}
-
-function searchSql(columns: string[], search: string | undefined) {
-  const variants = searchTextVariants(search?.trim() ?? "");
-  if (!variants.length) return null;
-
-  const clauses = variants.flatMap((variant) =>
-    columns.map((column) => Prisma.sql`${Prisma.raw(column)} ilike ${`%${variant}%`}`),
-  );
-
-  return Prisma.sql`(${joinSql(clauses, Prisma.sql`or`)})`;
 }
 
 function iapMetricsFromRows(
@@ -304,22 +292,8 @@ function androidTransactionWhere(
   options?: Partial<AndroidTransactionPageOptions>,
 ): Prisma.IapAndroidWhereInput {
   const where: Prisma.IapAndroidWhereInput = { packageName, storeProfileId };
-  const search = options?.search?.trim();
   const state = options?.state?.trim();
   const kind = options?.kind?.trim();
-
-  if (search) {
-    where.OR = searchTextVariants(search).flatMap((variant) => {
-      const contains = { contains: variant, mode: "insensitive" as const };
-
-      return [
-        { orderId: contains },
-        { productId: contains },
-        { purchaseToken: contains },
-        { packageName: contains },
-      ];
-    });
-  }
 
   if (state && state !== "all") {
     where.state = { equals: state, mode: "insensitive" };
@@ -362,14 +336,9 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
     Prisma.sql`package_name = ${packageName}`,
     Prisma.sql`store_profile_id = ${storeProfileId}::uuid`,
   ];
-  const search = searchSql(
-    ["order_id", "product_id", "purchase_token", "package_name"],
-    options.search,
-  );
   const state = options.state?.trim();
   const kind = options.kind?.trim();
 
-  if (search) conditions.push(search);
   if (state && state !== "all") {
     conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
   }
@@ -400,11 +369,25 @@ export async function getAndroidTransactionStatesByPackageAndProfile(
 type IosTransactionPageOptions = {
   page: number;
   pageSize: number;
-  search?: string;
   skip: number;
   state?: string;
   take: number;
+  trial?: string;
 };
+
+function iosFreeTrialWhere(): Prisma.IosIapTransactionWhereInput {
+  return {
+    OR: [
+      { isTrial: true },
+      { offerDiscountType: { equals: "free_trial", mode: "insensitive" } },
+      {
+        offerType: 1,
+        priceMilliunits: BigInt(0),
+        revenueMicros: BigInt(0),
+      },
+    ],
+  };
+}
 
 function iosTransactionWhere(
   bundleId: string,
@@ -417,30 +400,25 @@ function iosTransactionWhere(
       ? { OR: [{ storeProfileId }, { storeProfileId: null }] }
       : {}),
   };
-  const search = options?.search?.trim();
   const state = options?.state?.trim();
-
-  if (search) {
-    const searchOr: Prisma.IosIapTransactionWhereInput[] = searchTextVariants(search).flatMap((variant) => {
-      const contains = { contains: variant, mode: "insensitive" as const };
-
-      return [
-        { transactionId: contains },
-        { originalTransactionId: contains },
-        { productId: contains },
-        { bundleId: contains },
-        { userId: contains },
-      ];
-    });
-
-    where.AND = [
-      ...(where.AND instanceof Array ? where.AND : []),
-      { OR: searchOr },
-    ];
-  }
+  const trial = options?.trial?.trim();
 
   if (state && state !== "all") {
     where.state = { equals: state, mode: "insensitive" };
+  }
+
+  if (trial === "trial") {
+    where.AND = [
+      ...(where.AND instanceof Array ? where.AND : []),
+      iosFreeTrialWhere(),
+    ];
+  }
+
+  if (trial === "non_trial") {
+    where.AND = [
+      ...(where.AND instanceof Array ? where.AND : []),
+      { NOT: iosFreeTrialWhere() },
+    ];
   }
 
   return where;
@@ -470,20 +448,38 @@ export function getIosTransactionsByBundleIdMetrics(
   options: Partial<IosTransactionPageOptions>,
 ) {
   const conditions = [Prisma.sql`bundle_id = ${bundleId}`];
-  const search = searchSql(
-    ["transaction_id", "original_transaction_id", "product_id", "bundle_id", "user_id"],
-    options.search,
-  );
   const state = options.state?.trim();
+  const trial = options.trial?.trim();
 
   if (storeProfileId) {
     conditions.push(
       Prisma.sql`(store_profile_id = ${storeProfileId}::uuid or store_profile_id is null)`,
     );
   }
-  if (search) conditions.push(search);
   if (state && state !== "all") {
     conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
+  }
+  if (trial === "trial") {
+    conditions.push(Prisma.sql`(
+      is_trial is true
+      or lower(coalesce(offer_discount_type, '')) = 'free_trial'
+      or (
+        offer_type = 1
+        and coalesce(price_milliunits, 0) = 0
+        and coalesce(revenue_micros, 0) = 0
+      )
+    )`);
+  }
+  if (trial === "non_trial") {
+    conditions.push(Prisma.sql`not (
+      is_trial is true
+      or lower(coalesce(offer_discount_type, '')) = 'free_trial'
+      or (
+        offer_type = 1
+        and coalesce(price_milliunits, 0) = 0
+        and coalesce(revenue_micros, 0) = 0
+      )
+    )`);
   }
 
   return getIapMetrics(
@@ -491,6 +487,59 @@ export function getIosTransactionsByBundleIdMetrics(
     Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
     Prisma.sql`lower(environment) = 'sandbox'`,
   );
+}
+
+export function getIosTrialAnalyticsTransactions(
+  bundleId: string,
+  storeProfileId: string | undefined,
+) {
+  return prisma.iosIapTransaction.findMany({
+    where: iosTransactionWhere(bundleId, storeProfileId),
+    orderBy: [
+      { originalTransactionId: "asc" },
+      { purchaseDate: "asc" },
+      { verifiedAt: "asc" },
+    ],
+  });
+}
+
+export function getIosIapNotificationEventsByBundleId(
+  bundleId: string,
+  storeProfileId: string | undefined,
+  take = 8,
+) {
+  return prisma.iosIapNotificationEvent.findMany({
+    where: {
+      bundleId,
+      ...(storeProfileId ? { storeProfileId } : {}),
+    },
+    orderBy: { receivedAt: "desc" },
+    take,
+  });
+}
+
+export async function getIosIapNotificationEventSummaryByBundleId(
+  bundleId: string,
+  storeProfileId: string | undefined,
+) {
+  const where: Prisma.IosIapNotificationEventWhereInput = {
+    bundleId,
+    ...(storeProfileId ? { storeProfileId } : {}),
+  };
+  const [counts, latest] = await Promise.all([
+    prisma.iosIapNotificationEvent.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true },
+    }),
+    prisma.iosIapNotificationEvent.findFirst({
+      where,
+      orderBy: { receivedAt: "desc" },
+      select: { receivedAt: true },
+    }),
+  ]);
+
+  return { counts, latest };
 }
 
 export async function getIosTransactionStatesByBundleId(

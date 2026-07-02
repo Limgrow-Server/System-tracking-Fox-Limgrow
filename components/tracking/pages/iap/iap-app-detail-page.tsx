@@ -11,12 +11,10 @@ import {
   ChevronRight,
   CreditCard,
   FileJson,
-  MoreHorizontal,
   Smartphone,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import {
@@ -38,6 +36,8 @@ import type {
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 import type { IosIapTransactionSummary } from "@/lib/tracking/types";
 import { showToast } from "@/lib/client/toast";
+import { IosTrialAnalyticsPanel } from "./ios-trial-analytics-panel";
+import { IapRevenueChart } from "./iap-revenue-chart";
 
 const IapReceiptDialog = dynamic(
   () => import("./iap-receipt-dialog").then((mod) => mod.IapReceiptDialog),
@@ -111,6 +111,28 @@ function transactionProductId(transaction: IapAppTransaction) {
 
 function transactionKind(transaction: IapAppTransaction) {
   return isAndroidTransaction(transaction) ? transaction.purchaseKind : null;
+}
+
+function transactionIsFreeTrial(transaction: IapAppTransaction) {
+  if (!isIosTransaction(transaction)) return false;
+  return (
+    transaction.is_trial === true ||
+    transaction.offer_discount_type?.toLowerCase() === "free_trial"
+  );
+}
+
+function transactionTrialLabel(transaction: IapAppTransaction) {
+  if (!isIosTransaction(transaction)) return null;
+  if (transactionIsFreeTrial(transaction)) return "Free Trial";
+  if (transaction.offer_discount_type) {
+    return transaction.offer_discount_type
+      .toLowerCase()
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+  return "Paid";
 }
 
 function transactionIsTest(transaction: IapAppTransaction) {
@@ -256,7 +278,7 @@ function OverviewCard({
         <div className="tracking-tight flex items-center gap-2 text-sm font-medium">
           <span>{title}</span>
         </div>
-        <MoreHorizontal size={16} className="cursor-pointer opacity-60" />
+        <div className="h-2 w-2 rounded-full bg-primary/70" />
       </div>
       {/* Content */}
       <div className="space-y-[10px] px-4 pt-0 pb-4">
@@ -298,9 +320,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [transactionStates, setTransactionStates] = useState(
     data.transactionStates,
   );
-  const [search, setSearch] = useState(data.filters.search);
   const [filterState, setFilterState] = useState<string>(data.filters.state);
   const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
+  const [filterTrial, setFilterTrial] = useState<string>(data.filters.trial);
   const [tableLoading, setTableLoading] = useState(false);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
@@ -310,23 +332,24 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     overrides?: {
       filterKind?: string;
       filterState?: string;
-      search?: string;
+      filterTrial?: string;
     },
   ) {
-    const nextSearch = overrides?.search ?? search;
     const nextFilterState = overrides?.filterState ?? filterState;
     const nextFilterKind = overrides?.filterKind ?? filterKind;
+    const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
     const params = new URLSearchParams({
       mappingId: app.mappingId,
       page: String(page),
       pageSize: "10",
       platform: app.platform,
     });
-    const searchValue = nextSearch.trim();
 
-    if (searchValue) params.set("search", searchValue);
     if (nextFilterState !== "all") params.set("state", nextFilterState);
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
+    if (isIos && nextFilterTrial !== "all") {
+      params.set("trial", nextFilterTrial);
+    }
 
     setTableLoading(true);
     setLoadingPage(page);
@@ -396,16 +419,6 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     };
   }, [metrics]);
 
-  // Monthly chart data (12 months)
-  const { buckets, maxVal } = useMemo(() => {
-    const b = metrics.revenueBuckets;
-    let mx = 1;
-    b.forEach((x) => {
-      if (x.prod + x.sand > mx) mx = x.prod + x.sand;
-    });
-    return { buckets: b, maxVal: mx };
-  }, [metrics.revenueBuckets]);
-
   const uniqueStates = useMemo(() => {
     return Array.from(
       new Set(transactionStates.map((state) => state.toLowerCase())),
@@ -423,9 +436,6 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       currency: "VND",
     }).format(n);
   const fmtNum = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
-  const revTrendBadgePct =
-    stats.sg >= 0 ? `+${stats.sg.toFixed(0)}%` : `${stats.sg.toFixed(0)}%`;
-
   return (
     <div className="flex flex-col h-full overflow-hidden bg-muted/10 p-4 sm:p-6 gap-6">
       {/* Breadcrumb */}
@@ -502,105 +512,24 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           </div>
         </div>
 
-        {/* Right: Revenue Chart Card */}
-        <div className="lg:col-span-7 bg-card text-card-foreground rounded-lg border flex flex-col">
-          <div className="flex flex-col space-y-1.5 p-4">
-            <div className="flex items-center justify-between">
-              <div className="leading-none font-semibold tracking-tight">
-                Revenue
-              </div>
-              <Select defaultValue="2026">
-                <SelectTrigger className="w-[100px] h-9">
-                  <SelectValue placeholder="Year" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2026">2026</SelectItem>
-                  <SelectItem value="2025">2025</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center gap-2">
-              <p className="text-2xl font-bold">{fmtVND(stats.rev)}</p>
-              <span className="text-muted-foreground text-sm font-medium">
-                {revTrendBadgePct} from last week
-              </span>
-            </div>
-          </div>
-          <div className="p-4 pt-0 flex-1 flex flex-col justify-end mt-4">
-            {/* Custom Bar Chart matching Shadcn Reference */}
-            <div className="relative flex items-end w-full h-[180px] xl:h-[220px]">
-              {/* Horizontal Grid Lines */}
-              <div className="absolute inset-0 flex flex-col justify-between pointer-events-none pb-[24px]">
-                <div className="w-full border-t border-border/50"></div>
-                <div className="w-full border-t border-border/50"></div>
-                <div className="w-full border-t border-border/50"></div>
-              </div>
-
-              {/* Bars */}
-              <div className="relative z-10 w-full flex items-end justify-between h-full pb-[24px]">
-                {buckets.map((b, i) => {
-                  const total = b.prod + b.sand;
-                  const hPct = maxVal > 0 ? (total / maxVal) * 100 : 0;
-                  return (
-                    <div
-                      key={i}
-                      className="flex flex-col items-center flex-1 group relative h-full justify-end"
-                    >
-                      <div className="absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none bg-zinc-950 text-white text-xs p-2.5 rounded-lg shadow-xl z-50 border border-zinc-800 min-w-[120px]">
-                        <p className="font-semibold border-b border-zinc-800 pb-1.5 mb-1 w-full text-center">
-                          {b.label}
-                        </p>
-                        <div className="flex justify-between w-full gap-3">
-                          <span className="text-zinc-400">Total:</span>
-                          <span className="font-bold">{fmtVND(total)}</span>
-                        </div>
-                        <div className="flex justify-between w-full gap-3 mt-1 text-[10px]">
-                          <span className="text-zinc-500">Prod:</span>
-                          <span className="font-semibold text-zinc-300">
-                            {fmtVND(b.prod)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between w-full gap-3 mt-0.5 text-[10px]">
-                          <span className="text-zinc-500">Sand:</span>
-                          <span className="font-semibold text-zinc-300">
-                            {fmtVND(b.sand)}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="w-full px-[2px] sm:px-1 md:px-2 flex justify-center items-end h-full">
-                        <div
-                          className="w-full max-w-[32px] bg-primary rounded-t-[4px] transition-all duration-500 hover:opacity-80"
-                          style={{ height: `${hPct}%` }}
-                        ></div>
-                      </div>
-                      <span className="absolute -bottom-[20px] text-[12px] text-muted-foreground font-medium">
-                        {b.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
+        <IapRevenueChart
+          revenue={stats.rev}
+          trendPct={stats.sg}
+          transactions={transactions}
+        />
       </div>
+
+      {isIos && data.trialAnalytics ? (
+        <IosTrialAnalyticsPanel
+          analytics={data.trialAnalytics}
+          onInspectPayload={setSelectedReceipt}
+        />
+      ) : null}
 
       {/* Table Card */}
       <div className="flex-1 min-h-0 flex flex-col bg-card text-card-foreground border rounded-lg overflow-hidden">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 border-b bg-muted/20">
-          <div className="flex w-full items-center gap-2 sm:max-w-xs">
-            <Input
-              type="search"
-              placeholder="Search Order ID or Product ID..."
-              className="h-9 bg-background"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                void loadTransactionsPage(1, { search: e.target.value });
-              }}
-            />
-          </div>
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex flex-col items-stretch justify-end gap-4 border-b bg-muted/20 p-4 sm:flex-row sm:items-center">
+          <div className="flex w-full items-center gap-2 sm:w-auto">
             {!isIos && (
               <Select
                 value={filterKind}
@@ -616,6 +545,24 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   <SelectItem value="all">All Kinds</SelectItem>
                   <SelectItem value="subscription">Subscription</SelectItem>
                   <SelectItem value="inapp">In-App</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            {isIos && (
+              <Select
+                value={filterTrial}
+                onValueChange={(v) => {
+                  setFilterTrial(v);
+                  void loadTransactionsPage(1, { filterTrial: v });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full bg-background sm:w-[150px]">
+                  <SelectValue placeholder="Trial" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Billing</SelectItem>
+                  <SelectItem value="trial">Free Trial</SelectItem>
+                  <SelectItem value="non_trial">Paid</SelectItem>
                 </SelectContent>
               </Select>
             )}
@@ -685,6 +632,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 const secondaryId = transactionSecondaryId(tx);
                 const productId = transactionProductId(tx);
                 const purchaseKind = transactionKind(tx);
+                const trialLabel = transactionTrialLabel(tx);
+                const freeTrial = transactionIsFreeTrial(tx);
                 const isTest = transactionIsTest(tx);
                 const revenue = transactionRevenueMicros(tx);
                 const currency = transactionCurrency(tx);
@@ -717,9 +666,30 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               : "Product"}
                           </Badge>
                         )}
+                        {isIos && trialLabel ? (
+                          <Badge
+                            variant="outline"
+                            className={
+                              freeTrial
+                                ? "border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
+                                : "border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+                            }
+                          >
+                            {trialLabel}
+                          </Badge>
+                        ) : null}
                         <div className="text-xs text-muted-foreground font-semibold">
                           {productId}
                         </div>
+                        {isIos &&
+                        isIosTransaction(tx) &&
+                        (tx.transaction_reason || tx.billing_plan_type) ? (
+                          <div className="text-[10px] text-muted-foreground">
+                            {[tx.transaction_reason, tx.billing_plan_type]
+                              .filter(Boolean)
+                              .join(" / ")}
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-4 py-3.5">
@@ -778,7 +748,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   colSpan={6}
                   icon={CreditCard}
                   title="No transactions found"
-                  description="Try changing your search terms or filters."
+                  description="Try changing your filters."
                 />
               )}
             </tbody>

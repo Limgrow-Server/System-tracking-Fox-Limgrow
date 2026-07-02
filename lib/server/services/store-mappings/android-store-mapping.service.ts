@@ -15,6 +15,7 @@ import {
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { getAndroidStoreProfileById } from "@/lib/server/repositories/android/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
+import { ensureAndroidReviewTargetsForMapping } from "@/lib/server/repositories/reviews/review.repository";
 import { androidStoreMappingToTracking } from "@/lib/tracking/mappers/android";
 import { nullableAppId } from "@/lib/tracking/identity";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
@@ -125,12 +126,14 @@ export async function saveAndroidStoreMappingDto(input: {
     storeAccountName = profile.storeAccountName;
   }
 
-  const mapping = await runRepositoryTransaction((tx) =>
-    saveAndroidStoreMapping(tx, {
+  const mapping = await runRepositoryTransaction(async (tx) => {
+    const savedMapping = await saveAndroidStoreMapping(tx, {
       ...input,
       storeAccountName,
-    })
-  );
+    });
+    await ensureAndroidReviewTargetsForMapping(savedMapping.id, tx);
+    return savedMapping;
+  });
   return androidStoreMappingToTracking(mapping);
 }
 

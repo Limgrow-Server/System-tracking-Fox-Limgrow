@@ -8,7 +8,7 @@ import { errorJson, okJson } from "@/lib/server/api/responses";
 import {
   saveReviewReplyTemplates,
   type SaveReviewReplyTemplatesPayload,
-} from "@/lib/server/services/reviews/android-review.service";
+} from "@/lib/server/services/reviews/review.service";
 
 const reviewRoles = ["Admin", "Dev", "Marketing"] as const;
 
@@ -19,10 +19,13 @@ function clean(value: unknown) {
 export async function handleReviewReplyTemplatesPut(request: Request) {
   try {
     const session = await requireConsoleApiSession([...reviewRoles]);
-    const payload = await parseJsonBody<SaveReviewReplyTemplatesPayload>(request);
+    const payload =
+      await parseJsonBody<SaveReviewReplyTemplatesPayload>(request);
     if (
       session.role !== "Admin" &&
-      !canAccessScopedRecord(session, { storeMappingId: clean(payload.storeMappingId) })
+      !canAccessScopedRecord(session, {
+        storeMappingId: clean(payload.storeMappingId),
+      })
     ) {
       throw forbidden("This review app is outside your assigned app scope.");
     }

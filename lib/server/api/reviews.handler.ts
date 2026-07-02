@@ -28,6 +28,7 @@ export async function handleReviewAppsGet(request: Request) {
     const url = new URL(request.url);
     const data = await getReviewAppGridPageData(session, {
       ...reviewPagination(url, 12),
+      platform: clean(url.searchParams.get("platform")) || undefined,
       search: clean(url.searchParams.get("search")) || undefined,
       storeProfileId: clean(url.searchParams.get("storeProfileId")) || undefined,
     });
@@ -101,6 +102,7 @@ export async function handleReviewScheduleAppsGet(request: Request) {
       },
       {
         filters: data.filters,
+        schedule: data.schedule,
         storeNames: data.storeNames,
         storeOptions: data.storeOptions,
         summary: data.summary,

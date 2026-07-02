@@ -15,6 +15,7 @@ import {
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { getIosStoreProfileById } from "@/lib/server/repositories/ios/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
+import { ensureIosReviewTargetsForMapping } from "@/lib/server/repositories/reviews/review.repository";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
 import { nullableAppId } from "@/lib/tracking/identity";
 import { iosStoreMappingToTracking } from "@/lib/tracking/mappers/ios";
@@ -125,12 +126,14 @@ export async function saveIosStoreMappingDto(input: {
     storeAccountName = profile.storeAccountName;
   }
 
-  const mapping = await runRepositoryTransaction((tx) =>
-    saveIosStoreMapping(tx, {
+  const mapping = await runRepositoryTransaction(async (tx) => {
+    const savedMapping = await saveIosStoreMapping(tx, {
       ...input,
       storeAccountName,
-    })
-  );
+    });
+    await ensureIosReviewTargetsForMapping(savedMapping.id, tx);
+    return savedMapping;
+  });
   return iosStoreMappingToTracking(mapping);
 }
 

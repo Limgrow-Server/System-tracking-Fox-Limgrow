@@ -16,6 +16,7 @@ export default async function IapRoutePage({
 }: {
   searchParams: Promise<{
     page?: string | string[];
+    platform?: string | string[];
     search?: string | string[];
     store?: string | string[];
   }>;
@@ -24,6 +25,7 @@ export default async function IapRoutePage({
   const params = await searchParams;
   const data = await getIapAppGridPageData(session, {
     page: pageNumber(params.page),
+    platform: single(params.platform),
     search: single(params.search),
     storeAccountName: single(params.store),
   });

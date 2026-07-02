@@ -32,6 +32,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   PageHeader,
   StatusBadge,
   TablePaginationFooter,
@@ -61,6 +68,18 @@ type ReviewAppListResponse = {
   totalPages?: number;
 };
 
+type PlatformFilter = ReviewAppGridPageData["filters"]["platform"];
+
+function platformBadgeClass(platform: ReviewAppCard["platform"]) {
+  return platform === "ios"
+    ? "border-sky-200 bg-sky-50 text-sky-700"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function platformLabel(platform: ReviewAppCard["platform"]) {
+  return platform === "ios" ? "iOS" : "Android";
+}
+
 export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -69,6 +88,9 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
     useState<PaginationMeta>(data.appPagination);
   const [storeOptions, setStoreOptions] = useState(data.storeOptions);
   const [searchQuery, setSearchQuery] = useState(data.filters.search);
+  const [selectedPlatform, setSelectedPlatform] = useState<PlatformFilter>(
+    data.filters.platform,
+  );
   const [selectedStore, setSelectedStore] = useState(
     data.filters.storeProfileId,
   );
@@ -85,10 +107,12 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   async function loadAppsPage(
     page: number,
     overrides?: {
+      selectedPlatform?: PlatformFilter;
       searchQuery?: string;
       selectedStore?: string;
     },
   ) {
+    const nextPlatform = overrides?.selectedPlatform ?? selectedPlatform;
     const nextSearch = overrides?.searchQuery ?? searchQuery;
     const nextStore = overrides?.selectedStore ?? selectedStore;
     const params = new URLSearchParams({
@@ -96,6 +120,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
       pageSize: "12",
     });
 
+    if (nextPlatform !== "all") params.set("platform", nextPlatform);
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
     if (nextStore !== "all") params.set("storeProfileId", nextStore);
 
@@ -126,6 +151,17 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
     }
   }
 
+  function updateSelectedPlatform(value: string) {
+    const nextPlatform: PlatformFilter =
+      value === "android" || value === "ios" ? value : "all";
+    setSelectedPlatform(nextPlatform);
+    setSelectedStore("all");
+    void loadAppsPage(1, {
+      selectedPlatform: nextPlatform,
+      selectedStore: "all",
+    });
+  }
+
   function openAppDetail(app: ReviewAppCard) {
     setPendingMappingId(app.mappingId);
     startTransition(() => {
@@ -136,7 +172,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   return (
     <div className="flex h-full flex-col gap-6 p-6">
       <PageHeader
-        eyebrow="Google Play"
+        eyebrow="App Stores"
         title="List Apps"
         description="Select an application to inspect comment sync, ratings and replies."
       />
@@ -156,6 +192,17 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
             }}
           />
         </div>
+
+        <Select value={selectedPlatform} onValueChange={updateSelectedPlatform}>
+          <SelectTrigger className="w-full sm:w-[180px]">
+            <SelectValue placeholder="All platforms" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Platforms</SelectItem>
+            <SelectItem value="android">Android</SelectItem>
+            <SelectItem value="ios">iOS</SelectItem>
+          </SelectContent>
+        </Select>
 
         <Popover open={openStoreCombobox} onOpenChange={setOpenStoreCombobox}>
           <PopoverTrigger asChild>
@@ -251,10 +298,10 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
                   </Avatar>
                   <Badge
                     variant="outline"
-                    className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+                    className={cn("gap-1", platformBadgeClass(app.platform))}
                   >
                     <Smartphone size={12} />
-                    Android
+                    {platformLabel(app.platform)}
                   </Badge>
                 </CardHeader>
                 <CardContent className="space-y-4">

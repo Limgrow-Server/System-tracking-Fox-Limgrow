@@ -4,7 +4,7 @@ import { canAccessReviewApp } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import { valuesMatchSearch } from "@/lib/search";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
-import { getReplyConfigPageData } from "@/lib/server/services/reviews/android-review.service";
+import { getReplyConfigPageData } from "@/lib/server/services/reviews/review.service";
 import type {
   ReplyConfigPageData,
   ReplyStoreListPageData,
@@ -37,6 +37,7 @@ function buildStoreSummaries(data: ReplyConfigRows) {
         contactEmail: app.storeContactEmail,
         lastFetchedAt: null,
         pendingReplyCount: 0,
+        platform: app.platform,
         reviewCount: 0,
         storeAccountName: app.storeAccountName,
         storeAvatarUrl: app.storeAvatarUrl,
@@ -56,7 +57,10 @@ function buildStoreSummaries(data: ReplyConfigRows) {
     current.activeTemplateCount += activeTemplateCount;
     current.reviewCount += app.reviewCount;
     current.pendingReplyCount += app.pendingReplyCount;
-    current.lastFetchedAt = latestDate(current.lastFetchedAt, app.lastFetchedAt);
+    current.lastFetchedAt = latestDate(
+      current.lastFetchedAt,
+      app.lastFetchedAt,
+    );
     stores.set(app.storeProfileId, current);
   }
 
@@ -114,7 +118,10 @@ export async function getReplyStoreListPageDataLoader(
   };
   const data = await getReplyConfigPageData();
   const scopedData = scopedReplyConfigData(data, session);
-  const stores = filterReplyStores(buildStoreSummaries(scopedData), options?.search);
+  const stores = filterReplyStores(
+    buildStoreSummaries(scopedData),
+    options?.search,
+  );
   const storePage = paginatedResult(
     stores.slice(pagination.skip, pagination.skip + pagination.take),
     stores.length,

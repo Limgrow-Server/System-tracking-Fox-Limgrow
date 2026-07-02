@@ -3,7 +3,7 @@ import "server-only";
 import { canAccessReviewApp } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
-import { getReviewAppDetail } from "@/lib/server/services/reviews/android-review.service";
+import { getReviewAppDetail } from "@/lib/server/services/reviews/review.service";
 import type { ReviewAppDetailPageData } from "@/lib/tracking/page-data";
 
 export async function getReviewAppDetailPageData(

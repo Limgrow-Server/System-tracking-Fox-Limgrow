@@ -7,17 +7,22 @@ import {
   getReviewAppCards,
   paginateReviewAppCards,
   reviewStoreOptions,
-} from "@/lib/server/services/reviews/android-review.service";
+} from "@/lib/server/services/reviews/review.service";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
 import type { ReviewAppGridPageData } from "@/lib/tracking/page-data";
 
 export async function getReviewAppGridPageData(
   session: ConsoleSession,
   options?: Partial<PaginationQuery> & {
+    platform?: string;
     search?: string;
     storeProfileId?: string;
   },
 ): Promise<ReviewAppGridPageData> {
+  const platform =
+    options?.platform === "android" || options?.platform === "ios"
+      ? options.platform
+      : "all";
   const pagination = {
     page: options?.page ?? 1,
     pageSize: options?.pageSize ?? 12,
@@ -27,12 +32,16 @@ export async function getReviewAppGridPageData(
   const apps = (await getReviewAppCards()).filter((app) =>
     canAccessReviewApp(session, app),
   );
+  const platformApps = filterReviewAppCards(apps, {
+    platform,
+  });
   const filteredApps = filterReviewAppCards(apps, {
+    platform,
     search: options?.search,
     storeProfileId: options?.storeProfileId,
   });
   const appPage = paginateReviewAppCards(filteredApps, pagination);
-  const storeOptions = reviewStoreOptions(apps);
+  const storeOptions = reviewStoreOptions(platformApps);
 
   return {
     appPagination: {
@@ -43,6 +52,7 @@ export async function getReviewAppGridPageData(
     },
     apps: appPage.data,
     filters: {
+      platform,
       search: options?.search ?? "",
       storeProfileId: options?.storeProfileId ?? "all",
     },

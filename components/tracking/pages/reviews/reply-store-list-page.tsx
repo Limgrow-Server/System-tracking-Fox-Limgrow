@@ -29,6 +29,16 @@ import type {
 } from "@/lib/tracking/page-data";
 import { showToast } from "@/lib/client/toast";
 
+function platformBadgeClass(platform: ReplyStoreSummary["platform"]) {
+  return platform === "ios"
+    ? "border-sky-200 bg-sky-50 text-sky-700"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function platformLabel(platform: ReplyStoreSummary["platform"]) {
+  return platform === "ios" ? "iOS" : "Android";
+}
+
 function StoreCard({
   isPending,
   onOpen,
@@ -68,10 +78,10 @@ function StoreCard({
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <Badge
                 variant="outline"
-                className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
+                className={cn("gap-1", platformBadgeClass(store.platform))}
               >
                 <Smartphone size={11} />
-                Android
+                {platformLabel(store.platform)}
               </Badge>
               <span>{compactNumber(store.appCount)} apps</span>
             </div>
@@ -179,18 +189,9 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <PageHeader
-        eyebrow="Google Play"
+        eyebrow="App Stores"
         title="Reply Stores"
         description="Select a store to configure shared reply settings and app templates."
-        action={
-          <Badge
-            variant="outline"
-            className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700"
-          >
-            <Smartphone size={12} />
-            Android
-          </Badge>
-        }
       />
 
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -229,7 +230,7 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
           description={
             loadingStores
               ? "The current page is being loaded."
-              : "No Android store matches the current search."
+              : "No store matches the current search."
           }
           className="rounded-lg border"
         />

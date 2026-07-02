@@ -26,9 +26,11 @@ import type {
   IapAppTransaction,
 } from "@/lib/tracking/page-data";
 import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
+import { getIosTrialConversionAnalytics } from "@/lib/server/services/iap/ios-iap-analytics.service";
 import { iosIapTransactionToSummary } from "@/lib/tracking/mappers/ios";
 
 type IapAppCardOptions = {
+  platform?: string;
   search?: string;
   storeAccountName?: string;
 };
@@ -51,10 +53,15 @@ function toPublicIapAppCard(app: CachedIapAppCard): IapAppCard {
 }
 
 function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions) {
+  const platform =
+    options?.platform === "android" || options?.platform === "ios"
+      ? options.platform
+      : "";
   const search = options?.search;
   const storeAccountName = options?.storeAccountName?.trim().toLowerCase();
 
   return apps.filter((app) => {
+    const matchesPlatform = !platform || app.platform === platform;
     const matchesStore =
       !storeAccountName ||
       app.storeAccountName.toLowerCase() === storeAccountName;
@@ -65,7 +72,7 @@ function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions
       app.appId,
     ], search);
 
-    return matchesStore && matchesSearch;
+    return matchesPlatform && matchesStore && matchesSearch;
   });
 }
 
@@ -133,12 +140,13 @@ export async function getIapAppDetail(
   platform: string,
   options: PaginationQuery & {
     kind?: string;
-    search?: string;
     state?: string;
+    trial?: string;
   },
 ): Promise<{
   appCard: IapAppCard;
   metrics: IapAppMetrics;
+  trialAnalytics: Awaited<ReturnType<typeof getIosTrialConversionAnalytics>> | null;
   transactionStates: string[];
   transactions: PaginatedResult<IapAppTransaction>;
 }> {
@@ -178,6 +186,7 @@ export async function getIapAppDetail(
 
     return {
       appCard,
+      trialAnalytics: null,
       metrics,
       transactionStates,
       transactions: paginatedResult(
@@ -202,8 +211,12 @@ export async function getIapAppDetail(
       storeProfileId: mapping.storeProfileId,
     };
 
-    const [[rawTransactions, total], metrics, transactionStates] =
-      await Promise.all([
+    const [
+      [rawTransactions, total],
+      metrics,
+      transactionStates,
+      trialAnalytics,
+    ] = await Promise.all([
         getIosTransactionsByBundleIdPage(
           mapping.bundleId,
           mapping.storeProfileId,
@@ -218,10 +231,12 @@ export async function getIapAppDetail(
           mapping.bundleId,
           mapping.storeProfileId,
         ),
+        getIosTrialConversionAnalytics(mapping.bundleId, mapping.storeProfileId),
       ]);
 
     return {
       appCard,
+      trialAnalytics,
       metrics,
       transactionStates,
       transactions: paginatedResult(

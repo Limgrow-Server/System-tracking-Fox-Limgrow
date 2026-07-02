@@ -32,6 +32,11 @@ import {
 } from "@/components/tracking/primitives";
 import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
+import {
+  MAX_REVIEW_REPLY_TEXT_LENGTH,
+  REVIEW_REPLY_TEMPLATE_TOKENS,
+  renderReviewReplyTemplate,
+} from "@/lib/tracking/reply-template";
 import type {
   PaginationMeta,
   ReplyConfigPageData,
@@ -41,13 +46,18 @@ import type {
 import { cn } from "@/lib/utils";
 
 const RATINGS = [5, 4, 3, 2, 1] as const;
-const MAX_REPLY_TEXT_LENGTH = 350;
+const MAX_REPLY_TEXT_LENGTH = MAX_REVIEW_REPLY_TEXT_LENGTH;
 
 type DraftTemplates = Record<string, ReviewReplyTemplateDto[]>;
 type StoreInfoDraft = {
   contactEmail: string;
   supportPhone: string;
   websiteUrl: string;
+};
+type MentionState = {
+  end: number;
+  query: string;
+  start: number;
 };
 
 type SaveTemplatesResponse = {
@@ -78,6 +88,16 @@ type ReplyStoreAppsResponse = {
   total?: number;
   totalPages?: number;
 };
+
+function platformBadgeClass(platform: ReviewAppCard["platform"]) {
+  return platform === "ios"
+    ? "border-sky-200 bg-sky-50 text-sky-700"
+    : "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function platformLabel(platform: ReviewAppCard["platform"]) {
+  return platform === "ios" ? "iOS" : "Android";
+}
 
 function defaultTemplates(storeMappingId: string): ReviewReplyTemplateDto[] {
   return RATINGS.map((rating) => ({
@@ -158,10 +178,13 @@ function AppListItem({
           <div className="truncate text-sm font-medium">{app.appName}</div>
           <Badge
             variant="outline"
-            className="shrink-0 gap-1 border-emerald-200 bg-emerald-50 px-1.5 text-[11px] text-emerald-700"
+            className={cn(
+              "shrink-0 gap-1 px-1.5 text-[11px]",
+              platformBadgeClass(app.platform),
+            )}
           >
             <Smartphone size={11} />
-            Android
+            {platformLabel(app.platform)}
           </Badge>
         </div>
         <div className="mt-1 truncate text-xs text-muted-foreground">
@@ -192,33 +215,88 @@ function TemplateEditor({
   ) => void;
 }) {
   const textareaId = `reply-template-${app.mappingId}-${template.rating}`;
+  const [mention, setMention] = useState<MentionState | null>(null);
+  const [activeVariableIndex, setActiveVariableIndex] = useState(0);
   const activeWithoutText = template.isActive && !template.replyText.trim();
-  const inheritedItems = [
-    {
-      icon: Mail,
-      label: "Email",
-      value: storeInfo.contactEmail.trim(),
-    },
-    {
-      icon: Phone,
-      label: "Phone",
-      value: storeInfo.supportPhone.trim(),
-    },
-    {
-      icon: Globe,
-      label: "Website",
-      value: storeInfo.websiteUrl.trim(),
-    },
-  ].filter((item) => item.value);
+  const previewText = renderReviewReplyTemplate(template.replyText, {
+    appName: app.appName,
+    authorName: "Evans Wilson",
+    contactEmail: storeInfo.contactEmail,
+    storeName: app.storeAccountName,
+    supportPhone: storeInfo.supportPhone,
+    websiteUrl: storeInfo.websiteUrl,
+  });
+  const previewTooLong = previewText.length > MAX_REPLY_TEXT_LENGTH;
+  const matchingVariables = useMemo(() => {
+    const query = mention?.query.toLowerCase() ?? "";
 
-  function insertInheritedValue(value: string) {
-    const separator = template.replyText.trim() ? "\n" : "";
-    const nextValue = `${template.replyText}${separator}${value}`.slice(
-      0,
-      MAX_REPLY_TEXT_LENGTH,
+    return REVIEW_REPLY_TEMPLATE_TOKENS.filter((item) => {
+      if (!query) return true;
+
+      return [
+        item.description,
+        item.label,
+        ...item.searchTerms,
+        item.token,
+      ].some((value) => value.toLowerCase().includes(query));
+    });
+  }, [mention?.query]);
+
+  function updateMentionState(text: string, cursor: number) {
+    const beforeCursor = text.slice(0, cursor);
+    const match = /(?:^|\s)@([A-Za-z_]*)$/.exec(beforeCursor);
+
+    if (!match) {
+      setMention(null);
+      setActiveVariableIndex(0);
+      return;
+    }
+
+    setMention({
+      end: cursor,
+      query: match[1] ?? "",
+      start: beforeCursor.lastIndexOf("@"),
+    });
+    setActiveVariableIndex(0);
+  }
+
+  function insertVariable(variable: string, range?: Pick<MentionState, "end" | "start">) {
+    const textarea = document.getElementById(
+      textareaId,
+    ) as HTMLTextAreaElement | null;
+    const currentText = textarea?.value ?? template.replyText;
+    const start = range?.start ?? textarea?.selectionStart ?? currentText.length;
+    const end = range?.end ?? textarea?.selectionEnd ?? start;
+    const before = currentText.slice(0, start);
+    const after = currentText.slice(end);
+    const needsSpace =
+      !range && before && !before.endsWith(" ") && !before.endsWith("\n");
+    const needsTrailingSpace =
+      after && !/^[\s.,!?;:)\]}]/.test(after);
+    const insertion = `${needsSpace ? " " : ""}${variable}${needsTrailingSpace ? " " : ""}`;
+    const nextValue = `${before}${insertion}${after}`.slice(0, MAX_REPLY_TEXT_LENGTH);
+    const cursorPosition = Math.min(
+      before.length + insertion.length,
+      nextValue.length,
     );
 
     onChange(template.rating, { replyText: nextValue });
+    setMention(null);
+    setActiveVariableIndex(0);
+    requestAnimationFrame(() => {
+      const nextTextarea = document.getElementById(
+        textareaId,
+      ) as HTMLTextAreaElement | null;
+      nextTextarea?.focus();
+      nextTextarea?.setSelectionRange(cursorPosition, cursorPosition);
+    });
+  }
+
+  function completeMention(index = activeVariableIndex) {
+    const option = matchingVariables[index];
+    if (!mention || !option) return;
+
+    insertVariable(option.token, mention);
   }
 
   return (
@@ -259,35 +337,127 @@ function TemplateEditor({
         maxLength={MAX_REPLY_TEXT_LENGTH}
         className="mt-3 min-h-28 resize-y bg-card"
         placeholder={`Reply template for ${ratingLabel(template.rating)} reviews`}
-        onChange={(event) =>
-          onChange(template.rating, { replyText: event.target.value })
-        }
+        onChange={(event) => {
+          onChange(template.rating, { replyText: event.target.value });
+          updateMentionState(
+            event.target.value,
+            event.target.selectionStart ?? event.target.value.length,
+          );
+        }}
+        onClick={(event) => {
+          const textarea = event.currentTarget;
+          updateMentionState(textarea.value, textarea.selectionStart);
+        }}
+        onKeyDown={(event) => {
+          if (!mention || !matchingVariables.length) return;
+
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setActiveVariableIndex((current) =>
+              current >= matchingVariables.length - 1 ? 0 : current + 1,
+            );
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setActiveVariableIndex((current) =>
+              current <= 0 ? matchingVariables.length - 1 : current - 1,
+            );
+          } else if (event.key === "Enter" || event.key === "Tab") {
+            event.preventDefault();
+            completeMention();
+          } else if (event.key === "Escape") {
+            setMention(null);
+          }
+        }}
+        onKeyUp={(event) => {
+          if (
+            ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(
+              event.key,
+            )
+          ) {
+            return;
+          }
+
+          const textarea = event.currentTarget;
+          updateMentionState(textarea.value, textarea.selectionStart);
+        }}
       />
 
-      {inheritedItems.length ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-2">
-          <span className="text-xs font-medium text-muted-foreground">
-            Store info
-          </span>
-          {inheritedItems.map((item) => {
-            const Icon = item.icon;
-
-            return (
-              <Button
-                key={item.label}
+      {mention && matchingVariables.length ? (
+        <div className="relative z-20">
+          <div className="absolute left-0 top-1 w-full max-w-sm overflow-hidden rounded-lg border bg-popover p-1 shadow-lg">
+            {matchingVariables.map((item, index) => (
+              <button
+                key={item.token}
                 type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 bg-background text-xs"
-                onClick={() => insertInheritedValue(item.value)}
+                className={cn(
+                  "flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm",
+                  index === activeVariableIndex
+                    ? "bg-accent text-accent-foreground"
+                    : "hover:bg-accent/70",
+                )}
+                onMouseEnter={() => setActiveVariableIndex(index)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => insertVariable(item.token, mention)}
               >
-                <Icon size={12} />
-                Insert {item.label.toLowerCase()}
-              </Button>
-            );
-          })}
+                <span className="font-medium">{item.label}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {item.description}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-2">
+        <span className="text-xs font-medium text-muted-foreground">
+          Variables
+        </span>
+        {REVIEW_REPLY_TEMPLATE_TOKENS.map((item) => (
+          <Button
+            key={item.token}
+            type="button"
+            variant="outline"
+            size="sm"
+            title={`${item.description}: ${item.token}`}
+            className="h-7 rounded-full bg-background px-3 text-xs"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => insertVariable(item.token)}
+          >
+            {item.label}
+          </Button>
+        ))}
+      </div>
+
+      <div className="mt-3 rounded-lg border bg-card p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            Preview
+          </span>
+          <span
+            className={cn(
+              "text-xs",
+              previewTooLong ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {previewText.length}/{MAX_REPLY_TEXT_LENGTH} mapped
+          </span>
+        </div>
+        {previewText ? (
+          <div className="mt-2 whitespace-pre-wrap rounded-md bg-muted/30 p-3 text-sm leading-5 text-foreground">
+            {previewText}
+          </div>
+        ) : (
+          <div className="mt-2 rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+            No preview.
+          </div>
+        )}
+        {previewTooLong ? (
+          <div className="mt-2 text-xs font-medium text-destructive">
+            Mapped reply is longer than {MAX_REPLY_TEXT_LENGTH} characters.
+          </div>
+        ) : null}
+      </div>
 
       <div className="mt-2 flex flex-col gap-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
         <span>
@@ -415,6 +585,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contactEmail: storeInfo.contactEmail,
+          platform: data.store.platform,
           storeProfileId: data.store.storeProfileId,
           supportPhone: storeInfo.supportPhone,
           websiteUrl: storeInfo.websiteUrl,
@@ -459,6 +630,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          platform: selectedApp.platform,
           storeMappingId: selectedApp.mappingId,
           templates: selectedTemplates.map((template) => ({
             isActive: template.isActive,
@@ -497,14 +669,14 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
     return (
       <div className="flex flex-col gap-6 p-4 sm:p-6">
         <PageHeader
-          eyebrow="Google Play"
+          eyebrow="App Stores"
           title={data.store.storeAccountName}
           description="Review reply templates are configured per store."
         />
         <EmptyPanel
           icon={MessageSquareReply}
-          title="No Android apps"
-          description="Create an active Android App Mapping before configuring review replies."
+          title="No apps"
+          description="Create an active App Mapping before configuring review replies."
           className="rounded-lg border"
         />
       </div>
@@ -642,7 +814,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
                   description={
                     loadingApps
                       ? "The current page is being loaded."
-                      : "No mapped Android app matches the current search."
+                      : "No mapped app matches the current search."
                   }
                   className="rounded-lg border"
                 />
@@ -711,7 +883,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
               <EmptyPanel
                 icon={MessageSquareReply}
                 title="No app selected"
-                description="Select an Android app to configure reply templates."
+                description="Select an app to configure reply templates."
                 className="rounded-lg border"
               />
             )}

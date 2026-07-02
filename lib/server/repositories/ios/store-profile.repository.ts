@@ -48,15 +48,24 @@ export function getIosStoreProfileById(id: string) {
   });
 }
 
-export function updateIosStoreProfileMetadata(
+export async function updateIosStoreProfileMetadata(
   tx: Prisma.TransactionClient,
   id: string,
   data: IosStoreProfilePatch
 ) {
-  return tx.iosStoreProfile.update({
+  const profile = await tx.iosStoreProfile.update({
     where: { id },
     data,
   });
+
+  if (data.storeAccountName !== undefined) {
+    await tx.reviewStoreTarget.updateMany({
+      where: { iosStoreProfileId: id },
+      data: { storeAccountName: data.storeAccountName },
+    });
+  }
+
+  return profile;
 }
 
 export function deleteUnusedIosStoreProfile(

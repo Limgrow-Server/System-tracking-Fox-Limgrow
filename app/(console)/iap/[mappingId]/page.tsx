@@ -21,8 +21,8 @@ export default async function IapAppDetailRoutePage({
     kind?: string | string[];
     page?: string | string[];
     platform?: string | string[];
-    search?: string | string[];
     state?: string | string[];
+    trial?: string | string[];
   }>;
 }) {
   const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
@@ -38,8 +38,8 @@ export default async function IapAppDetailRoutePage({
   const data = await getIapAppDetailPageData(mappingId, platform, session, {
     kind: single(query.kind),
     page: pageNumber(query.page),
-    search: single(query.search),
     state: single(query.state),
+    trial: single(query.trial),
   });
   if (!data) notFound();
 

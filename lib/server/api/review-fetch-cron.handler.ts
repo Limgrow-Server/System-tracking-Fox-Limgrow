@@ -1,7 +1,7 @@
 import "server-only";
 
 import { errorJson, okJson } from "@/lib/server/api/responses";
-import { runDueReviewFetchSchedules } from "@/lib/server/services/reviews/android-review-schedule.service";
+import { runDueReviewFetchSchedules } from "@/lib/server/services/reviews/review-fetch-schedule.service";
 
 export async function handleReviewFetchCronGet() {
   try {
@@ -9,7 +9,7 @@ export async function handleReviewFetchCronGet() {
       result: await runDueReviewFetchSchedules(),
     });
   } catch (error) {
-    return errorJson(error, "Scheduled Google Play review fetch failed.");
+    return errorJson(error, "Scheduled store review fetch failed.");
   }
 }
 
@@ -19,6 +19,6 @@ export async function handleReviewFetchCronPost() {
       result: await runDueReviewFetchSchedules(),
     });
   } catch (error) {
-    return errorJson(error, "Scheduled Google Play review fetch failed.");
+    return errorJson(error, "Scheduled store review fetch failed.");
   }
 }
