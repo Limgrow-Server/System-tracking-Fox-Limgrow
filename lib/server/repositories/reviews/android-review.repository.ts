@@ -327,6 +327,7 @@ export async function enqueueManualAndroidReviewFetchRuns(
   if (!inputs.length) {
     return {
       count: 0,
+      runIds: [] as string[],
       skippedCount: 0,
       skippedStoreMappingIds: [] as string[],
     };
@@ -381,9 +382,25 @@ export async function enqueueManualAndroidReviewFetchRuns(
   const result = data.length
     ? await prisma.reviewFetchRun.createMany({ data })
     : { count: 0 };
+  const runs = data.length
+    ? await prisma.reviewFetchRun.findMany({
+        where: {
+          platform: "ANDROID",
+          reviewAppTargetId: {
+            in: data.map((row) => row.reviewAppTargetId),
+          },
+          scheduledFor: {
+            in: data.map((row) => row.scheduledFor),
+          },
+          triggerType: "MANUAL",
+        },
+        select: { id: true },
+      })
+    : [];
 
   return {
     count: result.count,
+    runIds: runs.map((run) => run.id),
     skippedCount: activeFullStoreMappingIds.size,
     skippedStoreMappingIds: Array.from(activeFullStoreMappingIds),
   };

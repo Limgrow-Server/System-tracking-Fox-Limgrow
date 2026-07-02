@@ -951,9 +951,11 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         body: JSON.stringify(requestBody),
       });
       const payload = (await response.json()) as {
+        backgroundJob?: unknown;
         error?: string;
         ok?: boolean;
         result?: {
+          enqueued?: number;
           hasMore?: boolean;
           pagesFetched?: number;
           requestCount?: number;
@@ -962,7 +964,9 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
           reviewsSkipped?: number;
           reviewsUpserted?: number;
           scanMode?: string;
+          skipped?: number;
           stopReason?: string;
+          status?: string;
         };
       };
 
@@ -970,11 +974,17 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         throw new Error(payload.error ?? "Reviews could not be fetched.");
       }
 
-      const moreText = payload.result.hasMore ? " More pages are available." : "";
-      void showToast("success",
-        `Fetched ${payload.result.reviewsFetched ?? 0} reviews, matched ${payload.result.reviewsMatched ?? 0}, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
-      );
-      await loadReviewPage(1);
+      if (payload.result.status === "queued") {
+        void showToast("success",
+          `Queued ${payload.result.enqueued ?? 0} comment fetch job(s).`,
+        );
+      } else {
+        const moreText = payload.result.hasMore ? " More pages are available." : "";
+        void showToast("success",
+          `Fetched ${payload.result.reviewsFetched ?? 0} reviews, matched ${payload.result.reviewsMatched ?? 0}, upserted ${payload.result.reviewsUpserted ?? 0} rows.${moreText}`,
+        );
+        await loadReviewPage(1);
+      }
       router.refresh();
     } catch (error) {
       void showToast("error", fetchReviewErrorToast(error));
@@ -1249,4 +1259,3 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     </div>
   );
 }
-
