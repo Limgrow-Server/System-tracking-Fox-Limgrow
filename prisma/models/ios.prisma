@@ -7,40 +7,46 @@ enum IosSecretType {
 }
 
 model IosStoreProfile {
-  id               String              @id @default(uuid()) @db.Uuid
-  storeAccountName String              @unique @map("store_account_name")
-  linkStore        String?             @map("link_store")
-  avatarUrl        String?             @map("avatar_url")
-  issuerId         String?             @map("issuer_id")
-  status           MappingStatus       @default(ACTIVE)
-  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               String                    @id @default(uuid()) @db.Uuid
+  storeAccountName String                    @unique @map("store_account_name")
+  linkStore        String?                   @map("link_store")
+  avatarUrl        String?                   @map("avatar_url")
+  issuerId         String?                   @map("issuer_id")
+  status           MappingStatus             @default(ACTIVE)
+  createdAt        DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
   mappings         IosStoreMapping[]
   credentials      IosCredential[]
   iapTransactions  IosIapTransaction[]
+  iapNotifications IosIapNotificationEvent[]
+  reviewTarget     ReviewStoreTarget?
 
   @@index([status, storeAccountName], map: "ios_store_profiles_status_name_idx")
   @@map("ios_store_profiles")
 }
 
 model IosStoreMapping {
-  id               String          @id @default(uuid()) @db.Uuid
-  storeProfileId   String          @map("store_profile_id") @db.Uuid
-  storeAccountName String          @map("store_account_name")
-  appId            String?         @map("app_id")
-  appName          String          @map("app_name")
-  appIconUrl       String?         @map("app_icon_url")
-  appLink          String?         @map("app_link")
-  bundleId         String          @map("bundle_id")
-  status           MappingStatus   @default(ACTIVE)
-  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
-  storeProfile     IosStoreProfile @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+  id               String           @id @default(uuid()) @db.Uuid
+  storeProfileId   String           @map("store_profile_id") @db.Uuid
+  storeAccountName String           @map("store_account_name")
+  appId            String?          @map("app_id")
+  appleAppId       String?          @map("apple_app_id")
+  appName          String           @map("app_name")
+  appIconUrl       String?          @map("app_icon_url")
+  appLink          String?          @map("app_link")
+  bundleId         String           @map("bundle_id")
+  status           MappingStatus    @default(ACTIVE)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile     IosStoreProfile  @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+  reviewTarget     ReviewAppTarget?
 
   @@unique([storeProfileId, appName], map: "ios_store_mappings_profile_app_name_key")
   @@unique([storeProfileId, appId], map: "ios_store_mappings_profile_app_id_key")
+  @@unique([appleAppId], map: "ios_store_mappings_apple_app_id_key")
   @@unique([bundleId], map: "ios_store_mappings_bundle_key")
   @@index([appId, status], map: "ios_store_mappings_app_id_status_idx")
+  @@index([appleAppId, status], map: "ios_store_mappings_apple_app_id_status_idx")
   @@index([bundleId, status], map: "ios_store_mappings_bundle_status_idx")
   @@index([storeAccountName], map: "ios_store_mappings_store_name_idx")
   @@map("ios_store_mappings")
@@ -85,6 +91,8 @@ model IosIapTransaction {
   storeProfileId        String?   @map("store_profile_id") @db.Uuid
   transactionId         String    @map("transaction_id")
   originalTransactionId String?   @map("original_transaction_id")
+  webOrderLineItemId    String?   @map("web_order_line_item_id")
+  subscriptionGroupId   String?   @map("subscription_group_id")
   productId             String    @map("product_id")
   userId                String?   @map("user_id")
   bundleId              String?   @map("bundle_id")
@@ -95,6 +103,18 @@ model IosIapTransaction {
   priceMilliunits       BigInt?   @map("price_milliunits")
   currency              String?
   isTrial               Boolean?  @map("is_trial")
+  transactionReason     String?   @map("transaction_reason")
+  offerType             Int?      @map("offer_type")
+  offerDiscountType     String?   @map("offer_discount_type")
+  offerPeriod           String?   @map("offer_period")
+  billingPlanType       String?   @map("billing_plan_type")
+  storefront            String?
+  storefrontId          String?   @map("storefront_id")
+  appTransactionId      String?   @map("app_transaction_id")
+  revocationDate        DateTime? @map("revocation_date") @db.Timestamptz(6)
+  revocationReason      Int?      @map("revocation_reason")
+  revocationType        String?   @map("revocation_type")
+  revocationPercentage  Int?      @map("revocation_percentage")
   environment           String    @default("production")
   rawReceipt            Json      @map("raw_receipt")
   verifiedAt            DateTime  @map("verified_at") @db.Timestamptz(6)
@@ -109,5 +129,66 @@ model IosIapTransaction {
   @@index([bundleId, storeProfileId, purchaseDate], map: "ios_iap_transactions_bundle_profile_purchase_idx")
   @@index([productId, verifiedAt], map: "ios_iap_transactions_product_verified_idx")
   @@index([userId, verifiedAt], map: "ios_iap_transactions_user_verified_idx")
+  @@index([originalTransactionId, purchaseDate], map: "ios_iap_transactions_original_purchase_idx")
+  @@index([offerDiscountType, purchaseDate], map: "ios_iap_transactions_offer_purchase_idx")
+  @@index([revocationDate], map: "ios_iap_transactions_revocation_date_idx")
   @@map("ios_iap_transactions")
+}
+
+model IosIapNotificationEvent {
+  id                    String           @id @default(uuid()) @db.Uuid
+  notificationUuid      String           @unique @map("notification_uuid")
+  notificationType      String           @map("notification_type")
+  subtype               String?
+  environment           String?
+  bundleId              String?          @map("bundle_id")
+  appAppleId            String?          @map("app_apple_id")
+  originalTransactionId String?          @map("original_transaction_id")
+  transactionId         String?          @map("transaction_id")
+  signedDate            DateTime?        @map("signed_date") @db.Timestamptz(6)
+  status                String           @default("processing")
+  errorMessage          String?          @map("error_message") @db.Text
+  rawPayload            Json             @map("raw_payload")
+  decodedPayload        Json?            @map("decoded_payload")
+  receivedAt            DateTime         @default(now()) @map("received_at") @db.Timestamptz(6)
+  processedAt           DateTime?        @map("processed_at") @db.Timestamptz(6)
+  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfileId        String?          @map("store_profile_id") @db.Uuid
+  storeProfile          IosStoreProfile? @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
+
+  @@index([notificationType, receivedAt], map: "ios_iap_notification_events_type_received_idx")
+  @@index([bundleId, receivedAt], map: "ios_iap_notification_events_bundle_received_idx")
+  @@index([originalTransactionId], map: "ios_iap_notification_events_original_idx")
+  @@index([transactionId], map: "ios_iap_notification_events_transaction_idx")
+  @@index([status, receivedAt], map: "ios_iap_notification_events_status_received_idx")
+  @@map("ios_iap_notification_events")
+}
+
+model IosStoreReview {
+  id                      String          @id @default(uuid()) @db.Uuid
+  reviewAppTargetId       String          @map("review_app_target_id") @db.Uuid
+  reviewId                String          @map("review_id")
+  authorName              String?         @map("author_name")
+  rating                  Int?
+  title                   String?
+  reviewText              String?         @map("review_text") @db.Text
+  territory               String?
+  appVersion              String?         @map("app_version")
+  reviewCreatedAt         DateTime?       @map("review_created_at") @db.Timestamptz(6)
+  reviewUpdatedAt         DateTime?       @map("review_updated_at") @db.Timestamptz(6)
+  developerReplyId        String?         @map("developer_reply_id")
+  developerReplyText      String?         @map("developer_reply_text") @db.Text
+  developerReplyUpdatedAt DateTime?       @map("developer_reply_updated_at") @db.Timestamptz(6)
+  rawReview               Json?           @map("raw_review")
+  fetchedAt               DateTime        @default(now()) @map("fetched_at") @db.Timestamptz(6)
+  createdAt               DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  appTarget               ReviewAppTarget @relation(fields: [reviewAppTargetId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewAppTargetId, reviewId], map: "ios_store_reviews_app_review_key")
+  @@index([reviewAppTargetId, reviewCreatedAt], map: "ios_store_reviews_app_created_idx")
+  @@index([reviewAppTargetId, rating], map: "ios_store_reviews_app_rating_idx")
+  @@index([developerReplyUpdatedAt], map: "ios_store_reviews_reply_updated_idx")
+  @@index([territory], map: "ios_store_reviews_territory_idx")
+  @@map("ios_store_reviews")
 }

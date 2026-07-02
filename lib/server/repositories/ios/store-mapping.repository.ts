@@ -5,7 +5,10 @@ import type { MappingStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { upsertIosStoreProfile } from "@/lib/server/repositories/ios/store-profile.repository";
 import { searchTextVariants } from "@/lib/search";
-import { nullableAppId } from "@/lib/tracking/identity";
+import {
+  nullableAppId,
+  parseAppleAppStoreIdFromUrl,
+} from "@/lib/tracking/identity";
 
 type SaveIosStoreMappingInput = {
   appId: string | null;
@@ -110,6 +113,7 @@ export async function saveIosStoreMapping(
         storeAccountName: input.storeAccountName,
       });
 
+  const appleAppId = parseAppleAppStoreIdFromUrl(input.appLink);
   const data = {
     appId: nullableAppId(input.appId),
     appIconUrl: input.appIconUrl,
@@ -119,6 +123,7 @@ export async function saveIosStoreMapping(
     status: input.status,
     storeAccountName: profile.storeAccountName,
     storeProfileId: profile.id,
+    ...(appleAppId ? { appleAppId } : {}),
   };
 
   if (input.id) {

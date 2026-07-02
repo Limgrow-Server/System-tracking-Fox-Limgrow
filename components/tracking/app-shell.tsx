@@ -275,7 +275,7 @@ function SidebarContent({
 
       <div
         className={cn(
-          "flex-1 overflow-y-auto p-3 transition-all duration-300",
+          "flex-1 overflow-y-auto overscroll-contain p-3 transition-all duration-300",
           collapsed ? "space-y-3 px-2" : "space-y-5",
         )}
       >
@@ -553,7 +553,7 @@ export function AppShell({
             : "lg:grid-cols-[16rem_1fr]",
         )}
       >
-        <aside className="sticky top-0 hidden h-svh self-start overflow-hidden border-r bg-sidebar lg:block">
+        <aside className="sticky top-0 hidden h-svh self-start overflow-hidden overscroll-contain border-r bg-sidebar lg:block">
           <SidebarContent
             role={role}
             session={session}

@@ -57,14 +57,18 @@ export type IapAppCard = {
   identifier: string; // packageName or bundleId
   appIconUrl: string | null;
   appLink: string | null;
+  revenueCurrency?: string | null;
+  revenueMicros?: number | string | null;
   storeAccountName: string;
   storeProfileId: string;
+  transactionCount?: number | null;
 };
 
 export type IapAppGridPageData = {
   apps: IapAppCard[];
   appPagination: PaginationMeta;
   filters: {
+    platform: "all" | "android" | "ios";
     search: string;
     storeAccountName: string;
   };
@@ -93,6 +97,61 @@ export type StoreListingPageData = {
 
 export type IapAppTransaction = IapAndroidDto | IosIapTransactionSummary;
 
+export type IapTrialConversionCohort = {
+  label: string;
+  trialStarted: number;
+  converted: number;
+  refunded: number;
+  renewalRevenueMicros: string;
+  conversionRate: number;
+};
+
+export type IapTrialConversionGranularity = "day" | "week" | "month";
+
+export type IapNotificationEventDto = {
+  id: string;
+  notificationUuid: string;
+  notificationType: string;
+  subtype: string | null;
+  environment: string | null;
+  status: string;
+  bundleId: string | null;
+  appAppleId: string | null;
+  originalTransactionId: string | null;
+  transactionId: string | null;
+  signedDate: string | null;
+  receivedAt: string;
+  processedAt: string | null;
+  errorMessage: string | null;
+  rawPayload: unknown;
+  decodedPayload: unknown;
+};
+
+export type IapTrialConversionAnalytics = {
+  activeAfterTrialCount: number;
+  avgDaysToConversion: number | null;
+  cohorts: IapTrialConversionCohort[];
+  cohortsByGranularity: Record<
+    IapTrialConversionGranularity,
+    IapTrialConversionCohort[]
+  >;
+  conversionRate: number;
+  convertedCount: number;
+  ignoredNotificationCount: number;
+  lastNotificationAt: string | null;
+  notConvertedCount: number;
+  pendingCount: number;
+  processedNotificationCount: number;
+  recentNotificationEvents: IapNotificationEventDto[];
+  refundedCount: number;
+  refundRate: number;
+  revokedCount: number;
+  trialStartedCount: number;
+  failedNotificationCount: number;
+  trialRevenueMicros: string;
+  renewalRevenueMicros: string;
+};
+
 export type IapRevenueBucket = {
   label: string;
   prod: number;
@@ -116,10 +175,11 @@ export type IapAppDetailPageData = {
   app: IapAppCard;
   filters: {
     kind: string;
-    search: string;
     state: string;
+    trial: string;
   };
   metrics: IapAppMetrics;
+  trialAnalytics: IapTrialConversionAnalytics | null;
   transactionPagination: PaginationMeta;
   transactionStates: string[];
   transactions: IapAppTransaction[];
@@ -127,7 +187,7 @@ export type IapAppDetailPageData = {
 
 export type ReviewAppCard = {
   mappingId: string;
-  platform: "android";
+  platform: "android" | "ios";
   appName: string;
   identifier: string;
   appIconUrl: string | null;
@@ -152,6 +212,7 @@ export type ReviewAppGridPageData = {
   appPagination: PaginationMeta;
   apps: ReviewAppCard[];
   filters: {
+    platform: "all" | "android" | "ios";
     search: string;
     storeProfileId: string;
   };
@@ -162,7 +223,7 @@ export type ReviewAppGridPageData = {
   }>;
 };
 
-export type AndroidStoreReviewDto = {
+export type StoreReviewDto = {
   id: string;
   reviewId: string;
   authorName: string | null;
@@ -171,8 +232,8 @@ export type AndroidStoreReviewDto = {
   originalText: string | null;
   reviewerLanguage: string | null;
   device: string | null;
-  deviceMetadata: AndroidDeviceMetadataDto | null;
-  androidOsVersion: number | null;
+  deviceMetadata: ReviewDeviceMetadataDto | null;
+  osVersionLabel: string | null;
   appVersionCode: number | null;
   appVersionName: string | null;
   thumbsUpCount: number | null;
@@ -184,7 +245,7 @@ export type AndroidStoreReviewDto = {
   rawReview: unknown;
 };
 
-export type AndroidDeviceMetadataDto = {
+export type ReviewDeviceMetadataDto = {
   cpuMake: string | null;
   cpuModel: string | null;
   deviceClass: string | null;
@@ -224,23 +285,24 @@ export type ReviewFetchRunDto = {
   nextAttemptAt: string | null;
   attemptCount: number;
   maxAttempts: number;
+  nextPageToken: string | null;
   pagesFetched: number;
+  requestCount: number;
   reviewsFetched: number;
   reviewsUpserted: number;
+  scanMode: string;
   errorCode: string | null;
   errorMessage: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+  stopReason: string | null;
 };
 
 export type ReviewFetchScheduleDto = {
   id: string;
+  intervalHours: number;
   status: string;
-  scheduleType: string;
-  storeMappingId: string;
-  timeOfDay: string;
-  timezone: string;
-  nextRunAt: string;
+  nextRunAt: string | null;
   lastRunAt: string | null;
   lastStatus: string | null;
   lastErrorCode: string | null;
@@ -250,9 +312,7 @@ export type ReviewFetchScheduleDto = {
   updatedBy: string | null;
 };
 
-export type ReviewFetchScheduleApp = ReviewAppCard & {
-  fetchSchedule: ReviewFetchScheduleDto | null;
-};
+export type ReviewFetchScheduleApp = ReviewAppCard;
 
 export type ReviewFetchSchedulePageData = {
   appPagination: PaginationMeta;
@@ -261,6 +321,7 @@ export type ReviewFetchSchedulePageData = {
     search: string;
     storeProfileId: string;
   };
+  schedule: ReviewFetchScheduleDto | null;
   summary: {
     activeCount: number;
     appCount: number;
@@ -301,7 +362,7 @@ export type ReviewReplyTemplatePreviewDto = {
 export type ReviewAppDetailPageData = {
   app: ReviewAppCard;
   stats: ReviewAppStats;
-  reviews: AndroidStoreReviewDto[];
+  reviews: StoreReviewDto[];
   reviewFilters: {
     rating: string;
     reply: string;
@@ -327,6 +388,7 @@ export type ReviewReplyTemplateDto = {
 
 export type ReplyStoreSummary = {
   storeProfileId: string;
+  platform: "android" | "ios";
   storeAccountName: string;
   storeAvatarUrl: string | null;
   contactEmail: string | null;

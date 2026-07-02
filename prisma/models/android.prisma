@@ -12,6 +12,7 @@ model AndroidStoreProfile {
   mappings         AndroidStoreMapping[]
   credentials      AndroidCredential[]
   iapTransactions  IapAndroid[]
+  reviewTarget     ReviewStoreTarget?
 
   @@index([status, storeAccountName], map: "android_store_profiles_status_name_idx")
   @@map("android_store_profiles")
@@ -35,6 +36,7 @@ model AndroidStoreMapping {
   reviewFetchRuns     AndroidStoreReviewFetchRun[]
   reviewFetchSchedule AndroidStoreReviewFetchSchedule?
   replyTemplates      AndroidStoreReviewReplyTemplate[]
+  reviewTarget        ReviewAppTarget?
 
   @@unique([storeProfileId, appName], map: "android_store_mappings_profile_app_name_key")
   @@unique([storeProfileId, appId], map: "android_store_mappings_profile_app_id_key")
@@ -48,6 +50,7 @@ model AndroidStoreMapping {
 model AndroidStoreReview {
   id                      String              @id @default(uuid()) @db.Uuid
   storeMappingId          String              @map("store_mapping_id") @db.Uuid
+  reviewAppTargetId       String?             @map("review_app_target_id") @db.Uuid
   reviewId                String              @map("review_id")
   authorName              String?             @map("author_name")
   rating                  Int?
@@ -69,8 +72,10 @@ model AndroidStoreReview {
   createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
   storeMapping            AndroidStoreMapping @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  appTarget               ReviewAppTarget?    @relation(fields: [reviewAppTargetId], references: [id], onDelete: SetNull)
 
   @@unique([storeMappingId, reviewId], map: "android_store_reviews_mapping_review_key")
+  @@index([reviewAppTargetId], map: "android_store_reviews_app_target_idx")
   @@index([storeMappingId, userCommentUpdatedAt], map: "android_store_reviews_mapping_user_updated_idx")
   @@index([storeMappingId, rating], map: "android_store_reviews_mapping_rating_idx")
   @@index([developerReplyUpdatedAt], map: "android_store_reviews_reply_updated_idx")
@@ -106,6 +111,8 @@ model AndroidStoreReviewFetchRun {
   sourceScheduleId String?                          @map("source_schedule_id") @db.Uuid
   triggerType      ReviewFetchTrigger               @default(SCHEDULED) @map("trigger_type")
   status           ReviewFetchRunStatus             @default(PENDING)
+  scanMode         ReviewFetchScanMode              @default(LIMITED) @map("scan_mode")
+  stopReason       ReviewFetchStopReason?           @map("stop_reason")
   scheduledFor     DateTime?                        @map("scheduled_for") @db.Timestamptz(6)
   nextAttemptAt    DateTime?                        @map("next_attempt_at") @db.Timestamptz(6)
   attemptCount     Int                              @default(0) @map("attempt_count")
@@ -113,6 +120,8 @@ model AndroidStoreReviewFetchRun {
   lockedAt         DateTime?                        @map("locked_at") @db.Timestamptz(6)
   lockedBy         String?                          @map("locked_by")
   maxResults       Int                              @default(100) @map("max_results")
+  requestCount     Int                              @default(0) @map("request_count")
+  nextPageToken    String?                          @map("next_page_token") @db.Text
   pagesFetched     Int                              @default(0) @map("pages_fetched")
   reviewsFetched   Int                              @default(0) @map("reviews_fetched")
   reviewsUpserted  Int                              @default(0) @map("reviews_upserted")
@@ -138,9 +147,7 @@ model AndroidStoreReviewFetchSchedule {
   id               String                       @id @default(uuid()) @db.Uuid
   storeMappingId   String                       @unique @map("store_mapping_id") @db.Uuid
   status           ReviewFetchScheduleStatus    @default(ACTIVE)
-  scheduleType     String                       @default("daily") @map("schedule_type")
-  timeOfDay        String                       @default("09:00") @map("time_of_day")
-  timezone         String                       @default("Asia/Ho_Chi_Minh")
+  intervalHours    Int                          @default(8) @map("interval_hours")
   nextRunAt        DateTime                     @map("next_run_at") @db.Timestamptz(6)
   lastRunAt        DateTime?                    @map("last_run_at") @db.Timestamptz(6)
   lastStatus       ReviewFetchRunStatus?        @map("last_status")

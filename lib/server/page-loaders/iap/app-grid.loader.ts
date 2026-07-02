@@ -12,6 +12,7 @@ const IAP_APP_PAGE_SIZE = 12;
 
 type IapAppGridOptions = {
   page?: number;
+  platform?: string;
   search?: string;
   storeAccountName?: string;
 };
@@ -24,6 +25,10 @@ export async function getIapAppGridPageData(
   session: ConsoleSession,
   options?: IapAppGridOptions,
 ): Promise<IapAppGridPageData> {
+  const platform =
+    options?.platform === "android" || options?.platform === "ios"
+      ? options.platform
+      : "all";
   const search = options?.search?.trim() ?? "";
   const storeAccountName = options?.storeAccountName?.trim() ?? "";
   const page = pageNumber(options?.page);
@@ -34,8 +39,9 @@ export async function getIapAppGridPageData(
     take: IAP_APP_PAGE_SIZE,
   };
   const [allApps, matchingApps] = await Promise.all([
-    getIapAppCards(),
+    getIapAppCards({ platform }),
     getIapAppCards({
+      platform,
       search: search || undefined,
       storeAccountName: storeAccountName || undefined,
     }),
@@ -56,6 +62,7 @@ export async function getIapAppGridPageData(
     },
     apps: appPage.data,
     filters: {
+      platform,
       search,
       storeAccountName,
     },

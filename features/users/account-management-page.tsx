@@ -5,7 +5,10 @@ import dynamic from "next/dynamic";
 import { Plus, Search } from "lucide-react";
 import { showToast } from "@/lib/client/toast";
 
-import { PageHeader } from "@/components/tracking/primitives";
+import {
+  PageHeader,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,7 +22,6 @@ import {
 } from "@/components/ui/select";
 import type { UsersPageData } from "@/lib/tracking/page-data";
 import type { StaffRole, TeamMember } from "@/lib/tracking/types";
-import { AccountTableFooter } from "./components/account-table-footer";
 import { UserTable } from "./components/user-table";
 import { accountPageSize, roleOptions } from "./constants";
 import type { ManagedAccount } from "./types";
@@ -73,6 +75,7 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
   const [roleFilter, setRoleFilter] = useState<"all" | StaffRole>("all");
   const [appFilter, setAppFilter] = useState("all");
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
@@ -124,6 +127,7 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
     }
 
     setLoadingUsers(true);
+    setLoadingPage(page);
 
     try {
       const response = await fetch(`/api/admin/users?${params.toString()}`);
@@ -144,6 +148,7 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
       void showToast("error", error instanceof Error ? error.message : "Load users failed.");
     } finally {
       setLoadingUsers(false);
+      setLoadingPage(null);
     }
   }
 
@@ -354,6 +359,9 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
     }
   }
 
+  const tableStartIndex =
+    (usersPagination.page - 1) * usersPagination.pageSize;
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -446,10 +454,13 @@ export function AccountManagementPage({ data }: AccountManagementPageProps) {
             togglingAccountId={togglingAccountId}
           />
 
-          <AccountTableFooter
-            currentPage={usersPagination.page}
+          <TablePaginationFooter
+            from={tableStartIndex + 1}
+            loadingPage={loadingPage}
             onPageChange={(page) => void loadUsersPage(page)}
+            page={usersPagination.page}
             shown={accounts.length}
+            to={tableStartIndex + accounts.length}
             total={usersPagination.total}
             totalPages={usersPagination.totalPages}
           />
