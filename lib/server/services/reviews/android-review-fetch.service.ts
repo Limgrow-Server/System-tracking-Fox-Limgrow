@@ -21,8 +21,10 @@ import {
   enqueueManualAndroidReviewFetchRuns,
   finishAndroidReviewFetchRun,
   finishAndroidReviewSyncState,
-  getActiveAndroidReviewMappings,
+  getActiveAndroidReviewMappingSummaries,
   getActiveAndroidCredentialForStoreProfile,
+  getAndroidReviewMappingSummariesByIds,
+  getAndroidReviewMappingSummaryById,
   getAndroidReviewFingerprints,
   getAndroidReviewMappingById,
   getAndroidReviewSyncState,
@@ -771,14 +773,8 @@ export async function enqueueAndroidReviewFullScanRuns(input: {
 }) {
   const requestedIds = new Set(input.storeMappingIds ?? []);
   const mappings = requestedIds.size
-    ? (await Promise.all(
-        Array.from(requestedIds).map((storeMappingId) =>
-          getAndroidReviewMappingById(storeMappingId),
-        ),
-      )).filter((mapping): mapping is NonNullable<typeof mapping> =>
-        mapping?.status === "ACTIVE",
-      )
-    : await getActiveAndroidReviewMappings();
+    ? await getAndroidReviewMappingSummariesByIds(Array.from(requestedIds))
+    : await getActiveAndroidReviewMappingSummaries();
   if (!mappings.length) {
     throw notFound("No active Android apps were found for full scan.");
   }
@@ -813,7 +809,7 @@ export async function enqueueAndroidReviewFetchRuns(input: {
   storeMappingId: string;
   toDate?: string;
 }) {
-  const mapping = await getAndroidReviewMappingById(input.storeMappingId);
+  const mapping = await getAndroidReviewMappingSummaryById(input.storeMappingId);
   if (!mapping || mapping.status !== "ACTIVE") {
     throw notFound("No active Android app was found for comment fetch.");
   }

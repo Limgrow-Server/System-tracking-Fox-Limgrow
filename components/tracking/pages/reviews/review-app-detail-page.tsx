@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Calendar as CalendarIcon,
@@ -835,7 +834,6 @@ type ReviewCommentsResponse = {
 };
 
 export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData }) {
-  const router = useRouter();
   const [fetchingReviews, setFetchingReviews] = useState(false);
   const [fetchFromDate, setFetchFromDate] = useState(defaultFetchFromDate);
   const [fetchToDate, setFetchToDate] = useState(defaultFetchToDate);
@@ -976,6 +974,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         void showToast("success",
           `Queued ${payload.result.enqueued ?? 0} comment fetch job(s).`,
         );
+        return;
       } else {
         const moreText = payload.result.hasMore ? " More pages are available." : "";
         void showToast("success",
@@ -983,7 +982,6 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
         );
         await loadReviewPage(1);
       }
-      router.refresh();
     } catch (error) {
       void showToast("error", fetchReviewErrorToast(error));
     } finally {

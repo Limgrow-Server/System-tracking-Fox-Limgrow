@@ -25,9 +25,11 @@ import {
   finishIosReviewFetchRun,
   finishIosReviewSyncState,
   getActiveIosCredentialForStoreProfile,
-  getActiveIosReviewMappings,
+  getActiveIosReviewMappingSummaries,
   getIosReviewFingerprints,
   getIosReviewMappingById,
+  getIosReviewMappingSummariesByIds,
+  getIosReviewMappingSummaryById,
   getIosReviewSyncState,
   markIosReviewSyncRunning,
   updateIosReviewMappingAppleAppId,
@@ -628,14 +630,8 @@ export async function enqueueIosReviewFullScanRuns(input: {
 }) {
   const requestedIds = new Set(input.storeMappingIds ?? []);
   const mappings = requestedIds.size
-    ? (await Promise.all(
-        Array.from(requestedIds).map((storeMappingId) =>
-          getIosReviewMappingById(storeMappingId),
-        ),
-      )).filter((mapping): mapping is NonNullable<typeof mapping> =>
-        mapping?.status === "ACTIVE",
-      )
-    : await getActiveIosReviewMappings();
+    ? await getIosReviewMappingSummariesByIds(Array.from(requestedIds))
+    : await getActiveIosReviewMappingSummaries();
   if (!mappings.length) {
     throw notFound("No active iOS apps were found for full scan.");
   }
@@ -668,7 +664,7 @@ export async function enqueueIosReviewFetchRuns(input: {
   scanMode?: string;
   storeMappingId: string;
 }) {
-  const mapping = await getIosReviewMappingById(input.storeMappingId);
+  const mapping = await getIosReviewMappingSummaryById(input.storeMappingId);
   if (!mapping || mapping.status !== "ACTIVE") {
     throw notFound("No active iOS app was found for comment fetch.");
   }

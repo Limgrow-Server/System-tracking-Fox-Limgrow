@@ -5,6 +5,7 @@ import {
   Bell,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Loader2,
   MessageSquareText,
@@ -12,6 +13,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,6 +91,22 @@ function finalToastMessage(job: BackgroundJob) {
   return `${job.title} completed.`;
 }
 
+function jobSignature(job: BackgroundJob) {
+  return [
+    job.id,
+    job.status,
+    job.progress_current,
+    job.progress_total ?? "",
+    job.result_url ?? "",
+    job.updated_at,
+    job.last_error ?? "",
+  ].join(":");
+}
+
+function jobsSignature(jobs: BackgroundJob[]) {
+  return jobs.map(jobSignature).join("|");
+}
+
 function BackgroundJobTypeIcon({ type }: { type: BackgroundJob["type"] }) {
   return type === "review_fetch" ? (
     <MessageSquareText size={15} />
@@ -116,12 +134,19 @@ function BackgroundJobStatusIcon({
   return <Loader2 size={11} className={className} />;
 }
 
-function BackgroundJobRow({ job }: { job: BackgroundJob }) {
+function BackgroundJobRow({
+  job,
+  onOpen,
+}: {
+  job: BackgroundJob;
+  onOpen: (job: BackgroundJob) => void;
+}) {
   const percent = progressPercent(job);
   const isActive = ACTIVE_STATUSES.has(job.status);
+  const canOpen = Boolean(job.result_url) && FINAL_STATUSES.has(job.status);
 
-  return (
-    <div className="border-b px-3 py-3 last:border-b-0">
+  const content = (
+    <>
       <div className="flex items-start gap-3">
         <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/50">
           <BackgroundJobTypeIcon type={job.type} />
@@ -134,13 +159,18 @@ function BackgroundJobRow({ job }: { job: BackgroundJob }) {
                 {job.store_account_name || job.description || job.platform || "System"}
               </div>
             </div>
-            <Badge
-              variant="outline"
-              className={cn("h-5 rounded-md px-1.5 text-[11px]", statusTone(job.status))}
-            >
-              <BackgroundJobStatusIcon active={isActive} status={job.status} />
-              {statusLabel(job.status)}
-            </Badge>
+            <span className="flex shrink-0 items-center gap-1">
+              <Badge
+                variant="outline"
+                className={cn("h-5 rounded-md px-1.5 text-[11px]", statusTone(job.status))}
+              >
+                <BackgroundJobStatusIcon active={isActive} status={job.status} />
+                {statusLabel(job.status)}
+              </Badge>
+              {canOpen ? (
+                <ChevronRight size={15} className="text-muted-foreground" />
+              ) : null}
+            </span>
           </div>
           <div className="mt-3 flex items-center gap-2">
             <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
@@ -171,17 +201,37 @@ function BackgroundJobRow({ job }: { job: BackgroundJob }) {
           ) : null}
         </div>
       </div>
+    </>
+  );
+
+  if (canOpen) {
+    return (
+      <button
+        type="button"
+        onClick={() => onOpen(job)}
+        className="block w-full border-b px-3 py-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 last:border-b-0"
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div className="border-b px-3 py-3 last:border-b-0">
+      {content}
     </div>
   );
 }
 
 export function BackgroundJobTray() {
+  const router = useRouter();
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);
   const [activeCount, setActiveCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const hydratedRef = useRef(false);
+  const jobsSignatureRef = useRef("");
   const statusRef = useRef<Map<string, BackgroundJob["status"]>>(new Map());
 
   const hasJobs = jobs.length > 0;
@@ -190,10 +240,16 @@ export function BackgroundJobTray() {
 
   const updateJobs = useCallback((nextJobs: BackgroundJob[]) => {
     statusRef.current = new Map(nextJobs.map((job) => [job.id, job.status]));
-    setJobs(nextJobs);
-    setActiveCount(
-      nextJobs.filter((job) => ACTIVE_STATUSES.has(job.status)).length,
+    const nextActiveCount = nextJobs.filter((job) =>
+      ACTIVE_STATUSES.has(job.status),
+    ).length;
+    const nextSignature = jobsSignature(nextJobs);
+    setActiveCount((current) =>
+      current === nextActiveCount ? current : nextActiveCount,
     );
+    if (jobsSignatureRef.current === nextSignature) return;
+    jobsSignatureRef.current = nextSignature;
+    setJobs(nextJobs);
   }, []);
 
   const prependJob = useCallback(
@@ -207,6 +263,7 @@ export function BackgroundJobTray() {
         statusRef.current = new Map(
           nextJobs.map((nextJob) => [nextJob.id, nextJob.status]),
         );
+        jobsSignatureRef.current = jobsSignature(nextJobs);
         setActiveCount(
           nextJobs.filter((nextJob) => ACTIVE_STATUSES.has(nextJob.status))
             .length,
@@ -217,6 +274,15 @@ export function BackgroundJobTray() {
       setRefreshVersion((current) => current + 1);
     },
     [],
+  );
+
+  const openJobResult = useCallback(
+    (job: BackgroundJob) => {
+      if (!job.result_url || !FINAL_STATUSES.has(job.status)) return;
+      setOpen(false);
+      router.push(job.result_url);
+    },
+    [router],
   );
 
   useEffect(() => subscribeBackgroundJobs(prependJob), [prependJob]);
@@ -232,7 +298,7 @@ export function BackgroundJobTray() {
     let timeoutId: number | undefined;
 
     async function loadJobs() {
-      setLoading(true);
+      if (!hydratedRef.current) setLoading(true);
       try {
         const response = await fetch("/api/admin/background-jobs", {
           cache: "no-store",
@@ -339,7 +405,11 @@ export function BackgroundJobTray() {
             <div className="max-h-80 overflow-y-auto border-t">
               {visibleJobs.length ? (
                 visibleJobs.map((job) => (
-                  <BackgroundJobRow key={job.id} job={job} />
+                  <BackgroundJobRow
+                    key={job.id}
+                    job={job}
+                    onOpen={openJobResult}
+                  />
                 ))
               ) : (
                 <div className="px-3 py-8 text-center text-sm text-muted-foreground">
