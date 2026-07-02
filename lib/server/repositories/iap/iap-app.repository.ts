@@ -134,7 +134,6 @@ type AndroidTransactionPageOptions = {
   kind?: string;
   page: number;
   pageSize: number;
-  search?: string;
   skip: number;
   state?: string;
   take: number;
@@ -170,17 +169,6 @@ function joinSql(parts: Prisma.Sql[], separator: Prisma.Sql) {
     (sql, part) => Prisma.sql`${sql} ${separator} ${part}`,
     parts[0],
   );
-}
-
-function searchSql(columns: string[], search: string | undefined) {
-  const variants = searchTextVariants(search?.trim() ?? "");
-  if (!variants.length) return null;
-
-  const clauses = variants.flatMap((variant) =>
-    columns.map((column) => Prisma.sql`${Prisma.raw(column)} ilike ${`%${variant}%`}`),
-  );
-
-  return Prisma.sql`(${joinSql(clauses, Prisma.sql`or`)})`;
 }
 
 function iapMetricsFromRows(
@@ -304,22 +292,8 @@ function androidTransactionWhere(
   options?: Partial<AndroidTransactionPageOptions>,
 ): Prisma.IapAndroidWhereInput {
   const where: Prisma.IapAndroidWhereInput = { packageName, storeProfileId };
-  const search = options?.search?.trim();
   const state = options?.state?.trim();
   const kind = options?.kind?.trim();
-
-  if (search) {
-    where.OR = searchTextVariants(search).flatMap((variant) => {
-      const contains = { contains: variant, mode: "insensitive" as const };
-
-      return [
-        { orderId: contains },
-        { productId: contains },
-        { purchaseToken: contains },
-        { packageName: contains },
-      ];
-    });
-  }
 
   if (state && state !== "all") {
     where.state = { equals: state, mode: "insensitive" };
@@ -362,14 +336,9 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
     Prisma.sql`package_name = ${packageName}`,
     Prisma.sql`store_profile_id = ${storeProfileId}::uuid`,
   ];
-  const search = searchSql(
-    ["order_id", "product_id", "purchase_token", "package_name"],
-    options.search,
-  );
   const state = options.state?.trim();
   const kind = options.kind?.trim();
 
-  if (search) conditions.push(search);
   if (state && state !== "all") {
     conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
   }
