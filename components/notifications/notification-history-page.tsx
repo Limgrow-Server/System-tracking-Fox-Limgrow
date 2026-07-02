@@ -282,17 +282,13 @@ function niceChartMax(value: number) {
 
 function HistoryJobDashboard({
   failed,
-  impressions,
   opened,
-  received,
   requested,
   rows,
   sent,
 }: {
   failed: number;
-  impressions: number;
   opened: number;
-  received: number;
   requested: number;
   rows: DeliveryRow[];
   sent: number;
@@ -304,8 +300,6 @@ function HistoryJobDashboard({
   const bars = [
     { color: "#c7d137", label: "Requested", value: requested },
     { color: "#54b8be", label: "Sent", value: sent },
-    { color: "#255f76", label: "Received", value: received },
-    { color: "#ef5965", label: "Impressions", value: impressions },
     { color: "#f7b933", label: "Opened", value: opened },
     { color: "#8b73aa", label: "Failed", value: failed },
   ].map((item) => ({
@@ -852,9 +846,7 @@ export function NotificationHistoryPage({
                   <TabsContent value="dashboard" className="m-0">
                     <HistoryJobDashboard
                       failed={historyDetailFailed}
-                      impressions={historyDetailImpressionEvents}
                       opened={historyDetailOpenEvents}
-                      received={historyDetailReceivedEvents}
                       requested={historyDetailRequested}
                       rows={historyDeliveryRows}
                       sent={historyDetailSent}
