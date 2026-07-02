@@ -17,7 +17,24 @@ export function getAndroidCredentials(take = 160) {
   });
 }
 
+export function getAndroidCredentialStoreRefs(take = 300) {
+  return prisma.androidCredential.findMany({
+    orderBy: { updatedAt: "desc" },
+    select: {
+      storeAccountName: true,
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+      storeProfileId: true,
+    },
+    take,
+  });
+}
+
 type AndroidCredentialPageOptions = {
+  includeTotal?: boolean;
   search?: string;
   skip: number;
   take: number;
@@ -48,14 +65,19 @@ function androidCredentialWhere(options: AndroidCredentialPageOptions): Prisma.A
 
 export function getAndroidCredentialsPage(options: AndroidCredentialPageOptions) {
   const where = androidCredentialWhere(options);
+  const rows = prisma.androidCredential.findMany({
+    where,
+    orderBy: { updatedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
+
+  if (options.includeTotal === false) {
+    return rows.then((credentials) => [credentials, null] as const);
+  }
 
   return prisma.$transaction([
-    prisma.androidCredential.findMany({
-      where,
-      orderBy: { updatedAt: "desc" },
-      skip: options.skip,
-      take: options.take,
-    }),
+    rows,
     prisma.androidCredential.count({ where }),
   ]);
 }

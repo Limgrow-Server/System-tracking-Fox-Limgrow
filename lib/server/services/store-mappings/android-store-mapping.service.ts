@@ -83,17 +83,23 @@ export async function getAndroidStoreMappingDtos(options?: { take?: number }) {
 }
 
 export async function getAndroidStoreMappingPageResult(options: PaginationQuery & {
+  knownTotal?: number;
   search?: string;
   storeProfileId?: string;
 }) {
   const [mappings, total] = await getAndroidStoreMappingsPage({
+    includeTotal: options.knownTotal === undefined,
     search: options.search,
     skip: options.skip,
     storeProfileId: options.storeProfileId,
     take: options.take,
   });
 
-  return paginatedResult(mappings.map(androidStoreMappingToTracking), total, options);
+  return paginatedResult(
+    mappings.map(androidStoreMappingToTracking),
+    total ?? options.knownTotal ?? mappings.length,
+    options,
+  );
 }
 
 export async function getAndroidStoreMappingsResult() {

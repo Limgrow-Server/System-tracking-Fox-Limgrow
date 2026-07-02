@@ -1,10 +1,18 @@
 import "server-only";
 
-import { canAccessReviewApp } from "@/lib/auth/app-scope";
+import {
+  canAccessReviewApp,
+  canAccessScopedRecord,
+} from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import { valuesMatchSearch } from "@/lib/search";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
-import { getReplyConfigPageData } from "@/lib/server/services/reviews/review.service";
+import {
+  getReplyConfigPageData,
+  getReviewAppCardScopes,
+  hydrateReviewAppCards,
+  type ReviewAppCardScope,
+} from "@/lib/server/services/reviews/review.service";
 import type {
   ReplyConfigPageData,
   ReplyStoreListPageData,
@@ -16,6 +24,13 @@ import type {
 type ReplyConfigRows = {
   apps: ReviewAppCard[];
   templatesByMappingId: Record<string, ReviewReplyTemplateDto[]>;
+};
+
+type ReplyStoreScopeSummary = {
+  apps: ReviewAppCardScope[];
+  platform: "android" | "ios";
+  storeAccountName: string;
+  storeProfileId: string;
 };
 
 function latestDate(left: string | null, right: string | null) {
@@ -69,13 +84,35 @@ function buildStoreSummaries(data: ReplyConfigRows) {
   );
 }
 
-function filterReplyStores(stores: ReplyStoreSummary[], search?: string) {
+function buildStoreScopeSummaries(scopes: ReviewAppCardScope[]) {
+  const stores = new Map<string, ReplyStoreScopeSummary>();
+
+  for (const app of scopes) {
+    const current =
+      stores.get(app.storeProfileId) ??
+      ({
+        apps: [],
+        platform: app.platform,
+        storeAccountName: app.storeAccountName,
+        storeProfileId: app.storeProfileId,
+      } satisfies ReplyStoreScopeSummary);
+
+    current.apps.push(app);
+    stores.set(app.storeProfileId, current);
+  }
+
+  return Array.from(stores.values()).sort((left, right) =>
+    left.storeAccountName.localeCompare(right.storeAccountName),
+  );
+}
+
+function filterReplyStoreScopes(
+  stores: ReplyStoreScopeSummary[],
+  search?: string,
+) {
   return stores.filter((store) =>
     valuesMatchSearch([
       store.storeAccountName,
-      store.contactEmail,
-      store.supportPhone,
-      store.websiteUrl,
       ...store.apps.flatMap((app) => [app.appName, app.identifier]),
     ], search),
   );
@@ -116,16 +153,34 @@ export async function getReplyStoreListPageDataLoader(
     skip: options?.skip ?? 0,
     take: options?.take ?? 10,
   };
-  const data = await getReplyConfigPageData();
-  const scopedData = scopedReplyConfigData(data, session);
-  const stores = filterReplyStores(
-    buildStoreSummaries(scopedData),
+  const scopes = await getReviewAppCardScopes({
+    canAccess: (app) => canAccessScopedRecord(session, app),
+  });
+  const storeScopes = filterReplyStoreScopes(
+    buildStoreScopeSummaries(scopes),
     options?.search,
   );
   const storePage = paginatedResult(
-    stores.slice(pagination.skip, pagination.skip + pagination.take),
-    stores.length,
+    storeScopes.slice(pagination.skip, pagination.skip + pagination.take),
+    storeScopes.length,
     pagination,
+  );
+  const pageStoreIds = new Set(
+    storePage.data.map((store) => store.storeProfileId),
+  );
+  const orderByStoreId = new Map(
+    storePage.data.map((store, index) => [store.storeProfileId, index]),
+  );
+  const pageApps = await hydrateReviewAppCards(
+    scopes.filter((app) => pageStoreIds.has(app.storeProfileId)),
+  );
+  const stores = buildStoreSummaries({
+    apps: pageApps,
+    templatesByMappingId: {},
+  }).sort(
+    (left, right) =>
+      (orderByStoreId.get(left.storeProfileId) ?? 0) -
+      (orderByStoreId.get(right.storeProfileId) ?? 0),
   );
 
   return {
@@ -138,7 +193,7 @@ export async function getReplyStoreListPageDataLoader(
       total: storePage.total,
       totalPages: storePage.totalPages,
     },
-    stores: storePage.data,
+    stores,
   };
 }
 

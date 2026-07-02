@@ -147,6 +147,11 @@ function applePriceMilliunits(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function finiteInt(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
+  return null;
+}
+
 function normalizeEnvironment(value: unknown) {
   return clean(value).toLowerCase() === "sandbox" ? "sandbox" : "production";
 }
@@ -435,10 +440,24 @@ async function verifyApple(
     revenue_micros: priceMilliunits === null ? null : priceMilliunits * 1000,
     price_milliunits: priceMilliunits,
     currency: stringValue(decoded?.currency),
-    is_trial: decoded?.offerType === 1,
+    is_trial: decoded?.offerType === 1 || stringValue(decoded?.offerDiscountType)?.toUpperCase() === "FREE_TRIAL",
     environment: normalizeEnvironment(decoded?.environment ?? verifiedEnvironment),
     raw_receipt: provider,
     verified_at: new Date().toISOString(),
+    offer_discount_type: stringValue(decoded?.offerDiscountType) || null,
+    offer_type: finiteInt(decoded?.offerType),
+    offer_period: stringValue(decoded?.offerPeriod) || null,
+    transaction_reason: stringValue(decoded?.transactionReason) || null,
+    storefront: stringValue(decoded?.storefront) || null,
+    storefront_id: stringValue(decoded?.storefrontId) || null,
+    subscription_group_id: stringValue(decoded?.subscriptionGroupIdentifier) || null,
+    billing_plan_type: stringValue(decoded?.billingPlanType) || null,
+    app_transaction_id: stringValue(decoded?.appTransactionId) || null,
+    web_order_line_item_id: stringValue(decoded?.webOrderLineItemId) || null,
+    revocation_date: timestampFromMillis(decoded?.revocationDate),
+    revocation_reason: finiteInt(decoded?.revocationReason),
+    revocation_percentage: finiteInt(decoded?.revocationPercentage),
+    revocation_type: stringValue(decoded?.revocationType) || null,
   };
 
   const data = await persistIosTransaction(supabase, row);

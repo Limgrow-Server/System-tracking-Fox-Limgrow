@@ -10,6 +10,7 @@ export async function getReviewAppDetailPageData(
   mappingId: string,
   session: ConsoleSession,
   options?: {
+    context?: boolean;
     rating?: string;
     reply?: string;
     reviewPagination?: PaginationQuery;

@@ -1,17 +1,17 @@
 import "server-only";
 
-import { getAndroidCredentialConfigs } from "@/lib/server/services/credentials/android-credential.service";
+import { getAndroidCredentialStoreOptions } from "@/lib/server/services/credentials/android-credential.service";
 import { getAndroidStoreMappingPageResult } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import type { StoreMappingPageData } from "@/lib/tracking/page-data";
 
 export async function getAndroidStoreMappingPageData(): Promise<StoreMappingPageData> {
-  const [storeMappingPage, credentialConfigs] = await Promise.all([
+  const [storeMappingPage, storeOptions] = await Promise.all([
     getAndroidStoreMappingPageResult({ page: 1, pageSize: 10, skip: 0, take: 10 }),
-    getAndroidCredentialConfigs(),
+    getAndroidCredentialStoreOptions(),
   ]);
 
   return {
-    credentialSecrets: credentialConfigs.credentials,
+    credentialSecrets: [],
     storeMappingPagination: {
       page: storeMappingPage.page,
       pageSize: storeMappingPage.pageSize,
@@ -19,5 +19,6 @@ export async function getAndroidStoreMappingPageData(): Promise<StoreMappingPage
       totalPages: storeMappingPage.totalPages,
     },
     storeMappings: storeMappingPage.data,
+    storeOptions,
   };
 }

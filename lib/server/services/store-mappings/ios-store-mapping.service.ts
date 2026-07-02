@@ -83,17 +83,23 @@ export async function getIosStoreMappingDtos(options?: { take?: number }) {
 }
 
 export async function getIosStoreMappingPageResult(options: PaginationQuery & {
+  knownTotal?: number;
   search?: string;
   storeProfileId?: string;
 }) {
   const [mappings, total] = await getIosStoreMappingsPage({
+    includeTotal: options.knownTotal === undefined,
     search: options.search,
     skip: options.skip,
     storeProfileId: options.storeProfileId,
     take: options.take,
   });
 
-  return paginatedResult(mappings.map(iosStoreMappingToTracking), total, options);
+  return paginatedResult(
+    mappings.map(iosStoreMappingToTracking),
+    total ?? options.knownTotal ?? mappings.length,
+    options,
+  );
 }
 
 export async function getIosStoreMappingsResult() {

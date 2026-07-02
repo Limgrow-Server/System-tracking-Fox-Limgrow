@@ -58,6 +58,7 @@ import type {
 } from "@/lib/tracking/page-data";
 import { compactNumber, dateTime } from "@/lib/tracking/format";
 import { showToast } from "@/lib/client/toast";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 const REVIEW_APP_SKELETON_COUNT = 12;
 
@@ -121,6 +122,10 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
   const [loadingApps, setLoadingApps] = useState(false);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [pendingMappingId, setPendingMappingId] = useState<string | null>(null);
+
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadAppsPage(1, { searchQuery: value });
+  }, 500);
 
   const selectedStoreLabel =
     selectedStore === "all"
@@ -195,6 +200,10 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
     });
   }
 
+  function prefetchAppDetail(app: ReviewAppCard) {
+    router.prefetch(`/comments/${app.mappingId}`);
+  }
+
   const tableStartIndex = (appPagination.page - 1) * appPagination.pageSize;
 
   return (
@@ -216,7 +225,7 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
             onChange={(event) => {
               const nextValue = event.target.value;
               setSearchQuery(nextValue);
-              void loadAppsPage(1, { searchQuery: nextValue });
+              debouncedSearch(nextValue);
             }}
           />
         </div>
@@ -359,12 +368,14 @@ export function ReviewAppGridPage({ data }: { data: ReviewAppGridPageData }) {
                           isPending && "pointer-events-none bg-muted/30",
                         )}
                         onClick={() => openAppDetail(app)}
+                        onFocus={() => prefetchAppDetail(app)}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
                             openAppDetail(app);
                           }
                         }}
+                        onMouseEnter={() => prefetchAppDetail(app)}
                       >
                         <TableCell>
                           <div className="flex min-w-[18rem] items-center gap-3">

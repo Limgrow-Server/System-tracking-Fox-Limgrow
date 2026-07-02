@@ -70,6 +70,7 @@ import type {
   ReviewFetchSchedulePageData,
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 const DEFAULT_REVIEW_FETCH_INTERVAL_HOURS = 8;
 const MIN_REVIEW_FETCH_INTERVAL_HOURS = 1;
@@ -176,6 +177,10 @@ export function ReviewFetchSchedulePage({
   const [intervalHours, setIntervalHours] = useState(
     normalizedIntervalHours(data.schedule?.intervalHours),
   );
+
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadScheduleAppsPage(1, { searchQuery: value });
+  }, 500);
 
   const selectedStoreLabel =
     selectedStore === "all"
@@ -541,7 +546,7 @@ export function ReviewFetchSchedulePage({
               onChange={(event) => {
                 const nextValue = event.target.value;
                 setSearchQuery(nextValue);
-                void loadScheduleAppsPage(1, { searchQuery: nextValue });
+                debouncedSearch(nextValue);
               }}
             />
           </div>

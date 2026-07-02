@@ -80,6 +80,7 @@ import type {
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
 import { showToast } from "@/lib/client/toast";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 const GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -794,23 +795,56 @@ function VotesCell({ review }: { review: StoreReviewDto }) {
   );
 }
 
-function CommentJsonDialog({ review }: { review: StoreReviewDto }) {
+function CommentJsonDialog({ review, mappingId }: { review: StoreReviewDto; mappingId: string }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [rawReview, setRawReview] = useState<unknown>(review.rawReview);
+
+  async function loadRawReview() {
+    if (rawReview) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/comments/reviews/raw?mappingId=${mappingId}&reviewId=${review.reviewId}`);
+      const payload = await res.json();
+      if (payload.success) {
+        setRawReview(payload.rawReview);
+      } else {
+        setRawReview({ error: payload.error ?? "Failed to load" });
+      }
+    } catch {
+      setRawReview({ error: "Network error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={(isOpen) => {
+      setOpen(isOpen);
+      if (isOpen && !rawReview) {
+        void loadRawReview();
+      }
+    }}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm" className="gap-1.5">
           <FileJson size={13} />
           JSON
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[80vh] overflow-hidden sm:max-w-4xl">
+      <DialogContent className="max-h-[80vh] flex flex-col overflow-hidden sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Comment JSON</DialogTitle>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-auto rounded-lg border bg-zinc-950 p-4 font-mono text-xs text-zinc-300">
-          <pre className="whitespace-pre-wrap">
-            {JSON.stringify(review.rawReview, null, 2)}
-          </pre>
+          {loading ? (
+            <div className="flex h-12 items-center justify-center">
+              <Spinner />
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap">
+              {JSON.stringify(rawReview, null, 2)}
+            </pre>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -850,6 +884,10 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
   const [replyFilter, setReplyFilter] = useState(data.reviewFilters.reply);
   const [loadingComments, setLoadingComments] = useState(false);
   const [replyingReviewId, setReplyingReviewId] = useState<string | null>(null);
+
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadReviewPage(1, { search: value });
+  }, 500);
   const replyTemplateByRating = useMemo(
     () => new Map(replyTemplates.map((template) => [template.rating, template])),
     [replyTemplates],
@@ -876,6 +914,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
     const nextRating = overrides?.ratingFilter ?? ratingFilter;
     const nextReply = overrides?.replyFilter ?? replyFilter;
     const params = new URLSearchParams({
+      context: "false",
       mappingId: data.app.mappingId,
       page: String(page),
       pageSize: "10",
@@ -1128,7 +1167,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
               onChange={(event) => {
                 const nextValue = event.target.value;
                 setSearch(nextValue);
-                void loadReviewPage(1, { search: nextValue });
+                debouncedSearch(nextValue);
               }}
             />
           </div>
@@ -1228,7 +1267,7 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
                       <VotesCell review={review} />
                     </TableCell>
                     <TableCell className="align-top text-right">
-                      <CommentJsonDialog review={review} />
+                      <CommentJsonDialog review={review} mappingId={pageData.app.mappingId} />
                     </TableCell>
                   </TableRow>
                 ))}

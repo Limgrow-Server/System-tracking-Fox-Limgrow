@@ -44,6 +44,7 @@ import type {
   ReviewReplyTemplateDto,
 } from "@/lib/tracking/page-data";
 import { cn } from "@/lib/utils";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 const RATINGS = [5, 4, 3, 2, 1] as const;
 const MAX_REPLY_TEXT_LENGTH = MAX_REVIEW_REPLY_TEXT_LENGTH;
@@ -505,6 +506,10 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
   const [savingStoreInfo, setSavingStoreInfo] = useState(false);
   const [loadingApps, setLoadingApps] = useState(false);
 
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadAppsPage(1, value);
+  }, 500);
+
   const selectedApp = useMemo(
     () => apps.find((app) => app.mappingId === selectedAppId) ?? null,
     [apps, selectedAppId],
@@ -803,7 +808,7 @@ export function ReplyConfigPage({ data }: { data: ReplyConfigPageData }) {
                 onChange={(event) => {
                   const nextValue = event.target.value;
                   setSearch(nextValue);
-                  void loadAppsPage(1, nextValue);
+                  debouncedSearch(nextValue);
                 }}
               />
             </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   ArrowDownRight,
@@ -32,6 +32,7 @@ import type {
   IapAppDetailPageData,
   IapAppMetrics,
   IapAppTransaction,
+  IapTrialConversionAnalytics,
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 import type { IosIapTransactionSummary } from "@/lib/tracking/types";
@@ -53,6 +54,19 @@ type IapTransactionListResponse = {
   pageSize?: number;
   total?: number;
   totalPages?: number;
+  transactionStates?: string[];
+};
+
+type IapTrialAnalyticsResponse = {
+  success?: boolean;
+  error?: string;
+  trialAnalytics?: IapTrialConversionAnalytics | null;
+};
+
+type IapAppContextResponse = {
+  success?: boolean;
+  error?: string;
+  metrics?: IapAppMetrics;
   transactionStates?: string[];
 };
 
@@ -308,6 +322,29 @@ function OverviewCard({
   );
 }
 
+function IapMetricsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-2 gap-4 lg:col-span-5">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div
+            key={`iap-overview-skeleton-${index}`}
+            className="col-span-2 h-[150px] rounded-lg border bg-card p-5 sm:col-span-1"
+          >
+            <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+            <div className="mt-8 h-8 w-28 animate-pulse rounded bg-muted" />
+            <div className="mt-4 h-4 w-36 animate-pulse rounded bg-muted" />
+          </div>
+        ))}
+      </div>
+      <div className="h-[320px] rounded-lg border bg-card p-5 lg:col-span-7">
+        <div className="h-5 w-28 animate-pulse rounded bg-muted" />
+        <div className="mt-4 h-[240px] animate-pulse rounded bg-muted/60" />
+      </div>
+    </div>
+  );
+}
+
 export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const { app } = data;
   const isIos = app.platform === "ios";
@@ -319,6 +356,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   );
   const [transactionStates, setTransactionStates] = useState(
     data.transactionStates,
+  );
+  const [metricsLoaded, setMetricsLoaded] = useState(
+    data.metricsLoaded ?? true,
+  );
+  const [trialAnalytics, setTrialAnalytics] = useState(data.trialAnalytics);
+  const [trialAnalyticsLoading, setTrialAnalyticsLoading] = useState(
+    isIos && !data.trialAnalytics,
   );
   const [filterState, setFilterState] = useState<string>(data.filters.state);
   const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
@@ -339,6 +383,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     const nextFilterKind = overrides?.filterKind ?? filterKind;
     const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
     const params = new URLSearchParams({
+      context: overrides ? "true" : "false",
       mappingId: app.mappingId,
       page: String(page),
       pageSize: "10",
@@ -349,6 +394,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
     if (isIos && nextFilterTrial !== "all") {
       params.set("trial", nextFilterTrial);
+    }
+    if (!overrides) {
+      params.set("knownTotal", String(transactionPagination.total));
     }
 
     setTableLoading(true);
@@ -373,6 +421,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       });
       if (payload.metrics) {
         setMetrics(payload.metrics);
+        setMetricsLoaded(true);
       }
       if (payload.transactionStates) {
         setTransactionStates(payload.transactionStates);
@@ -388,6 +437,111 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       setLoadingPage(null);
     }
   }
+
+  useEffect(() => {
+    if (metricsLoaded) return;
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
+    });
+
+    if (filterState !== "all") params.set("state", filterState);
+    if (!isIos && filterKind !== "all") params.set("kind", filterKind);
+    if (isIos && filterTrial !== "all") {
+      params.set("trial", filterTrial);
+    }
+
+    async function loadIapContext() {
+      try {
+        const response = await fetch(
+          `/api/admin/iap/app-context?${params.toString()}`,
+        );
+        const payload = (await response.json()) as IapAppContextResponse;
+
+        if (!response.ok || !payload.success || !payload.metrics) {
+          throw new Error(payload.error ?? "Load IAP metrics failed.");
+        }
+
+        if (!cancelled) {
+          setMetrics(payload.metrics);
+          setTransactionStates(payload.transactionStates ?? []);
+          setMetricsLoaded(true);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMetricsLoaded(true);
+          void showToast("error",
+            error instanceof Error
+              ? error.message
+              : "Load IAP metrics failed.",
+          );
+        }
+      }
+    }
+
+    void loadIapContext();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    app.mappingId,
+    app.platform,
+    filterKind,
+    filterState,
+    filterTrial,
+    isIos,
+    metricsLoaded,
+  ]);
+
+  useEffect(() => {
+    if (!isIos || trialAnalytics) return;
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
+    });
+
+    async function loadTrialAnalytics() {
+      setTrialAnalyticsLoading(true);
+
+      try {
+        const response = await fetch(
+          `/api/admin/iap/trial-analytics?${params.toString()}`,
+        );
+        const payload = (await response.json()) as IapTrialAnalyticsResponse;
+
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error ?? "Load trial analytics failed.");
+        }
+
+        if (!cancelled) {
+          setTrialAnalytics(payload.trialAnalytics ?? null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          void showToast("error",
+            error instanceof Error
+              ? error.message
+              : "Load trial analytics failed.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setTrialAnalyticsLoading(false);
+        }
+      }
+    }
+
+    void loadTrialAnalytics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [app.mappingId, app.platform, isIos, trialAnalytics]);
 
   const stats = useMemo(() => {
     const rev = metrics.totalRevenue;
@@ -471,7 +625,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       </nav>
 
       {/* Overview Grid: Left = 4 cards (2×2), Right = Revenue Chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 shrink-0">
+      {metricsLoaded ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 shrink-0">
         {/* Left: 4 Overview Cards in 2×2 sub-grid */}
         <div className="lg:col-span-5 grid grid-cols-2 gap-4">
           <div className="col-span-2 sm:col-span-1">
@@ -517,13 +672,20 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           revenue={stats.rev}
           trendPct={stats.sg}
         />
-      </div>
+        </div>
+      ) : (
+        <IapMetricsSkeleton />
+      )}
 
-      {isIos && data.trialAnalytics ? (
+      {isIos && trialAnalytics ? (
         <IosTrialAnalyticsPanel
-          analytics={data.trialAnalytics}
+          analytics={trialAnalytics}
           onInspectPayload={setSelectedReceipt}
         />
+      ) : isIos && trialAnalyticsLoading ? (
+        <div className="h-[360px] overflow-hidden rounded-lg border bg-card">
+          <div className="h-full animate-pulse bg-muted/30" />
+        </div>
       ) : null}
 
       {/* Table Card */}

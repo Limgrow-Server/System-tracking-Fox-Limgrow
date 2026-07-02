@@ -131,6 +131,7 @@ export async function getIosMappingById(id: string) {
 }
 
 type AndroidTransactionPageOptions = {
+  includeTotal?: boolean;
   kind?: string;
   page: number;
   pageSize: number;
@@ -320,19 +321,26 @@ export async function getAndroidTransactionsByPackageAndProfilePage(
   options: AndroidTransactionPageOptions,
 ) {
   const where = androidTransactionWhere(packageName, storeProfileId, options);
+  const rowsPromise = prisma.iapAndroid.findMany({
+    where,
+    orderBy: { verifiedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+    include: {
+      storeProfile: true,
+    },
+  });
 
-  return prisma.$transaction([
-    prisma.iapAndroid.findMany({
-      where,
-      orderBy: { verifiedAt: "desc" },
-      skip: options.skip,
-      take: options.take,
-      include: {
-        storeProfile: true,
-      },
-    }),
+  if (options.includeTotal === false) {
+    return [await rowsPromise, null] as const;
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    rowsPromise,
     prisma.iapAndroid.count({ where }),
   ]);
+
+  return [rows, total] as const;
 }
 
 export function getAndroidTransactionsByPackageAndProfileMetrics(
@@ -376,6 +384,7 @@ export async function getAndroidTransactionStatesByPackageAndProfile(
 }
 
 type IosTransactionPageOptions = {
+  includeTotal?: boolean;
   page: number;
   pageSize: number;
   skip: number;
@@ -440,16 +449,23 @@ export async function getIosTransactionsByBundleIdPage(
   options: IosTransactionPageOptions,
 ) {
   const where = iosTransactionWhere(bundleId, storeProfileId, options);
+  const rowsPromise = prisma.iosIapTransaction.findMany({
+    where,
+    orderBy: { verifiedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
 
-  return prisma.$transaction([
-    prisma.iosIapTransaction.findMany({
-      where,
-      orderBy: { verifiedAt: "desc" },
-      skip: options.skip,
-      take: options.take,
-    }),
+  if (options.includeTotal === false) {
+    return [await rowsPromise, null] as const;
+  }
+
+  const [rows, total] = await prisma.$transaction([
+    rowsPromise,
     prisma.iosIapTransaction.count({ where }),
   ]);
+
+  return [rows, total] as const;
 }
 
 export function getIosTransactionsByBundleIdMetrics(

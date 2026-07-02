@@ -135,6 +135,11 @@ const androidReviewMappingSummarySelect = {
   status: true,
   storeAccountName: true,
   storeProfileId: true,
+  storeProfile: {
+    select: {
+      storeAccountName: true,
+    },
+  },
 } satisfies Prisma.AndroidStoreMappingSelect;
 
 export function getActiveAndroidReviewMappingSummaries() {
@@ -169,6 +174,27 @@ export function getAndroidReviewMappingSummaryById(mappingId: string) {
 export function getAndroidReviewMappingById(mappingId: string) {
   return prisma.androidStoreMapping.findUnique({
     where: { id: mappingId },
+    include: {
+      reviewTarget: {
+        include: {
+          syncState: true,
+        },
+      },
+      storeProfile: true,
+      _count: { select: { reviews: true } },
+    },
+  });
+}
+
+export function getAndroidReviewMappingsByIds(mappingIds: string[]) {
+  const uniqueMappingIds = Array.from(new Set(mappingIds));
+  if (!uniqueMappingIds.length) return Promise.resolve([]);
+
+  return prisma.androidStoreMapping.findMany({
+    where: {
+      id: { in: uniqueMappingIds },
+      status: "ACTIVE",
+    },
     include: {
       reviewTarget: {
         include: {
@@ -262,6 +288,7 @@ export function getAndroidReviewsForMappingPage(
       orderBy: [{ userCommentUpdatedAt: "desc" }, { fetchedAt: "desc" }],
       skip: options.skip,
       take: options.take,
+      omit: { rawReview: true },
     }),
     prisma.androidStoreReview.count({ where }),
   ]);
@@ -276,6 +303,14 @@ export function getLatestAndroidReviewForMapping(mappingId: string) {
       userCommentUpdatedAt: true,
     },
   });
+}
+
+export async function getRawAndroidReview(mappingId: string, reviewId: string) {
+  const review = await prisma.androidStoreReview.findFirst({
+    where: { storeMappingId: mappingId, reviewId },
+    select: { rawReview: true },
+  });
+  return review?.rawReview ?? null;
 }
 
 export function getAndroidReviewFetchRuns(mappingId: string, take = 10) {
