@@ -10,24 +10,26 @@ import {
 import { createClient } from "@/lib/supabase/server";
 import type { StaffRole } from "@/lib/tracking/types";
 
+function cleanClaimString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 async function resolveConsoleSession(): Promise<ConsoleSession | null> {
   const supabase = await createClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
+  const { data, error } = await supabase.auth.getClaims();
+  const authUserId = cleanClaimString(data?.claims?.sub);
+  const email = normalizeEmail(data?.claims?.email);
 
-  if (error || !user?.id || !user.email) {
+  if (error || !authUserId || !email) {
     return null;
   }
 
-  const email = normalizeEmail(user.email);
   const member = await getTeamMemberByAuthUserOrEmail({
-    authUserId: user.id,
+    authUserId,
     email,
   });
 
-  if (!member || (member.authUserId && member.authUserId !== user.id)) {
+  if (!member || (member.authUserId && member.authUserId !== authUserId)) {
     return null;
   }
 
@@ -39,12 +41,12 @@ async function resolveConsoleSession(): Promise<ConsoleSession | null> {
   }
 
   const linkedMember =
-    member.authUserId === user.id
+    member.authUserId === authUserId
       ? member
-      : await linkTeamMemberAuthUser(member.id, user.id);
+      : await linkTeamMemberAuthUser(member.id, authUserId);
 
   return {
-    authUserId: user.id,
+    authUserId,
     memberId: linkedMember.id,
     email: linkedMember.email,
     role,

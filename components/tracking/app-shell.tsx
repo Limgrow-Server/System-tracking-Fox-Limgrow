@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link, { useLinkStatus } from "next/link";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Apple,
@@ -28,16 +29,32 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { BackgroundJobTray } from "@/components/tracking/background-job-tray";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import { showToast } from "@/lib/client/toast";
 import { cn } from "@/lib/utils";
 import type { StaffRole } from "@/lib/tracking/types";
+
+const BackgroundJobTray = dynamic(
+  () =>
+    import("@/components/tracking/background-job-tray").then(
+      (mod) => mod.BackgroundJobTray,
+    ),
+  { loading: () => null, ssr: false },
+);
+
+type IdleLoaderWindow = Window &
+  typeof globalThis & {
+    requestIdleCallback?: (
+      callback: () => void,
+      options?: { timeout?: number },
+    ) => number;
+    cancelIdleCallback?: (handle: number) => void;
+  };
 
 type NavItem = {
   title: string;
@@ -531,6 +548,29 @@ export function AppShell({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [backgroundTrayReady, setBackgroundTrayReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timeoutId: number | undefined;
+    let idleId: number | undefined;
+    const idleWindow = window as IdleLoaderWindow;
+    const loadTray = () => {
+      if (!cancelled) setBackgroundTrayReady(true);
+    };
+
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      idleId = idleWindow.requestIdleCallback(loadTray, { timeout: 1600 });
+    } else {
+      timeoutId = idleWindow.setTimeout(loadTray, 1000);
+    }
+
+    return () => {
+      cancelled = true;
+      if (idleId !== undefined) idleWindow.cancelIdleCallback?.(idleId);
+      if (timeoutId !== undefined) idleWindow.clearTimeout(timeoutId);
+    };
+  }, []);
 
   async function logout() {
     const response = await fetch("/api/auth/logout", { method: "POST" });
@@ -647,7 +687,7 @@ export function AppShell({
           </header>
 
           <main className="flex-1 p-4 sm:p-6">{children}</main>
-          <BackgroundJobTray />
+          {backgroundTrayReady ? <BackgroundJobTray /> : null}
         </div>
       </div>
     </div>
