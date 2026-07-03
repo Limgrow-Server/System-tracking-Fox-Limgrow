@@ -134,8 +134,8 @@ export type IapNotificationEventDto = {
   renewalDate: string | null;
   renewalProductId: string | null;
   renewalStatus: "enabled" | "disabled" | null;
-  rawPayload: unknown;
-  decodedPayload: unknown;
+  rawPayload: unknown | null;
+  decodedPayload: unknown | null;
 };
 
 export type IapTrialConversionAnalytics = {

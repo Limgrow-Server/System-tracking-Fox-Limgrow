@@ -22,6 +22,12 @@ type RevenueBucket = {
   production: number;
 };
 
+export type IapRevenueChartProps = {
+  buckets: IapRevenueBucket[];
+  revenue: number;
+  trendPct: number;
+};
+
 function currencyLabel(value: number) {
   return new Intl.NumberFormat("vi-VN", {
     currency: "VND",
@@ -93,11 +99,7 @@ export function IapRevenueChart({
   buckets,
   revenue,
   trendPct,
-}: {
-  buckets: IapRevenueBucket[];
-  revenue: number;
-  trendPct: number;
-}) {
+}: IapRevenueChartProps) {
   const chartBuckets = useMemo(() => toChartBuckets(buckets), [buckets]);
   const displayRevenue = revenue;
   const displayTrendPct = trendPct;

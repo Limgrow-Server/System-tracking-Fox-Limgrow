@@ -117,7 +117,7 @@ export type IosIapTransactionSummary = {
   renewal_date: string | null;
   renewal_product_id: string | null;
   renewal_status: "enabled" | "disabled" | null;
-  raw_receipt: unknown;
+  raw_receipt: unknown | null;
   verified_at: string;
   created_at: string;
 };

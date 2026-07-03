@@ -40,6 +40,13 @@ type TrialConversionDatum = {
   trials: number;
 };
 
+export type IosTrialAnalyticsPanelProps = {
+  analytics: IapTrialConversionAnalytics;
+  onInspectPayload: (payload: unknown) => void;
+  onRefresh?: () => Promise<void> | void;
+  refreshing?: boolean;
+};
+
 const TRIAL_GRANULARITIES: Array<{
   label: string;
   rangeLabel: string;
@@ -227,12 +234,7 @@ export function IosTrialAnalyticsPanel({
   onInspectPayload,
   onRefresh,
   refreshing = false,
-}: {
-  analytics: IapTrialConversionAnalytics;
-  onInspectPayload: (payload: unknown) => void;
-  onRefresh?: () => Promise<void> | void;
-  refreshing?: boolean;
-}) {
+}: IosTrialAnalyticsPanelProps) {
   const [eventOverrides, setEventOverrides] = useState<
     Record<string, Partial<IapNotificationEventDto>>
   >({});

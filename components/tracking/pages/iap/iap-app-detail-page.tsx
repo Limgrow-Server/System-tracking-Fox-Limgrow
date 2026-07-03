@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   ArrowDownRight,
@@ -37,12 +37,40 @@ import type {
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 import type { IosIapTransactionSummary } from "@/lib/tracking/types";
 import { showToast } from "@/lib/client/toast";
-import { IosTrialAnalyticsPanel } from "./ios-trial-analytics-panel";
-import { IapRevenueChart } from "./iap-revenue-chart";
+import type { IapRevenueChartProps } from "./iap-revenue-chart";
+import type { IosTrialAnalyticsPanelProps } from "./ios-trial-analytics-panel";
 
 const IapReceiptDialog = dynamic(
   () => import("./iap-receipt-dialog").then((mod) => mod.IapReceiptDialog),
   { loading: () => null },
+);
+
+const IapRevenueChart = dynamic<IapRevenueChartProps>(
+  () => import("./iap-revenue-chart").then((mod) => mod.IapRevenueChart),
+  {
+    loading: () => (
+      <div className="flex min-h-[320px] flex-col rounded-lg border bg-card p-5 lg:col-span-7">
+        <div className="h-5 w-28 animate-pulse rounded bg-muted" />
+        <div className="mt-5 h-[240px] animate-pulse rounded bg-muted/60" />
+      </div>
+    ),
+    ssr: false,
+  },
+);
+
+const IosTrialAnalyticsPanel = dynamic<IosTrialAnalyticsPanelProps>(
+  () =>
+    import("./ios-trial-analytics-panel").then(
+      (mod) => mod.IosTrialAnalyticsPanel,
+    ),
+  {
+    loading: () => (
+      <div className="h-[360px] overflow-hidden rounded-lg border bg-card">
+        <div className="h-full animate-pulse bg-muted/30" />
+      </div>
+    ),
+    ssr: false,
+  },
 );
 
 type IapTransactionListResponse = {
@@ -70,7 +98,14 @@ type IapAppContextResponse = {
   transactionStates?: string[];
 };
 
+type IapTransactionReceiptResponse = {
+  success?: boolean;
+  error?: string;
+  rawReceipt?: unknown;
+};
+
 const IAP_TRANSACTION_SKELETON_COUNT = 8;
+const IAP_REALTIME_REFRESH_DELAY_MS = 650;
 
 function formatRevenue(
   micros: number | string | null,
@@ -177,12 +212,6 @@ function transactionExpiresDate(transaction: IapAppTransaction) {
     : transaction.expiresDate;
 }
 
-function transactionRawReceipt(transaction: IapAppTransaction) {
-  return isIosTransaction(transaction)
-    ? transaction.raw_receipt
-    : transaction.rawReceipt;
-}
-
 function transactionSource(transaction: IapAppTransaction) {
   return isIosTransaction(transaction) ? transaction.ingestion_source : null;
 }
@@ -254,6 +283,40 @@ function sourceMeta(source: string | null) {
     className: "border-slate-200 bg-slate-50 text-slate-600",
     label: "Legacy API",
     title: "Saved before source tracking was added, likely from verify-ios/API",
+  };
+}
+
+function iapRealtimeTopic(platform: string, identifier: string) {
+  return `iap-detail:${platform}:${identifier}`;
+}
+
+function realtimeStatusMeta(
+  status: "connected" | "disconnected" | "error" | "unauthorized",
+) {
+  if (status === "connected") {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Live",
+    };
+  }
+
+  if (status === "unauthorized") {
+    return {
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      label: "Live auth",
+    };
+  }
+
+  if (status === "error") {
+    return {
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      label: "Live error",
+    };
+  }
+
+  return {
+    className: "border-slate-200 bg-slate-50 text-slate-600",
+    label: "Live off",
   };
 }
 
@@ -338,7 +401,12 @@ function StatusBadge({ status }: { status: string }) {
   if (s.includes("active") || s.includes("purchased"))
     cls =
       "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-200 dark:text-emerald-400";
-  else if (s.includes("expired") || s.includes("canceled"))
+  else if (
+    s.includes("expired") ||
+    s.includes("canceled") ||
+    s.includes("refund") ||
+    s.includes("revoke")
+  )
     cls =
       "bg-destructive/10 border-destructive/30 text-destructive dark:bg-destructive/50 dark:text-foreground";
   else if (s.includes("grace") || s.includes("paused"))
@@ -448,6 +516,10 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   );
   const [trialAnalyticsRefreshing, setTrialAnalyticsRefreshing] =
     useState(false);
+  const [realtimeStatus, setRealtimeStatus] = useState<
+    "connected" | "disconnected" | "error" | "unauthorized"
+  >("disconnected");
+  const [realtimeRefreshing, setRealtimeRefreshing] = useState(false);
   const [filterEnvironment, setFilterEnvironment] = useState<string>(
     data.filters.environment,
   );
@@ -457,6 +529,19 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [tableLoading, setTableLoading] = useState(false);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
+  const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
+  const latestViewRef = useRef({
+    filterEnvironment: data.filters.environment,
+    filterKind: data.filters.kind,
+    filterState: data.filters.state,
+    filterTrial: data.filters.trial,
+    page: data.transactionPagination.page,
+  });
+  const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const realtimeRefreshInFlightRef = useRef(false);
+  const realtimeRefreshQueuedRef = useRef(false);
 
   async function loadTransactionsPage(
     page: number,
@@ -465,6 +550,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       filterKind?: string;
       filterState?: string;
       filterTrial?: string;
+    },
+    options?: {
+      silent?: boolean;
     },
   ) {
     const nextFilterEnvironment =
@@ -492,8 +580,10 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       params.set("knownTotal", String(transactionPagination.total));
     }
 
-    setTableLoading(true);
-    setLoadingPage(page);
+    if (!options?.silent) {
+      setTableLoading(true);
+      setLoadingPage(page);
+    }
 
     try {
       const response = await fetch(
@@ -520,14 +610,20 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         setTransactionStates(payload.transactionStates);
       }
     } catch (error) {
-      void showToast("error",
-        error instanceof Error
-          ? error.message
-          : "Load IAP transactions failed.",
-      );
+      if (options?.silent) {
+        console.error("Realtime IAP transaction refresh failed", error);
+      } else {
+        void showToast("error",
+          error instanceof Error
+            ? error.message
+            : "Load IAP transactions failed.",
+        );
+      }
     } finally {
-      setTableLoading(false);
-      setLoadingPage(null);
+      if (!options?.silent) {
+        setTableLoading(false);
+        setLoadingPage(null);
+      }
     }
   }
 
@@ -640,7 +736,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     };
   }, [app.mappingId, app.platform, isIos, trialAnalytics]);
 
-  async function refreshTrialAnalytics() {
+  async function refreshTrialAnalytics(options?: { silent?: boolean }) {
     if (!isIos || trialAnalyticsRefreshing) return;
 
     const params = new URLSearchParams({
@@ -661,17 +757,189 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       }
 
       setTrialAnalytics(payload.trialAnalytics ?? null);
-      void showToast("success", "Notification events refreshed.");
+      if (!options?.silent) {
+        void showToast("success", "Notification events refreshed.");
+      }
     } catch (error) {
-      void showToast("error",
-        error instanceof Error
-          ? error.message
-          : "Refresh notification events failed.",
-      );
+      if (!options?.silent) {
+        void showToast("error",
+          error instanceof Error
+            ? error.message
+            : "Refresh notification events failed.",
+        );
+      }
     } finally {
       setTrialAnalyticsRefreshing(false);
     }
   }
+
+  async function inspectTransactionReceipt(transaction: IapAppTransaction) {
+    setReceiptLoadingId(transaction.id);
+
+    try {
+      const params = new URLSearchParams({
+        id: transaction.id,
+        platform: app.platform,
+      });
+      const response = await fetch(
+        `/api/admin/iap/transaction-receipt?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapTransactionReceiptResponse;
+
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error ?? "Load IAP receipt failed.");
+      }
+
+      setSelectedReceipt(receiptDisplayPayload(payload.rawReceipt ?? null));
+    } catch (error) {
+      void showToast("error",
+        error instanceof Error ? error.message : "Load IAP receipt failed.",
+      );
+    } finally {
+      setReceiptLoadingId(null);
+    }
+  }
+
+  useEffect(() => {
+    latestViewRef.current = {
+      filterEnvironment,
+      filterKind,
+      filterState,
+      filterTrial,
+      page: transactionPagination.page,
+    };
+  }, [
+    filterEnvironment,
+    filterKind,
+    filterState,
+    filterTrial,
+    transactionPagination.page,
+  ]);
+
+  async function refreshIapDetailFromRealtime() {
+    if (realtimeRefreshInFlightRef.current) {
+      realtimeRefreshQueuedRef.current = true;
+      return;
+    }
+
+    realtimeRefreshInFlightRef.current = true;
+    setRealtimeRefreshing(true);
+
+    try {
+      const latest = latestViewRef.current;
+
+      await Promise.all([
+        loadTransactionsPage(
+          latest.page,
+          {
+            filterEnvironment: latest.filterEnvironment,
+            filterKind: latest.filterKind,
+            filterState: latest.filterState,
+            filterTrial: latest.filterTrial,
+          },
+          { silent: true },
+        ),
+        isIos
+          ? refreshTrialAnalytics({ silent: true })
+          : Promise.resolve(),
+      ]);
+    } catch (error) {
+      console.error("Realtime IAP detail refresh failed", error);
+      setRealtimeStatus("error");
+    } finally {
+      realtimeRefreshInFlightRef.current = false;
+      setRealtimeRefreshing(false);
+
+      if (realtimeRefreshQueuedRef.current) {
+        realtimeRefreshQueuedRef.current = false;
+        scheduleIapDetailRealtimeRefresh();
+      }
+    }
+  }
+
+  function scheduleIapDetailRealtimeRefresh() {
+    if (realtimeRefreshTimerRef.current) {
+      clearTimeout(realtimeRefreshTimerRef.current);
+    }
+
+    realtimeRefreshTimerRef.current = setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      void refreshIapDetailFromRealtime();
+    }, IAP_REALTIME_REFRESH_DELAY_MS);
+  }
+
+  const realtimeRefreshHandlerRef = useRef<() => void>(() => undefined);
+
+  useEffect(() => {
+    realtimeRefreshHandlerRef.current = scheduleIapDetailRealtimeRefresh;
+  });
+
+  useEffect(() => {
+    if (!app.identifier) return;
+
+    let active = true;
+    let cleanupSubscription: (() => void) | null = null;
+
+    async function subscribe() {
+      const { createClient } = await import("@/lib/supabase/client");
+      if (!active) return;
+
+      const supabase = createClient();
+      const topic = iapRealtimeTopic(app.platform, app.identifier);
+      const channel = supabase.channel(topic, {
+        config: { private: true },
+      });
+      cleanupSubscription = () => {
+        void supabase.removeChannel(channel);
+      };
+
+      const { data: sessionData, error } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      if (!active) return;
+
+      if (error || !accessToken) {
+        setRealtimeStatus("unauthorized");
+        return;
+      }
+
+      supabase.realtime.setAuth(accessToken);
+
+      channel
+        .on("broadcast", { event: "changed" }, () => {
+          realtimeRefreshHandlerRef.current();
+        })
+        .subscribe((status, err) => {
+          if (!active) return;
+
+          if (status === "SUBSCRIBED") {
+            setRealtimeStatus("connected");
+            return;
+          }
+
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.error("IAP detail realtime subscription failed", err);
+            setRealtimeStatus("error");
+            return;
+          }
+
+          if (status === "CLOSED") {
+            setRealtimeStatus("disconnected");
+          }
+        });
+    }
+
+    void subscribe();
+
+    return () => {
+      active = false;
+      if (realtimeRefreshTimerRef.current) {
+        clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      cleanupSubscription?.();
+    };
+  }, [app.identifier, app.platform]);
 
   const stats = useMemo(() => {
     const rev = metrics.totalRevenue;
@@ -713,6 +981,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const tableStartIndex =
     (transactionPagination.page - 1) * transactionPagination.pageSize;
   const visible = transactions;
+  const realtimeMeta = realtimeStatusMeta(realtimeStatus);
 
   const fmtVND = (n: number) =>
     new Intl.NumberFormat("vi-VN", {
@@ -822,7 +1091,20 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
 
       {/* Table Card */}
       <div className="flex-1 min-h-0 flex flex-col bg-card text-card-foreground border rounded-lg overflow-hidden">
-        <div className="flex flex-col items-stretch justify-end gap-4 border-b bg-muted/20 p-4 sm:flex-row sm:items-center">
+        <div className="flex flex-col items-stretch justify-between gap-4 border-b bg-muted/20 p-4 sm:flex-row sm:items-center">
+          <div className="flex min-h-9 items-center gap-2">
+            <Badge
+              variant="outline"
+              className={`px-2 py-0.5 text-[11px] font-medium ${realtimeMeta.className}`}
+            >
+              {realtimeMeta.label}
+            </Badge>
+            {realtimeRefreshing ? (
+              <span className="text-xs font-medium text-muted-foreground">
+                Syncing...
+              </span>
+            ) : null}
+          </div>
           <div className="flex w-full items-center gap-2 sm:w-auto">
             {!isIos && (
               <Select
@@ -1072,14 +1354,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                         variant="outline"
                         size="sm"
                         className="h-8 gap-1.5 px-2.5"
-                        onClick={() =>
-                          setSelectedReceipt(
-                            receiptDisplayPayload(transactionRawReceipt(tx)),
-                          )
-                        }
+                        disabled={receiptLoadingId === tx.id}
+                        onClick={() => void inspectTransactionReceipt(tx)}
                       >
-                        <FileJson size={13} />
-                        <span>JSON</span>
+                        {receiptLoadingId === tx.id ? (
+                          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        ) : (
+                          <FileJson size={13} />
+                        )}
+                        <span>{receiptLoadingId === tx.id ? "Loading" : "JSON"}</span>
                       </Button>
                     </td>
                   </tr>
