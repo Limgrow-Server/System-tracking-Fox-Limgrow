@@ -19,6 +19,7 @@ import {
   getCurrentIosCredentialForStorePurpose,
   getIosCredentialGroupsPage,
   getIosCredentials,
+  getIosCredentialStoreRefs,
   getIosCredentialsByIds,
   getIosCredentialTarget,
   updateIosCredential,
@@ -54,6 +55,7 @@ import {
 } from "@/lib/server/services/credentials/credential.shared";
 import type { CredentialPayload } from "@/lib/server/services/credentials/credential.types";
 import { iosCredentialToMetadata } from "@/lib/tracking/mappers/ios";
+import type { StoreMappingStoreOption } from "@/lib/tracking/page-data";
 
 type ExistingIosCredential = Awaited<ReturnType<typeof import("@/lib/server/repositories/ios/credential.repository").getIosCredentialTarget>>;
 
@@ -88,17 +90,48 @@ export function getIosCredentialConfigs(take = 200) {
   return getCachedIosCredentialConfigs(take);
 }
 
+export async function getIosCredentialStoreOptions(take = 300): Promise<StoreMappingStoreOption[]> {
+  const credentials = await getIosCredentialStoreRefs(take);
+  const options = new Map<string, StoreMappingStoreOption>();
+
+  for (const credential of credentials) {
+    const name =
+      credential.storeProfile?.storeAccountName?.trim() ||
+      credential.storeAccountName?.trim();
+
+    if (!credential.storeProfileId || !name || options.has(credential.storeProfileId)) {
+      continue;
+    }
+
+    options.set(credential.storeProfileId, {
+      id: credential.storeProfileId,
+      name,
+      platform: "ios",
+    });
+  }
+
+  return Array.from(options.values()).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
 export async function getIosCredentialConfigsPage(options: PaginationQuery & {
+  knownTotal?: number;
   search?: string;
 }) {
   const [profiles, total] = await getIosCredentialGroupsPage({
+    includeTotal: options.knownTotal === undefined,
     search: options.search,
     skip: options.skip,
     take: options.take,
   });
   const credentials = profiles.flatMap((profile) => profile.credentials);
 
-  return paginatedResult(credentials.map(iosCredentialToMetadata), total, options);
+  return paginatedResult(
+    credentials.map(iosCredentialToMetadata),
+    total ?? options.knownTotal ?? profiles.length,
+    options,
+  );
 }
 
 export async function getIosCredentialSecret(input: {

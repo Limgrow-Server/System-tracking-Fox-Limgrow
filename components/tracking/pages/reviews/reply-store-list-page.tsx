@@ -34,6 +34,7 @@ import type {
   ReplyStoreSummary,
 } from "@/lib/tracking/page-data";
 import { showToast } from "@/lib/client/toast";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 const REPLY_STORE_SKELETON_COUNT = 10;
 
@@ -118,6 +119,10 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
     string | null
   >(null);
 
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadStoresPage(1, value);
+  }, 500);
+
   async function loadStoresPage(page: number, nextSearch = search) {
     const params = new URLSearchParams({
       page: String(page),
@@ -161,6 +166,10 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
     });
   }
 
+  function prefetchStoreConfig(store: ReplyStoreSummary) {
+    router.prefetch(`/reply/${store.storeProfileId}`);
+  }
+
   const tableStartIndex = (storePagination.page - 1) * storePagination.pageSize;
 
   return (
@@ -183,7 +192,7 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
             onChange={(event) => {
               const nextValue = event.target.value;
               setSearch(nextValue);
-              void loadStoresPage(1, nextValue);
+              debouncedSearch(nextValue);
             }}
           />
         </div>
@@ -253,12 +262,14 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
                           isPending && "pointer-events-none bg-muted/30",
                         )}
                         onClick={() => openStoreConfig(store)}
+                        onFocus={() => prefetchStoreConfig(store)}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
                             openStoreConfig(store);
                           }
                         }}
+                        onMouseEnter={() => prefetchStoreConfig(store)}
                       >
                         <TableCell>
                           <div className="flex min-w-[18rem] items-center gap-3">

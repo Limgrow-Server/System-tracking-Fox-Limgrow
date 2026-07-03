@@ -34,6 +34,8 @@ export async function getIapAppDetailPageData(
   const trial = clean(options?.trial) || "all";
   const { appCard, metrics, transactions, transactionStates, trialAnalytics } =
     await getIapAppDetail(mappingId, platform, {
+      includeContext: false,
+      includeTrialAnalytics: false,
       kind,
       page,
       pageSize: IAP_TRANSACTION_PAGE_SIZE,
@@ -53,6 +55,7 @@ export async function getIapAppDetailPageData(
     },
     trialAnalytics,
     metrics,
+    metricsLoaded: false,
     transactionPagination: {
       page: transactions.page,
       pageSize: transactions.pageSize,

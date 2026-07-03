@@ -1,14 +1,11 @@
 import "server-only";
 
-import { canAccessReviewApp } from "@/lib/auth/app-scope";
+import { canAccessScopedRecord } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
 import { getGlobalReviewFetchSchedule } from "@/lib/server/repositories/reviews/review.repository";
 import {
-  filterReviewAppCards,
-  getReviewAppCards,
-  paginateReviewAppCards,
-  reviewStoreOptions,
+  getReviewAppCardsPage,
 } from "@/lib/server/services/reviews/review.service";
 import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/review-fetch-schedule.service";
 import type {
@@ -18,18 +15,18 @@ import type {
 } from "@/lib/tracking/page-data";
 
 function scheduleSummary(
-  apps: ReviewFetchScheduleApp[],
+  appCount: number,
   schedule: ReviewFetchScheduleDto | null,
 ) {
-  const scheduledCount = schedule ? apps.length : 0;
-  const activeCount = schedule?.status === "active" ? apps.length : 0;
-  const pausedCount = schedule?.status === "paused" ? apps.length : 0;
-  const unscheduledCount = apps.length - scheduledCount;
+  const scheduledCount = schedule ? appCount : 0;
+  const activeCount = schedule?.status === "active" ? appCount : 0;
+  const pausedCount = schedule?.status === "paused" ? appCount : 0;
+  const unscheduledCount = appCount - scheduledCount;
   const scheduleStatus = schedule?.status ?? "no_schedule";
 
   return {
     activeCount,
-    appCount: apps.length,
+    appCount,
     nextRunAt: schedule?.nextRunAt ?? null,
     pausedCount,
     scheduleStatus,
@@ -51,32 +48,25 @@ export async function getReviewFetchSchedulePageData(
     skip: options?.skip ?? 0,
     take: options?.take ?? 10,
   };
-  const apps = (await getReviewAppCards()).filter((app) =>
-    canAccessReviewApp(session, app),
-  );
-  const schedule = reviewFetchScheduleDto(await getGlobalReviewFetchSchedule());
-  const filteredApps = filterReviewAppCards(apps, {
-    search: options?.search,
-    storeProfileId: options?.storeProfileId,
-  });
-  const appPage = paginateReviewAppCards(filteredApps, pagination);
-  const storeOptions = reviewStoreOptions(apps);
-
+  const [page, schedule] = await Promise.all([
+    getReviewAppCardsPage({
+      ...pagination,
+      canAccess: (app) => canAccessScopedRecord(session, app),
+      search: options?.search,
+      storeProfileId: options?.storeProfileId,
+    }),
+    getGlobalReviewFetchSchedule().then(reviewFetchScheduleDto),
+  ]);
   return {
-    appPagination: {
-      page: appPage.page,
-      pageSize: appPage.pageSize,
-      total: appPage.total,
-      totalPages: appPage.totalPages,
-    },
-    apps: appPage.data as ReviewFetchScheduleApp[],
+    appPagination: page.appPagination,
+    apps: page.apps as ReviewFetchScheduleApp[],
     filters: {
       search: options?.search ?? "",
       storeProfileId: options?.storeProfileId ?? "all",
     },
     schedule,
-    storeNames: storeOptions.map((store) => store.name),
-    storeOptions,
-    summary: scheduleSummary(filteredApps, schedule),
+    storeNames: page.storeOptions.map((store) => store.name),
+    storeOptions: page.storeOptions,
+    summary: scheduleSummary(page.appPagination.total, schedule),
   };
 }

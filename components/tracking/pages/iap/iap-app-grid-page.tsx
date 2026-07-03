@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils";
 import type { IapAppCard, IapAppGridPageData } from "@/lib/tracking/page-data";
 import { showToast } from "@/lib/client/toast";
 import { compactNumber, microsToMoney } from "@/lib/tracking/format";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 const IAP_APP_SKELETON_COUNT = 12;
 
@@ -115,6 +116,10 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
   const [openStoreCombobox, setOpenStoreCombobox] = useState(false);
   const [pendingMappingId, setPendingMappingId] = useState<string | null>(null);
 
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadAppsPage(1, { searchQuery: value });
+  }, 500);
+
   async function loadAppsPage(
     page: number,
     overrides?: {
@@ -170,7 +175,7 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
 
   function updateSearchQuery(nextValue: string) {
     setSearchQuery(nextValue);
-    void loadAppsPage(1, { searchQuery: nextValue });
+    debouncedSearch(nextValue);
   }
 
   function updateSelectedPlatform(value: string) {
@@ -195,6 +200,10 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
     startTransition(() => {
       router.push(`/iap/${app.mappingId}?platform=${app.platform}`);
     });
+  }
+
+  function prefetchAppDetail(app: IapAppCard) {
+    router.prefetch(`/iap/${app.mappingId}?platform=${app.platform}`);
   }
 
   const tableStartIndex = (pagination.page - 1) * pagination.pageSize;
@@ -340,12 +349,14 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
                           isPending && "pointer-events-none bg-muted/30",
                         )}
                         onClick={() => openAppDetail(app)}
+                        onFocus={() => prefetchAppDetail(app)}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
                             openAppDetail(app);
                           }
                         }}
+                        onMouseEnter={() => prefetchAppDetail(app)}
                       >
                         <TableCell>
                           <div className="flex min-w-[18rem] items-center gap-3">

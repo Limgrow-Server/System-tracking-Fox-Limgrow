@@ -1,12 +1,9 @@
 import "server-only";
 
-import { canAccessReviewApp } from "@/lib/auth/app-scope";
+import { canAccessScopedRecord } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import {
-  filterReviewAppCards,
-  getReviewAppCards,
-  paginateReviewAppCards,
-  reviewStoreOptions,
+  getReviewAppCardsPage,
 } from "@/lib/server/services/reviews/review.service";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
 import type { ReviewAppGridPageData } from "@/lib/tracking/page-data";
@@ -29,34 +26,23 @@ export async function getReviewAppGridPageData(
     skip: options?.skip ?? 0,
     take: options?.take ?? 12,
   };
-  const apps = (await getReviewAppCards()).filter((app) =>
-    canAccessReviewApp(session, app),
-  );
-  const platformApps = filterReviewAppCards(apps, {
-    platform,
-  });
-  const filteredApps = filterReviewAppCards(apps, {
+  const page = await getReviewAppCardsPage({
+    ...pagination,
+    canAccess: (app) => canAccessScopedRecord(session, app),
     platform,
     search: options?.search,
     storeProfileId: options?.storeProfileId,
   });
-  const appPage = paginateReviewAppCards(filteredApps, pagination);
-  const storeOptions = reviewStoreOptions(platformApps);
 
   return {
-    appPagination: {
-      page: appPage.page,
-      pageSize: appPage.pageSize,
-      total: appPage.total,
-      totalPages: appPage.totalPages,
-    },
-    apps: appPage.data,
+    appPagination: page.appPagination,
+    apps: page.apps,
     filters: {
       platform,
       search: options?.search ?? "",
       storeProfileId: options?.storeProfileId ?? "all",
     },
-    storeNames: storeOptions.map((store) => store.name),
-    storeOptions,
+    storeNames: page.storeOptions.map((store) => store.name),
+    storeOptions: page.storeOptions,
   };
 }

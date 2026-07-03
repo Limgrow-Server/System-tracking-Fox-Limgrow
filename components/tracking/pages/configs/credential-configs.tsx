@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { useRouter } from "next/navigation";
 import {
   CloudUpload,
   Copy,
@@ -27,6 +26,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { showToast } from "@/lib/client/toast";
+import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 import {
   PageHeader,
@@ -1042,7 +1042,6 @@ export function CredentialConfigs({
   data: ConfigsPageData;
   platformFilter: MobilePlatform;
 }) {
-  const router = useRouter();
   const platformLabel = platformFilter === "android" ? "Android" : "iOS";
   const [credentialSecrets, setCredentialSecrets] = useState(data.credentialSecrets);
   const [credentialPagination, setCredentialPagination] = useState(data.credentialPagination);
@@ -1145,14 +1144,18 @@ export function CredentialConfigs({
     [credentialSecrets, selectedCredentialId],
   );
 
+  const debouncedSearch = useDebouncedCallback((value: string) => {
+    void loadCredentialPage(1, { searchQuery: value });
+  }, 500);
+
   function updateCredentialSearchQuery(nextValue: string) {
     setCredentialSearchQuery(nextValue);
-    void loadCredentialPage(1, { searchQuery: nextValue });
+    debouncedSearch(nextValue);
   }
 
   async function loadCredentialPage(
     page: number,
-    overrides?: { searchQuery?: string },
+    overrides?: { knownTotal?: number; searchQuery?: string },
   ) {
     const nextSearchQuery =
       overrides?.searchQuery ?? credentialSearchQuery;
@@ -1164,6 +1167,9 @@ export function CredentialConfigs({
     const search = nextSearchQuery.trim();
 
     if (search) params.set("search", search);
+    if (overrides?.knownTotal !== undefined) {
+      params.set("knownTotal", String(overrides.knownTotal));
+    }
 
     setCredentialTableLoading(true);
 
@@ -1494,7 +1500,6 @@ export function CredentialConfigs({
         `Android credential has been set to ${credentialStatusLabel(nextStatus)}.`,
       );
       await loadCredentialPage(credentialPagination.page);
-      router.refresh();
       setStatusConfirmTarget(null);
     } catch (error) {
       void showToast("error",
@@ -1523,7 +1528,6 @@ export function CredentialConfigs({
         `iOS credential group has been set to ${credentialStatusLabel(nextStatus)}.`,
       );
       await loadCredentialPage(credentialPagination.page);
-      router.refresh();
       setStatusConfirmTarget(null);
     } catch (error) {
       void showToast("error",
@@ -1591,7 +1595,6 @@ export function CredentialConfigs({
           ? credentialPagination.page - 1
           : credentialPagination.page,
       );
-      router.refresh();
     } catch (error) {
       void showToast("error",
         error instanceof Error
@@ -1853,7 +1856,6 @@ export function CredentialConfigs({
     setVaultSecretCache({});
     void showToast("success", "iOS credential vault has been saved.");
     await loadCredentialPage(credentialPagination.page);
-    router.refresh();
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -1909,7 +1911,6 @@ export function CredentialConfigs({
         setSheetOpen(false);
         void showToast("success", payload.message ?? "Credential metadata updated.");
         await loadCredentialPage(credentialPagination.page);
-        router.refresh();
         return;
       }
 
@@ -1973,7 +1974,6 @@ export function CredentialConfigs({
       setSheetOpen(false);
       void showToast("success", payload.message ?? "Credential operation completed.");
       await loadCredentialPage(selectedCredentialId === "new" ? 1 : credentialPagination.page);
-      router.refresh();
     } catch (error) {
       void showToast("error",
         error instanceof Error ? error.message : "Credential operation failed.",
@@ -2803,7 +2803,11 @@ export function CredentialConfigs({
                   credentialPagination.pageSize +
                 1
               }
-              onPageChange={(page) => void loadCredentialPage(page)}
+              onPageChange={(page) =>
+                void loadCredentialPage(page, {
+                  knownTotal: credentialPagination.total,
+                })
+              }
               page={credentialPagination.page}
               shown={credentialSecrets.length}
               to={
@@ -2995,7 +2999,11 @@ export function CredentialConfigs({
                   credentialPagination.pageSize +
                 1
               }
-              onPageChange={(page) => void loadCredentialPage(page)}
+              onPageChange={(page) =>
+                void loadCredentialPage(page, {
+                  knownTotal: credentialPagination.total,
+                })
+              }
               page={credentialPagination.page}
               shown={iosCredentialGroups.length}
               to={

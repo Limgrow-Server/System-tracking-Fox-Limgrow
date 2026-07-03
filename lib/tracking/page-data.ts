@@ -18,9 +18,16 @@ export type PaginationMeta = {
 };
 
 export type StoreMappingPageData = {
-  storeMappings: StoreMapping[];
-  storeMappingPagination: PaginationMeta;
   credentialSecrets: CredentialSecretMetadata[];
+  storeMappingPagination: PaginationMeta;
+  storeMappings: StoreMapping[];
+  storeOptions: StoreMappingStoreOption[];
+};
+
+export type StoreMappingStoreOption = {
+  id: string;
+  name: string;
+  platform: "android" | "ios";
 };
 
 export type UsersPageData = {
@@ -179,6 +186,7 @@ export type IapAppDetailPageData = {
     trial: string;
   };
   metrics: IapAppMetrics;
+  metricsLoaded?: boolean;
   trialAnalytics: IapTrialConversionAnalytics | null;
   transactionPagination: PaginationMeta;
   transactionStates: string[];

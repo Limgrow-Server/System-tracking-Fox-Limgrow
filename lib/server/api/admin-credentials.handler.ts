@@ -37,6 +37,11 @@ function searchText(value: string | null) {
   return value?.trim() || undefined;
 }
 
+function knownTotalFromSearch(value: string | null) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 function platformFromCredentialPayload(payload: CredentialPayload): CredentialPlatform {
   if (payload.platform === "android" || payload.storePlatform === "google_play") return "android";
   if (payload.platform === "ios" || payload.storePlatform === "apple_app_store") return "ios";
@@ -76,6 +81,7 @@ export async function handleAdminCredentialsGet(request: Request) {
     const pagination = paginationFromSearchParams(url.searchParams);
     const query = {
       ...pagination,
+      knownTotal: knownTotalFromSearch(url.searchParams.get("knownTotal")),
       search: searchText(url.searchParams.get("search")),
     };
 

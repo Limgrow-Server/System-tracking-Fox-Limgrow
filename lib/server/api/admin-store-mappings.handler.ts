@@ -35,6 +35,11 @@ function platformFromSearch(value: string) {
   throw badRequest("Mapping platform is required.");
 }
 
+function knownTotalFromSearch(value: string) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 export async function handleAdminStoreMappingsGet(request: Request) {
   try {
     await requireAdminSession();
@@ -44,6 +49,7 @@ export async function handleAdminStoreMappingsGet(request: Request) {
     const pagination = paginationFromSearchParams(url.searchParams);
     const query = {
       ...pagination,
+      knownTotal: knownTotalFromSearch(clean(url.searchParams.get("knownTotal"))),
       search: clean(url.searchParams.get("search")) || undefined,
       storeProfileId: clean(url.searchParams.get("storeProfileId")) || undefined,
     };

@@ -1,17 +1,17 @@
 import "server-only";
 
-import { getIosCredentialConfigs } from "@/lib/server/services/credentials/ios-credential.service";
+import { getIosCredentialStoreOptions } from "@/lib/server/services/credentials/ios-credential.service";
 import { getIosStoreMappingPageResult } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import type { StoreMappingPageData } from "@/lib/tracking/page-data";
 
 export async function getIosStoreMappingPageData(): Promise<StoreMappingPageData> {
-  const [storeMappingPage, credentialConfigs] = await Promise.all([
+  const [storeMappingPage, storeOptions] = await Promise.all([
     getIosStoreMappingPageResult({ page: 1, pageSize: 10, skip: 0, take: 10 }),
-    getIosCredentialConfigs(),
+    getIosCredentialStoreOptions(),
   ]);
 
   return {
-    credentialSecrets: credentialConfigs.credentials,
+    credentialSecrets: [],
     storeMappingPagination: {
       page: storeMappingPage.page,
       pageSize: storeMappingPage.pageSize,
@@ -19,5 +19,6 @@ export async function getIosStoreMappingPageData(): Promise<StoreMappingPageData
       totalPages: storeMappingPage.totalPages,
     },
     storeMappings: storeMappingPage.data,
+    storeOptions,
   };
 }

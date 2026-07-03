@@ -17,7 +17,24 @@ export function getIosCredentials(take = 160) {
   });
 }
 
+export function getIosCredentialStoreRefs(take = 300) {
+  return prisma.iosCredential.findMany({
+    orderBy: { updatedAt: "desc" },
+    select: {
+      storeAccountName: true,
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+      storeProfileId: true,
+    },
+    take,
+  });
+}
+
 type IosCredentialGroupPageOptions = {
+  includeTotal?: boolean;
   search?: string;
   skip: number;
   take: number;
@@ -57,19 +74,24 @@ function iosCredentialGroupWhere(options: IosCredentialGroupPageOptions): Prisma
 
 export function getIosCredentialGroupsPage(options: IosCredentialGroupPageOptions) {
   const where = iosCredentialGroupWhere(options);
+  const rows = prisma.iosStoreProfile.findMany({
+    where,
+    include: {
+      credentials: {
+        orderBy: { updatedAt: "desc" },
+      },
+    },
+    orderBy: { updatedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
+
+  if (options.includeTotal === false) {
+    return rows.then((profiles) => [profiles, null] as const);
+  }
 
   return prisma.$transaction([
-    prisma.iosStoreProfile.findMany({
-      where,
-      include: {
-        credentials: {
-          orderBy: { updatedAt: "desc" },
-        },
-      },
-      orderBy: { updatedAt: "desc" },
-      skip: options.skip,
-      take: options.take,
-    }),
+    rows,
     prisma.iosStoreProfile.count({ where }),
   ]);
 }

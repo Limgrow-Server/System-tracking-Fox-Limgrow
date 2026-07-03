@@ -36,6 +36,7 @@ export function getAndroidStoreMappings(options?: { take?: number }) {
 }
 
 type AndroidStoreMappingPageOptions = {
+  includeTotal?: boolean;
   search?: string;
   skip: number;
   storeProfileId?: string;
@@ -69,21 +70,26 @@ function androidStoreMappingWhere(options: AndroidStoreMappingPageOptions): Pris
 
 export function getAndroidStoreMappingsPage(options: AndroidStoreMappingPageOptions) {
   const where = androidStoreMappingWhere(options);
-
-  return prisma.$transaction([
-    prisma.androidStoreMapping.findMany({
-      where,
-      include: {
-        storeProfile: {
-          select: {
-            storeAccountName: true,
-          },
+  const rows = prisma.androidStoreMapping.findMany({
+    where,
+    include: {
+      storeProfile: {
+        select: {
+          storeAccountName: true,
         },
       },
-      orderBy: { updatedAt: "desc" },
-      skip: options.skip,
-      take: options.take,
-    }),
+    },
+    orderBy: { updatedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
+
+  if (options.includeTotal === false) {
+    return rows.then((mappings) => [mappings, null] as const);
+  }
+
+  return prisma.$transaction([
+    rows,
     prisma.androidStoreMapping.count({ where }),
   ]);
 }
