@@ -528,6 +528,7 @@ export async function updateBackgroundJobBySourceJob(input: {
   progressCurrent?: number;
   progressTotal?: number | null;
   sourceJobId: string;
+  startedAt?: Date | null;
   status?: BackgroundJobStatus;
 }) {
   const data: Prisma.BackgroundJobUpdateManyMutationInput = {};
@@ -540,9 +541,9 @@ export async function updateBackgroundJobBySourceJob(input: {
   }
   if (input.status) {
     data.status = input.status;
-    if (input.status === "RUNNING") {
-      data.startedAt = new Date();
-    }
+  }
+  if (input.startedAt !== undefined) {
+    data.startedAt = input.startedAt;
   }
   if (input.lastError !== undefined) {
     data.lastError = input.lastError;

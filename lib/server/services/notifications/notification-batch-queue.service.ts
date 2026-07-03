@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "crypto";
 
-import type { NotificationJob, Prisma } from "@prisma/client";
+import type { BackgroundJobStatus, NotificationJob, Prisma } from "@prisma/client";
 
 import { firstAppId } from "@/lib/tracking/identity";
 import { prisma } from "@/lib/prisma";
@@ -52,6 +52,15 @@ type EdgeFunctionResult = {
   targetType?: string;
   topicBase?: string;
   results?: Array<Record<string, unknown>>;
+};
+
+type NotificationBatchAggregate = {
+  error_count: number;
+  failed_count: number;
+  last_error: string | null;
+  pending_count: number;
+  sent_count: number;
+  total_count: number;
 };
 
 function clean(value: unknown) {
@@ -430,6 +439,7 @@ async function failMaterializedNotificationJob(jobId: string, message: string) {
 async function materializeNotificationJob(job: NotificationJob) {
   await updateBackgroundJobBySourceJob({
     sourceJobId: job.id,
+    startedAt: new Date(),
     status: "RUNNING",
   });
 
@@ -541,7 +551,7 @@ async function claimNotificationBatches(limit: number) {
 async function recoverStaleNotificationBatches(now: Date) {
   const staleBefore = new Date(now.getTime() - LOCK_TTL_MS);
 
-  return prisma.$executeRaw`
+  const rows = await prisma.$queryRaw<Array<{ job_id: string }>>`
     update notification_job_batches
     set
       status = case when attempt_count >= max_attempts then 'failed' else 'retrying' end,
@@ -553,7 +563,13 @@ async function recoverStaleNotificationBatches(now: Date) {
       updated_at = ${now}
     where status = 'processing'
       and locked_at < ${staleBefore}
+    returning job_id::text
   `;
+
+  return {
+    count: rows.length,
+    jobIds: Array.from(new Set(rows.map((row) => row.job_id).filter(Boolean))),
+  };
 }
 
 function edgePayloadFromJob(job: NotificationJob, batch: NotificationBatchRow) {
@@ -645,22 +661,22 @@ async function callSendNotificationBatch(job: NotificationJob, batch: Notificati
 }
 
 async function updateParentJobAggregate(jobId: string) {
-  const [sum, total, pending, failed] = await Promise.all([
-    prisma.notificationJobBatch.aggregate({
-      where: { jobId },
-      _sum: { sentCount: true, errorCount: true },
-    }),
-    prisma.notificationJobBatch.count({ where: { jobId } }),
-    prisma.notificationJobBatch.count({
-      where: {
-        jobId,
-        status: { in: ["queued", "retrying", "processing"] },
-      },
-    }),
-    prisma.notificationJobBatch.count({ where: { jobId, status: "failed" } }),
-  ]);
-  const sentCount = sum._sum.sentCount ?? 0;
-  const errorCount = sum._sum.errorCount ?? 0;
+  const [summary] = await prisma.$queryRaw<NotificationBatchAggregate[]>`
+    select
+      count(*)::int as total_count,
+      count(*) filter (where status in ('queued', 'retrying', 'processing'))::int as pending_count,
+      count(*) filter (where status = 'failed')::int as failed_count,
+      coalesce(sum(sent_count), 0)::int as sent_count,
+      coalesce(sum(error_count), 0)::int as error_count,
+      max(last_error) filter (where last_error is not null) as last_error
+    from notification_job_batches
+    where job_id = ${jobId}::uuid
+  `;
+  const total = summary?.total_count ?? 0;
+  const pending = summary?.pending_count ?? 0;
+  const failed = summary?.failed_count ?? 0;
+  const sentCount = summary?.sent_count ?? 0;
+  const errorCount = summary?.error_count ?? 0;
   const complete = total > 0 && pending === 0;
   const status = !complete
     ? "processing"
@@ -669,17 +685,35 @@ async function updateParentJobAggregate(jobId: string) {
       : failed > 0 || errorCount > 0
         ? "sent_with_issues"
         : "sent";
+  const backgroundStatus: BackgroundJobStatus = !complete
+    ? "RUNNING"
+    : status === "failed"
+      ? "FAILED"
+      : status === "sent_with_issues"
+        ? "PARTIAL"
+        : "SUCCEEDED";
+  const finishedAt = complete ? new Date() : null;
 
-  await prisma.notificationJob.update({
-    where: { id: jobId },
-    data: {
-      errorCount,
-      sentAt: complete ? new Date() : null,
-      sentCount,
-      status,
-      updatedAt: new Date(),
-    },
-  });
+  await Promise.all([
+    prisma.notificationJob.update({
+      where: { id: jobId },
+      data: {
+        errorCount,
+        sentAt: finishedAt,
+        sentCount,
+        status,
+        updatedAt: new Date(),
+      },
+    }),
+    updateBackgroundJobBySourceJob({
+      finishedAt,
+      lastError: complete && status !== "sent" ? summary?.last_error ?? null : null,
+      progressCurrent: Math.max(0, total - pending),
+      progressTotal: total || null,
+      sourceJobId: jobId,
+      status: backgroundStatus,
+    }),
+  ]);
 }
 
 async function finishBatchSuccess(batch: NotificationBatchRow, result: EdgeFunctionResult) {
@@ -755,6 +789,7 @@ export async function runNotificationBatchQueue(options?: { limit?: number }) {
   const now = new Date();
   const recovered = await recoverStaleNotificationBatches(now);
   const limit = Math.min(Math.max(options?.limit ?? notificationQueueClaimLimit(), 1), 20);
+  await Promise.all(recovered.jobIds.map((jobId) => updateParentJobAggregate(jobId)));
   const materialized = await materializePendingNotificationJobs(limit);
   const batches = await claimNotificationBatches(limit);
   const processed = [];
@@ -768,6 +803,6 @@ export async function runNotificationBatchQueue(options?: { limit?: number }) {
     claimed: batches.length,
     materialized,
     processed,
-    recovered,
+    recovered: recovered.count,
   };
 }
