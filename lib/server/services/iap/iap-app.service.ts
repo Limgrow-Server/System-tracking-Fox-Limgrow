@@ -136,6 +136,7 @@ export function getIapAppCardsPage(
 }
 
 type IapTransactionPageOptions = PaginationQuery & {
+  environment?: string;
   includeContext?: boolean;
   knownTotal?: number;
   kind?: string;
@@ -222,6 +223,7 @@ export async function getIapAppTransactionsPage(
         getAndroidTransactionStatesByPackageAndProfile(
           mapping.packageName,
           mapping.storeProfileId,
+          options,
         ),
       ]);
 
@@ -309,6 +311,7 @@ export async function getIapAppDetail(
   mappingId: string,
   platform: string,
   options: PaginationQuery & {
+    environment?: string;
     includeContext?: boolean;
     includeTrialAnalytics?: boolean;
     kind?: string;
@@ -371,6 +374,7 @@ export async function getIapAppDetail(
         getAndroidTransactionStatesByPackageAndProfile(
           mapping.packageName,
           mapping.storeProfileId,
+          options,
         ),
       ]);
 
@@ -463,6 +467,7 @@ export async function getIapAppContext(
   mappingId: string,
   platform: string,
   options: {
+    environment?: string;
     kind?: string;
     state?: string;
     trial?: string;
@@ -496,6 +501,7 @@ export async function getIapAppContext(
       getAndroidTransactionStatesByPackageAndProfile(
         mapping.packageName,
         mapping.storeProfileId,
+        options,
       ),
     ]);
 

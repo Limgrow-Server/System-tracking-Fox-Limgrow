@@ -405,6 +405,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [trialAnalyticsLoading, setTrialAnalyticsLoading] = useState(
     isIos && !data.trialAnalytics,
   );
+  const [filterEnvironment, setFilterEnvironment] = useState<string>(
+    data.filters.environment,
+  );
   const [filterState, setFilterState] = useState<string>(data.filters.state);
   const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
   const [filterTrial, setFilterTrial] = useState<string>(data.filters.trial);
@@ -415,11 +418,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   async function loadTransactionsPage(
     page: number,
     overrides?: {
+      filterEnvironment?: string;
       filterKind?: string;
       filterState?: string;
       filterTrial?: string;
     },
   ) {
+    const nextFilterEnvironment =
+      overrides?.filterEnvironment ?? filterEnvironment;
     const nextFilterState = overrides?.filterState ?? filterState;
     const nextFilterKind = overrides?.filterKind ?? filterKind;
     const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
@@ -431,6 +437,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       platform: app.platform,
     });
 
+    if (!isIos && nextFilterEnvironment !== "all") {
+      params.set("environment", nextFilterEnvironment);
+    }
     if (nextFilterState !== "all") params.set("state", nextFilterState);
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
     if (isIos && nextFilterTrial !== "all") {
@@ -488,6 +497,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       platform: app.platform,
     });
 
+    if (!isIos && filterEnvironment !== "all") {
+      params.set("environment", filterEnvironment);
+    }
     if (filterState !== "all") params.set("state", filterState);
     if (!isIos && filterKind !== "all") params.set("kind", filterKind);
     if (isIos && filterTrial !== "all") {
@@ -530,6 +542,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   }, [
     app.mappingId,
     app.platform,
+    filterEnvironment,
     filterKind,
     filterState,
     filterTrial,
@@ -733,6 +746,24 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       <div className="flex-1 min-h-0 flex flex-col bg-card text-card-foreground border rounded-lg overflow-hidden">
         <div className="flex flex-col items-stretch justify-end gap-4 border-b bg-muted/20 p-4 sm:flex-row sm:items-center">
           <div className="flex w-full items-center gap-2 sm:w-auto">
+            {!isIos && (
+              <Select
+                value={filterEnvironment}
+                onValueChange={(v) => {
+                  setFilterEnvironment(v);
+                  void loadTransactionsPage(1, { filterEnvironment: v });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full bg-background sm:w-[145px]">
+                  <SelectValue placeholder="Environment" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Env</SelectItem>
+                  <SelectItem value="production">Production</SelectItem>
+                  <SelectItem value="test">Test</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             {!isIos && (
               <Select
                 value={filterKind}

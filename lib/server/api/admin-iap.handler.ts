@@ -96,6 +96,7 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
 
     const detail = await getIapAppTransactionsPage(mappingId, platform, {
       ...pagination,
+      environment: clean(url.searchParams.get("environment")) || undefined,
       includeContext: clean(url.searchParams.get("context")) !== "false",
       knownTotal: optionalPositiveInt(url.searchParams.get("knownTotal")),
       kind: clean(url.searchParams.get("kind")) || "all",
@@ -130,6 +131,7 @@ export async function handleAdminIapAppContextGet(request: Request) {
     if (!mappingId) throw badRequest("IAP mapping id is required.");
 
     const detail = await getIapAppContext(mappingId, platform, {
+      environment: clean(url.searchParams.get("environment")) || undefined,
       kind: clean(url.searchParams.get("kind")) || "all",
       state: clean(url.searchParams.get("state")) || "all",
       trial: clean(url.searchParams.get("trial")) || "all",

@@ -44,7 +44,9 @@ function compactCurrencyLabel(value: number) {
 
 function toChartBuckets(buckets: IapRevenueBucket[]) {
   return buckets.map((bucket, index): RevenueBucket => {
-    const production = Number.isFinite(bucket.prod) ? bucket.prod : 0;
+    const prod = Number.isFinite(bucket.prod) ? bucket.prod : 0;
+    const sand = Number.isFinite(bucket.sand) ? bucket.sand : 0;
+    const production = prod + sand;
 
     return {
       fullLabel: bucket.label,

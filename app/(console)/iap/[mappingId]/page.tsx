@@ -18,6 +18,7 @@ export default async function IapAppDetailRoutePage({
 }: {
   params: Promise<{ mappingId: string }>;
   searchParams: Promise<{
+    environment?: string | string[];
     kind?: string | string[];
     page?: string | string[];
     platform?: string | string[];
@@ -36,6 +37,7 @@ export default async function IapAppDetailRoutePage({
   }
 
   const data = await getIapAppDetailPageData(mappingId, platform, session, {
+    environment: single(query.environment),
     kind: single(query.kind),
     page: pageNumber(query.page),
     state: single(query.state),

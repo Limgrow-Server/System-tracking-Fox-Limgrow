@@ -181,6 +181,7 @@ export type IapAppMetrics = {
 export type IapAppDetailPageData = {
   app: IapAppCard;
   filters: {
+    environment: string;
     kind: string;
     state: string;
     trial: string;

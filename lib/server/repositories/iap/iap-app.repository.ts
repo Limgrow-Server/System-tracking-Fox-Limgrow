@@ -131,6 +131,7 @@ export async function getIosMappingById(id: string) {
 }
 
 type AndroidTransactionPageOptions = {
+  environment?: string;
   includeTotal?: boolean;
   kind?: string;
   page: number;
@@ -201,7 +202,12 @@ async function getIapMetrics(
   sourceSql: Prisma.Sql,
   whereSql: Prisma.Sql,
   testExpression: Prisma.Sql,
+  options?: { includeTest?: boolean },
 ) {
+  const metricScopeSql = options?.includeTest
+    ? Prisma.sql`true`
+    : Prisma.sql`not is_test`;
+
   const [metricsRows, bucketRows] = await Promise.all([
     prisma.$queryRaw<IapMetricsRow[]>(Prisma.sql`
       with filtered as (
@@ -213,13 +219,13 @@ async function getIapMetrics(
         from ${sourceSql}
         ${whereSql}
       ),
-      production as (
+      metric_source as (
         select *
         from filtered
-        where not is_test
+        where ${metricScopeSql}
       ),
       anchor as (
-        select max(purchase_date) as latest from production
+        select max(purchase_date) as latest from metric_source
       )
       select
         count(*)::int as "totalCount",
@@ -247,7 +253,7 @@ async function getIapMetrics(
             and purchase_date >= (select latest from anchor) - interval '14 days'
             and purchase_date < (select latest from anchor) - interval '7 days'
         )::int as "previous7Orders"
-      from production
+      from metric_source
     `),
     prisma.$queryRaw<IapRevenueBucketRow[]>(Prisma.sql`
       with filtered as (
@@ -258,14 +264,14 @@ async function getIapMetrics(
         from ${sourceSql}
         ${whereSql}
       ),
-      production as (
+      metric_source as (
         select *
         from filtered
-        where not is_test
+        where ${metricScopeSql}
       ),
       anchor as (
         select date_trunc('month', coalesce(max(purchase_date), '2026-06-01'::timestamptz)) as chart_end
-        from production
+        from metric_source
       ),
       months as (
         select generate_series(
@@ -276,13 +282,17 @@ async function getIapMetrics(
       )
       select
         to_char(months.month_start, 'Mon') as label,
-        coalesce(sum((production.revenue_micros::numeric / 1000000.0)) filter (
-          where coalesce(production.revenue_micros, 0) > 0
+        coalesce(sum((metric_source.revenue_micros::numeric / 1000000.0)) filter (
+          where not metric_source.is_test
+            and coalesce(metric_source.revenue_micros, 0) > 0
         ), 0)::float8 as prod,
-        0::float8 as sand
+        coalesce(sum((metric_source.revenue_micros::numeric / 1000000.0)) filter (
+          where metric_source.is_test
+            and coalesce(metric_source.revenue_micros, 0) > 0
+        ), 0)::float8 as sand
       from months
-      left join production
-        on date_trunc('month', production.purchase_date) = months.month_start
+      left join metric_source
+        on date_trunc('month', metric_source.purchase_date) = months.month_start
       group by months.month_start
       order by months.month_start
     `),
@@ -299,10 +309,18 @@ function androidTransactionWhere(
   const where: Prisma.IapAndroidWhereInput = {
     packageName,
     storeProfileId,
-    isTestPurchase: false,
   };
+  const environment = options?.environment?.trim();
   const state = options?.state?.trim();
   const kind = options?.kind?.trim();
+
+  if (environment === "production") {
+    where.isTestPurchase = false;
+  }
+
+  if (environment === "test") {
+    where.isTestPurchase = true;
+  }
 
   if (state && state !== "all") {
     where.state = { equals: state, mode: "insensitive" };
@@ -351,11 +369,17 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
   const conditions = [
     Prisma.sql`package_name = ${packageName}`,
     Prisma.sql`store_profile_id = ${storeProfileId}::uuid`,
-    Prisma.sql`not is_test_purchase`,
   ];
+  const environment = options.environment?.trim();
   const state = options.state?.trim();
   const kind = options.kind?.trim();
 
+  if (environment === "production") {
+    conditions.push(Prisma.sql`not is_test_purchase`);
+  }
+  if (environment === "test") {
+    conditions.push(Prisma.sql`is_test_purchase`);
+  }
   if (state && state !== "all") {
     conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
   }
@@ -367,16 +391,18 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
     Prisma.sql`public.iap_android`,
     Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
     Prisma.sql`is_test_purchase`,
+    { includeTest: environment !== "production" },
   );
 }
 
 export async function getAndroidTransactionStatesByPackageAndProfile(
   packageName: string,
   storeProfileId: string,
+  options?: Partial<AndroidTransactionPageOptions>,
 ) {
   const rows = await prisma.iapAndroid.groupBy({
     by: ["state"],
-    where: androidTransactionWhere(packageName, storeProfileId),
+    where: androidTransactionWhere(packageName, storeProfileId, options),
     orderBy: { state: "asc" },
   });
 
