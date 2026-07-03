@@ -112,6 +112,7 @@ export type IosIapTransactionSummary = {
   storefront: string | null;
   revocation_date: string | null;
   environment: string;
+  ingestion_source: string | null;
   raw_receipt: unknown;
   verified_at: string;
   created_at: string;

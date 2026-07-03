@@ -442,7 +442,12 @@ async function verifyApple(
     currency: stringValue(decoded?.currency),
     is_trial: decoded?.offerType === 1 || stringValue(decoded?.offerDiscountType)?.toUpperCase() === "FREE_TRIAL",
     environment: normalizeEnvironment(decoded?.environment ?? verifiedEnvironment),
-    raw_receipt: provider,
+    raw_receipt: {
+      ...provider,
+      requestedEnvironment: clean(payload.environment) || null,
+      source: "verify_ios_edge_function",
+      verifiedEnvironment,
+    },
     verified_at: new Date().toISOString(),
     offer_discount_type: stringValue(decoded?.offerDiscountType) || null,
     offer_type: finiteInt(decoded?.offerType),
@@ -461,6 +466,14 @@ async function verifyApple(
   };
 
   const data = await persistIosTransaction(supabase, row);
+
+  console.info("Apple transaction verify saved", {
+    bundleId,
+    environment: row.environment,
+    source: "verify_ios_edge_function",
+    state: data.state,
+    transactionId: resolvedTransactionId,
+  });
 
   return {
     tracked: true,

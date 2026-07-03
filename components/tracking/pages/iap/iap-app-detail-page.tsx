@@ -183,6 +183,47 @@ function transactionRawReceipt(transaction: IapAppTransaction) {
     : transaction.rawReceipt;
 }
 
+function transactionSource(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction) ? transaction.ingestion_source : null;
+}
+
+function sourceMeta(source: string | null) {
+  const normalized = source?.trim().toLowerCase() ?? "";
+
+  if (normalized === "app_store_server_notification") {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Webhook",
+      title: "Saved from App Store Server Notifications webhook",
+    };
+  }
+
+  if (
+    normalized === "verify_ios_edge_function" ||
+    normalized === "app_store_server_api.get_transaction_info"
+  ) {
+    return {
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      label: "Verify API",
+      title: "Saved from verify-ios/API transaction verification",
+    };
+  }
+
+  if (normalized) {
+    return {
+      className: "border-slate-200 bg-slate-50 text-slate-600",
+      label: source,
+      title: `Saved from ${source}`,
+    };
+  }
+
+  return {
+    className: "border-slate-200 bg-slate-50 text-slate-600",
+    label: "Legacy API",
+    title: "Saved before source tracking was added, likely from verify-ios/API",
+  };
+}
+
 type JsonRecord = Record<string, unknown>;
 
 function isJsonRecord(value: unknown): value is JsonRecord {
@@ -801,6 +842,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 const currency = transactionCurrency(tx);
                 const purchaseDate = transactionPurchaseDate(tx);
                 const expiresDate = transactionExpiresDate(tx);
+                const source = isIos ? sourceMeta(transactionSource(tx)) : null;
                 return (
                   <tr
                     key={tx.id}
@@ -838,6 +880,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             }
                           >
                             {trialLabel}
+                          </Badge>
+                        ) : null}
+                        {source ? (
+                          <Badge
+                            variant="outline"
+                            className={`px-2 py-0.5 text-[11px] font-medium ${source.className}`}
+                            title={source.title}
+                          >
+                            {source.label}
                           </Badge>
                         ) : null}
                         <div className="text-xs text-muted-foreground font-semibold">
