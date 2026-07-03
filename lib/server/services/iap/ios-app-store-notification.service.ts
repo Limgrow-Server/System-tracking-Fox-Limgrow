@@ -279,6 +279,14 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "App Store notification processing failed.";
 }
 
+function notificationLog(
+  level: "error" | "info" | "warn",
+  message: string,
+  details: Record<string, unknown>,
+) {
+  console[level](`[app-store-notifications] ${message}`, details);
+}
+
 export async function processAppStoreServerNotification(
   payload: AppStoreNotificationPayload,
 ) {
@@ -292,17 +300,36 @@ export async function processAppStoreServerNotification(
   const bundleId = clean(unsafeData.bundleId);
   const appAppleId = numberString(unsafeData.appAppleId);
   const environment = appleEnvironment(unsafeData.environment);
+  const environmentName = dbEnvironment(unsafeData.environment);
 
   if (!bundleId) {
     throw badRequest("App Store notification bundleId is required.");
   }
 
+  notificationLog("info", "webhook payload received", {
+    appAppleId,
+    bundleId,
+    environment: environmentName,
+  });
+
   const mapping = await getIosStoreMappingForNotification({ appAppleId, bundleId });
   if (!mapping) {
+    notificationLog("warn", "webhook payload has no active mapping", {
+      appAppleId,
+      bundleId,
+      environment: environmentName,
+    });
     throw badRequest("No active iOS app mapping matches this App Store notification.");
   }
 
   if (appAppleId && mapping.appleAppId && mapping.appleAppId !== appAppleId) {
+    notificationLog("warn", "webhook appAppleId mismatch", {
+      appAppleId,
+      bundleId,
+      environment: environmentName,
+      mappingAppleAppId: mapping.appleAppId,
+      mappingId: mapping.id,
+    });
     throw badRequest("App Store notification appAppleId does not match the iOS app mapping.");
   }
 
@@ -338,7 +365,26 @@ export async function processAppStoreServerNotification(
     });
     eventId = reservation.event.id;
 
+    notificationLog("info", "webhook event reserved", {
+      appAppleId,
+      bundleId,
+      environment: reservation.event.environment,
+      eventId,
+      mappingId: mapping.id,
+      notificationType,
+      notificationUuid,
+      shouldProcess: reservation.shouldProcess,
+      status: reservation.event.status,
+      subtype,
+    });
+
     if (!reservation.shouldProcess) {
+      notificationLog("info", "webhook duplicate skipped", {
+        eventId,
+        notificationType,
+        notificationUuid,
+        status: reservation.event.status,
+      });
       return {
         duplicate: true,
         eventId,
@@ -351,6 +397,13 @@ export async function processAppStoreServerNotification(
       await markIosIapNotificationEventProcessed(eventId, {
         decodedPayload: jsonValue(notification),
         status: "ignored",
+      });
+
+      notificationLog("info", "webhook event ignored", {
+        eventId,
+        notificationType,
+        notificationUuid,
+        reason: "notification_type_out_of_scope",
       });
 
       return {
@@ -367,6 +420,13 @@ export async function processAppStoreServerNotification(
       await markIosIapNotificationEventProcessed(eventId, {
         decodedPayload: jsonValue(notification),
         status: "ignored",
+      });
+
+      notificationLog("info", "webhook event ignored", {
+        eventId,
+        notificationType,
+        notificationUuid,
+        reason: "missing_signed_transaction_info",
       });
 
       return {
@@ -400,6 +460,19 @@ export async function processAppStoreServerNotification(
       transactionId: input.transactionId,
     });
 
+    notificationLog("info", "webhook transaction saved", {
+      appAppleId,
+      bundleId,
+      environment: input.environment,
+      eventId,
+      mappingId: mapping.id,
+      notificationType,
+      notificationUuid,
+      originalTransactionId: savedTransaction.originalTransactionId,
+      state: savedTransaction.state,
+      transactionId: savedTransaction.transactionId,
+    });
+
     return {
       eventId,
       notificationType,
@@ -412,6 +485,15 @@ export async function processAppStoreServerNotification(
     if (eventId) {
       await markIosIapNotificationEventFailed(eventId, errorMessage(error)).catch(() => null);
     }
+
+    notificationLog("error", "webhook processing failed", {
+      appAppleId,
+      bundleId,
+      environment: environmentName,
+      error: errorMessage(error),
+      eventId,
+      mappingId: mapping.id,
+    });
 
     if (error instanceof ApiError) throw error;
     if (error instanceof VerificationException) {

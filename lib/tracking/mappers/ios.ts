@@ -12,6 +12,31 @@ export type IosStoreMappingRecord = IosStoreMapping & {
 };
 export type IosCredentialRecord = IosCredential;
 
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function iosIapIngestionSource(rawReceipt: unknown) {
+  const receipt = jsonRecord(rawReceipt);
+  if (!receipt) return null;
+
+  if (typeof receipt.source === "string" && receipt.source.trim()) {
+    return receipt.source.trim();
+  }
+
+  if (jsonRecord(receipt.decodedNotification)) {
+    return "app_store_server_notification";
+  }
+
+  if (typeof receipt.signedTransactionInfo === "string") {
+    return "verify_ios_edge_function";
+  }
+
+  return null;
+}
+
 export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): StoreMapping {
   return {
     id: mapping.id,
@@ -81,6 +106,7 @@ export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosI
     storefront: transaction.storefront,
     revocation_date: iso(transaction.revocationDate),
     environment: transaction.environment,
+    ingestion_source: iosIapIngestionSource(transaction.rawReceipt),
     raw_receipt: transaction.rawReceipt,
     verified_at: transaction.verifiedAt.toISOString(),
     created_at: transaction.createdAt.toISOString(),
