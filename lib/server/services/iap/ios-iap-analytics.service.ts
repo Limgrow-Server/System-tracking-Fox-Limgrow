@@ -36,6 +36,47 @@ function lower(value: string | null | undefined) {
   return value?.trim().toLowerCase() ?? "";
 }
 
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function numberValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function dateFromMillis(value: unknown) {
+  const millis = numberValue(value);
+  if (millis === null) return null;
+  const date = new Date(millis);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function renewalInfoFromEvent(event: IosIapNotificationEvent) {
+  const decodedPayload = jsonRecord(event.decodedPayload);
+  return jsonRecord(decodedPayload?.decodedRenewalInfo);
+}
+
+function renewalStatusFromEvent(event: IosIapNotificationEvent) {
+  const renewalInfo = renewalInfoFromEvent(event);
+  const autoRenewStatus = numberValue(renewalInfo?.autoRenewStatus);
+
+  if (autoRenewStatus === 1) return "enabled" as const;
+  if (autoRenewStatus === 0) return "disabled" as const;
+
+  const subtype = event.subtype?.trim().toUpperCase();
+  if (subtype === "AUTO_RENEW_ENABLED") return "enabled" as const;
+  if (subtype === "AUTO_RENEW_DISABLED") return "disabled" as const;
+
+  return null;
+}
+
 function isTrialTransaction(transaction: IosIapTransaction) {
   return (
     transaction.isTrial === true ||
@@ -160,6 +201,8 @@ function cohortLimit(granularity: IapTrialConversionGranularity) {
 }
 
 function eventToDto(event: IosIapNotificationEvent): IapNotificationEventDto {
+  const renewalInfo = renewalInfoFromEvent(event);
+
   return {
     appAppleId: event.appAppleId,
     bundleId: event.bundleId,
@@ -173,6 +216,13 @@ function eventToDto(event: IosIapNotificationEvent): IapNotificationEventDto {
     processedAt: event.processedAt?.toISOString() ?? null,
     rawPayload: event.rawPayload,
     receivedAt: event.receivedAt.toISOString(),
+    renewalAutoRenewStatus: numberValue(renewalInfo?.autoRenewStatus),
+    renewalDate: dateFromMillis(renewalInfo?.renewalDate),
+    renewalProductId:
+      typeof renewalInfo?.autoRenewProductId === "string"
+        ? renewalInfo.autoRenewProductId
+        : null,
+    renewalStatus: renewalStatusFromEvent(event),
     signedDate: event.signedDate?.toISOString() ?? null,
     status: event.status,
     subtype: event.subtype,
