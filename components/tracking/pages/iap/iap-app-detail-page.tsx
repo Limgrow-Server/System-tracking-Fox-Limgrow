@@ -1095,15 +1095,18 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           <div className="flex min-h-9 items-center gap-2">
             <Badge
               variant="outline"
-              className={`px-2 py-0.5 text-[11px] font-medium ${realtimeMeta.className}`}
+              className={`gap-1.5 px-2 py-0.5 text-[11px] font-medium transition-[transform,box-shadow] duration-300 ease-out ${realtimeRefreshing ? "scale-[1.02] shadow-[0_0_0_4px_rgba(16,185,129,0.12)]" : "scale-100"} ${realtimeMeta.className}`}
             >
+              <span className="relative flex h-1.5 w-1.5">
+                <span
+                  className={`absolute inline-flex h-full w-full rounded-full bg-current transition-opacity duration-300 ${realtimeRefreshing ? "opacity-70 motion-safe:animate-ping" : "opacity-0"}`}
+                />
+                <span
+                  className={`relative inline-flex h-1.5 w-1.5 rounded-full bg-current transition-all duration-300 ${realtimeRefreshing ? "scale-100 opacity-100" : "scale-75 opacity-60"}`}
+                />
+              </span>
               {realtimeMeta.label}
             </Badge>
-            {realtimeRefreshing ? (
-              <span className="text-xs font-medium text-muted-foreground">
-                Syncing...
-              </span>
-            ) : null}
           </div>
           <div className="flex w-full items-center gap-2 sm:w-auto">
             {!isIos && (
