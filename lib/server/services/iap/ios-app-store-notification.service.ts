@@ -8,6 +8,7 @@ import {
   OfferDiscountType,
   SignedDataVerifier,
   VerificationException,
+  type JWSRenewalInfoDecodedPayload,
   type JWSTransactionDecodedPayload,
   type ResponseBodyV2DecodedPayload,
 } from "@apple/app-store-server-library";
@@ -28,15 +29,6 @@ type JsonRecord = Record<string, unknown>;
 type AppStoreNotificationPayload = {
   signedPayload?: unknown;
 };
-
-const TRACKED_NOTIFICATION_TYPES = new Set<string>([
-  NotificationTypeV2.DID_RENEW,
-  NotificationTypeV2.EXPIRED,
-  NotificationTypeV2.REFUND,
-  NotificationTypeV2.REFUND_REVERSED,
-  NotificationTypeV2.REVOKE,
-  NotificationTypeV2.SUBSCRIBED,
-]);
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -215,7 +207,9 @@ function transactionInput(input: {
   bundleId: string;
   notification: ResponseBodyV2DecodedPayload;
   notificationType: string;
+  renewalInfo: JWSRenewalInfoDecodedPayload | null;
   signedPayload: string;
+  signedRenewalInfo: string | null;
   signedTransactionInfo: string;
   storeProfileId: string | null;
   transaction: JWSTransactionDecodedPayload;
@@ -245,10 +239,12 @@ function transactionInput(input: {
     purchaseDate: dateFromMillis(input.transaction.purchaseDate),
     rawReceipt: jsonValue({
       decodedNotification: input.notification,
+      decodedRenewalInfo: input.renewalInfo,
       decodedTransactionInfo: input.transaction,
       notificationType: input.notificationType,
       notificationUUID: input.notification.notificationUUID,
       signedPayload: input.signedPayload,
+      signedRenewalInfo: input.signedRenewalInfo,
       signedTransactionInfo: input.signedTransactionInfo,
       source: "app_store_server_notification",
       subtype: input.notification.subtype ?? null,
@@ -393,28 +389,6 @@ export async function processAppStoreServerNotification(
       };
     }
 
-    if (!TRACKED_NOTIFICATION_TYPES.has(notificationType)) {
-      await markIosIapNotificationEventProcessed(eventId, {
-        decodedPayload: jsonValue(notification),
-        status: "ignored",
-      });
-
-      notificationLog("info", "webhook event ignored", {
-        eventId,
-        notificationType,
-        notificationUuid,
-        reason: "notification_type_out_of_scope",
-      });
-
-      return {
-        eventId,
-        ignored: true,
-        notificationType,
-        reason: "notification_type_out_of_scope",
-        status: "ignored",
-      };
-    }
-
     const signedTransactionInfo = clean(notification.data?.signedTransactionInfo);
     if (!signedTransactionInfo) {
       await markIosIapNotificationEventProcessed(eventId, {
@@ -438,12 +412,18 @@ export async function processAppStoreServerNotification(
       };
     }
 
+    const signedRenewalInfo = clean(notification.data?.signedRenewalInfo) || null;
     const transaction = await verifier.verifyAndDecodeTransaction(signedTransactionInfo);
+    const renewalInfo = signedRenewalInfo
+      ? await verifier.verifyAndDecodeRenewalInfo(signedRenewalInfo)
+      : null;
     const input = transactionInput({
       bundleId,
       notification,
       notificationType,
+      renewalInfo,
       signedPayload,
+      signedRenewalInfo,
       signedTransactionInfo,
       storeProfileId: mapping.storeProfileId,
       transaction,
@@ -453,6 +433,7 @@ export async function processAppStoreServerNotification(
     await markIosIapNotificationEventProcessed(eventId, {
       decodedPayload: jsonValue({
         ...notification,
+        decodedRenewalInfo: renewalInfo,
         decodedTransactionInfo: transaction,
       }),
       originalTransactionId: input.originalTransactionId,
