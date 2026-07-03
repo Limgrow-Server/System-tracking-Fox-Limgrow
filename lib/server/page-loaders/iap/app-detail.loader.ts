@@ -8,6 +8,7 @@ import type { IapAppDetailPageData } from "@/lib/tracking/page-data";
 const IAP_TRANSACTION_PAGE_SIZE = 10;
 
 type IapAppDetailOptions = {
+  environment?: string;
   kind?: string;
   page?: number;
   state?: string;
@@ -31,9 +32,12 @@ export async function getIapAppDetailPageData(
   const page = pageNumber(options?.page);
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
+  const environment =
+    platform === "android" ? clean(options?.environment) || "all" : "production";
   const trial = clean(options?.trial) || "all";
   const { appCard, metrics, transactions, transactionStates, trialAnalytics } =
     await getIapAppDetail(mappingId, platform, {
+      environment,
       includeContext: false,
       includeTrialAnalytics: false,
       kind,
@@ -49,6 +53,7 @@ export async function getIapAppDetailPageData(
   return {
     app: appCard,
     filters: {
+      environment,
       kind,
       state,
       trial,

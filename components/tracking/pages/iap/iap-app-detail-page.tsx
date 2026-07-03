@@ -187,6 +187,39 @@ function transactionSource(transaction: IapAppTransaction) {
   return isIosTransaction(transaction) ? transaction.ingestion_source : null;
 }
 
+function transactionRenewalStatus(transaction: IapAppTransaction) {
+  if (isIosTransaction(transaction)) return transaction.renewal_status;
+  if (transaction.autoRenewing === true) return "enabled";
+  if (transaction.autoRenewing === false) return "disabled";
+  return null;
+}
+
+function transactionRenewalDate(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction) ? transaction.renewal_date : null;
+}
+
+function transactionRenewalProductId(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction) ? transaction.renewal_product_id : null;
+}
+
+function renewalStatusMeta(status: "enabled" | "disabled" | null) {
+  if (status === "enabled") {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Renew enabled",
+    };
+  }
+
+  if (status === "disabled") {
+    return {
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      label: "Renew disabled",
+    };
+  }
+
+  return null;
+}
+
 function sourceMeta(source: string | null) {
   const normalized = source?.trim().toLowerCase() ?? "";
 
@@ -277,17 +310,25 @@ function receiptDisplayPayload(receipt: unknown) {
     Array.isArray(receipt.decodedTransactionInfo)
       ? receipt.decodedTransactionInfo
       : null;
+  const decodedRenewalInfo =
+    isJsonRecord(receipt.decodedRenewalInfo) ||
+    Array.isArray(receipt.decodedRenewalInfo)
+      ? receipt.decodedRenewalInfo
+      : null;
   const signedTransactionInfo = signedTransactionInfoFromReceipt(receipt);
   const decoded = signedTransactionInfo ? decodeJws(signedTransactionInfo) : null;
   const decodedTransactionInfo = existingDecoded ?? decoded?.payload ?? null;
 
-  if (!decodedTransactionInfo) return receipt;
+  if (!decodedTransactionInfo && !decodedRenewalInfo) return receipt;
 
   return {
     receiptType: "app_store_server_api_transaction",
     decodedTransactionInfo,
+    decodedRenewalInfo,
     jwsHeader: decoded?.header ?? receipt.jwsHeader ?? null,
+    notificationType: receipt.notificationType ?? null,
     source: receipt.source ?? "app_store_server_api.get_transaction_info",
+    subtype: receipt.subtype ?? null,
   };
 }
 
@@ -405,6 +446,11 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [trialAnalyticsLoading, setTrialAnalyticsLoading] = useState(
     isIos && !data.trialAnalytics,
   );
+  const [trialAnalyticsRefreshing, setTrialAnalyticsRefreshing] =
+    useState(false);
+  const [filterEnvironment, setFilterEnvironment] = useState<string>(
+    data.filters.environment,
+  );
   const [filterState, setFilterState] = useState<string>(data.filters.state);
   const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
   const [filterTrial, setFilterTrial] = useState<string>(data.filters.trial);
@@ -415,11 +461,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   async function loadTransactionsPage(
     page: number,
     overrides?: {
+      filterEnvironment?: string;
       filterKind?: string;
       filterState?: string;
       filterTrial?: string;
     },
   ) {
+    const nextFilterEnvironment =
+      overrides?.filterEnvironment ?? filterEnvironment;
     const nextFilterState = overrides?.filterState ?? filterState;
     const nextFilterKind = overrides?.filterKind ?? filterKind;
     const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
@@ -431,6 +480,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       platform: app.platform,
     });
 
+    if (!isIos && nextFilterEnvironment !== "all") {
+      params.set("environment", nextFilterEnvironment);
+    }
     if (nextFilterState !== "all") params.set("state", nextFilterState);
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
     if (isIos && nextFilterTrial !== "all") {
@@ -488,6 +540,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       platform: app.platform,
     });
 
+    if (!isIos && filterEnvironment !== "all") {
+      params.set("environment", filterEnvironment);
+    }
     if (filterState !== "all") params.set("state", filterState);
     if (!isIos && filterKind !== "all") params.set("kind", filterKind);
     if (isIos && filterTrial !== "all") {
@@ -530,6 +585,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   }, [
     app.mappingId,
     app.platform,
+    filterEnvironment,
     filterKind,
     filterState,
     filterTrial,
@@ -583,6 +639,39 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       cancelled = true;
     };
   }, [app.mappingId, app.platform, isIos, trialAnalytics]);
+
+  async function refreshTrialAnalytics() {
+    if (!isIos || trialAnalyticsRefreshing) return;
+
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
+    });
+
+    setTrialAnalyticsRefreshing(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/iap/trial-analytics?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapTrialAnalyticsResponse;
+
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error ?? "Refresh notification events failed.");
+      }
+
+      setTrialAnalytics(payload.trialAnalytics ?? null);
+      void showToast("success", "Notification events refreshed.");
+    } catch (error) {
+      void showToast("error",
+        error instanceof Error
+          ? error.message
+          : "Refresh notification events failed.",
+      );
+    } finally {
+      setTrialAnalyticsRefreshing(false);
+    }
+  }
 
   const stats = useMemo(() => {
     const rev = metrics.totalRevenue;
@@ -722,6 +811,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         <IosTrialAnalyticsPanel
           analytics={trialAnalytics}
           onInspectPayload={setSelectedReceipt}
+          onRefresh={refreshTrialAnalytics}
+          refreshing={trialAnalyticsRefreshing}
         />
       ) : isIos && trialAnalyticsLoading ? (
         <div className="h-[360px] overflow-hidden rounded-lg border bg-card">
@@ -733,6 +824,24 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       <div className="flex-1 min-h-0 flex flex-col bg-card text-card-foreground border rounded-lg overflow-hidden">
         <div className="flex flex-col items-stretch justify-end gap-4 border-b bg-muted/20 p-4 sm:flex-row sm:items-center">
           <div className="flex w-full items-center gap-2 sm:w-auto">
+            {!isIos && (
+              <Select
+                value={filterEnvironment}
+                onValueChange={(v) => {
+                  setFilterEnvironment(v);
+                  void loadTransactionsPage(1, { filterEnvironment: v });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full bg-background sm:w-[145px]">
+                  <SelectValue placeholder="Environment" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Env</SelectItem>
+                  <SelectItem value="production">Production</SelectItem>
+                  <SelectItem value="test">Test</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             {!isIos && (
               <Select
                 value={filterKind}
@@ -843,6 +952,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 const purchaseDate = transactionPurchaseDate(tx);
                 const expiresDate = transactionExpiresDate(tx);
                 const source = isIos ? sourceMeta(transactionSource(tx)) : null;
+                const renewal = renewalStatusMeta(transactionRenewalStatus(tx));
+                const renewalDate = transactionRenewalDate(tx);
+                const renewalProductId = transactionRenewalProductId(tx);
                 return (
                   <tr
                     key={tx.id}
@@ -913,6 +1025,23 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             Sandbox
                           </span>
                         )}
+                        {renewal ? (
+                          <span
+                            className={`inline-flex items-center border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${renewal.className}`}
+                          >
+                            {renewal.label}
+                          </span>
+                        ) : null}
+                        {renewalDate ? (
+                          <div className="text-[10px] text-muted-foreground">
+                            Renews: {formatDate(renewalDate)}
+                          </div>
+                        ) : null}
+                        {renewalProductId && renewalProductId !== productId ? (
+                          <div className="max-w-[160px] truncate text-[10px] text-muted-foreground">
+                            Next: {renewalProductId}
+                          </div>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-4 py-3.5">

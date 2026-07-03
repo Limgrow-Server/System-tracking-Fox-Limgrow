@@ -113,6 +113,10 @@ export type IosIapTransactionSummary = {
   revocation_date: string | null;
   environment: string;
   ingestion_source: string | null;
+  renewal_auto_renew_status: number | null;
+  renewal_date: string | null;
+  renewal_product_id: string | null;
+  renewal_status: "enabled" | "disabled" | null;
   raw_receipt: unknown;
   verified_at: string;
   created_at: string;

@@ -18,6 +18,22 @@ function jsonRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function numberValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function dateFromMillis(value: unknown) {
+  const millis = numberValue(value);
+  if (millis === null) return null;
+  const date = new Date(millis);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 function iosIapIngestionSource(rawReceipt: unknown) {
   const receipt = jsonRecord(rawReceipt);
   if (!receipt) return null;
@@ -33,6 +49,29 @@ function iosIapIngestionSource(rawReceipt: unknown) {
   if (typeof receipt.signedTransactionInfo === "string") {
     return "verify_ios_edge_function";
   }
+
+  return null;
+}
+
+function iosIapRenewalInfo(rawReceipt: unknown) {
+  const receipt = jsonRecord(rawReceipt);
+  if (!receipt) return null;
+
+  return jsonRecord(receipt.decodedRenewalInfo);
+}
+
+function iosIapRenewalStatus(rawReceipt: unknown) {
+  const receipt = jsonRecord(rawReceipt);
+  const renewalInfo = iosIapRenewalInfo(rawReceipt);
+  const autoRenewStatus = numberValue(renewalInfo?.autoRenewStatus);
+
+  if (autoRenewStatus === 1) return "enabled" as const;
+  if (autoRenewStatus === 0) return "disabled" as const;
+
+  const subtype =
+    typeof receipt?.subtype === "string" ? receipt.subtype.toUpperCase() : "";
+  if (subtype === "AUTO_RENEW_ENABLED") return "enabled" as const;
+  if (subtype === "AUTO_RENEW_DISABLED") return "disabled" as const;
 
   return null;
 }
@@ -85,6 +124,8 @@ export function iosCredentialToMetadata(credential: IosCredentialRecord): Creden
 }
 
 export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosIapTransactionSummary {
+  const renewalInfo = iosIapRenewalInfo(transaction.rawReceipt);
+
   return {
     id: transaction.id,
     transaction_id: transaction.transactionId,
@@ -107,6 +148,13 @@ export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosI
     revocation_date: iso(transaction.revocationDate),
     environment: transaction.environment,
     ingestion_source: iosIapIngestionSource(transaction.rawReceipt),
+    renewal_auto_renew_status: numberValue(renewalInfo?.autoRenewStatus),
+    renewal_date: dateFromMillis(renewalInfo?.renewalDate),
+    renewal_product_id:
+      typeof renewalInfo?.autoRenewProductId === "string"
+        ? renewalInfo.autoRenewProductId
+        : null,
+    renewal_status: iosIapRenewalStatus(transaction.rawReceipt),
     raw_receipt: transaction.rawReceipt,
     verified_at: transaction.verifiedAt.toISOString(),
     created_at: transaction.createdAt.toISOString(),

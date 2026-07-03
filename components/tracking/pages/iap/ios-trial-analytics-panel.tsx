@@ -82,6 +82,18 @@ function statusBadgeClass(status: string) {
   return "border-amber-200 bg-amber-50 text-amber-700";
 }
 
+function renewalStatusBadgeClass(status: "enabled" | "disabled") {
+  if (status === "enabled") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
+function renewalStatusLabel(status: "enabled" | "disabled") {
+  return status === "enabled" ? "Renew enabled" : "Renew disabled";
+}
+
 function titleCase(value: string) {
   return value
     .toLowerCase()
@@ -213,11 +225,17 @@ function TrialConversionAreaChart({ data }: { data: TrialConversionDatum[] }) {
 export function IosTrialAnalyticsPanel({
   analytics,
   onInspectPayload,
+  onRefresh,
+  refreshing = false,
 }: {
   analytics: IapTrialConversionAnalytics;
   onInspectPayload: (payload: unknown) => void;
+  onRefresh?: () => Promise<void> | void;
+  refreshing?: boolean;
 }) {
-  const [events, setEvents] = useState(analytics.recentNotificationEvents);
+  const [eventOverrides, setEventOverrides] = useState<
+    Record<string, Partial<IapNotificationEventDto>>
+  >({});
   const [retryingEventId, setRetryingEventId] = useState<string | null>(null);
   const [granularity, setGranularity] =
     useState<IapTrialConversionGranularity>("month");
@@ -233,6 +251,10 @@ export function IosTrialAnalyticsPanel({
     trials: cohort.trialStarted,
   }));
   const trialChartData = realTrialChartData;
+  const events = analytics.recentNotificationEvents.map((event) => ({
+    ...event,
+    ...(eventOverrides[event.id] ?? {}),
+  }));
 
   async function retryEvent(event: IapNotificationEventDto) {
     setRetryingEventId(event.id);
@@ -249,17 +271,13 @@ export function IosTrialAnalyticsPanel({
         throw new Error(payload.error ?? "Retry notification failed.");
       }
 
-      setEvents((current) =>
-        current.map((item) =>
-          item.id === event.id
-            ? {
-                ...item,
-                processedAt: new Date().toISOString(),
-                status: payload.status ?? "processed",
-              }
-            : item,
-        ),
-      );
+      setEventOverrides((current) => ({
+        ...current,
+        [event.id]: {
+          processedAt: new Date().toISOString(),
+          status: payload.status ?? "processed",
+        },
+      }));
       void showToast("success", "Notification retry completed.");
     } catch (error) {
       void showToast(
@@ -332,8 +350,26 @@ export function IosTrialAnalyticsPanel({
                 Recent webhook events for this app.
               </div>
             </div>
-            <div className="rounded-md border bg-muted/30 p-2 text-muted-foreground">
-              <Bell size={16} />
+            <div className="flex items-center gap-2">
+              {onRefresh ? (
+                <Button
+                  className="h-8 gap-1.5 px-2.5"
+                  disabled={refreshing}
+                  onClick={() => void onRefresh()}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <RotateCcw
+                    className={refreshing ? "animate-spin" : undefined}
+                    size={13}
+                  />
+                  Refresh
+                </Button>
+              ) : null}
+              <div className="rounded-md border bg-muted/30 p-2 text-muted-foreground">
+                <Bell size={16} />
+              </div>
             </div>
           </div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
@@ -366,6 +402,11 @@ export function IosTrialAnalyticsPanel({
                     <div className="truncate text-sm font-semibold">
                       {titleCase(event.notificationType)}
                     </div>
+                    {event.subtype ? (
+                      <div className="mt-1 max-w-[220px] truncate text-xs font-medium text-muted-foreground">
+                        {titleCase(event.subtype)}
+                      </div>
+                    ) : null}
                     <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                       <Clock3 size={12} />
                       {formatDate(event.receivedAt)}
@@ -381,6 +422,26 @@ export function IosTrialAnalyticsPanel({
                 {event.errorMessage ? (
                   <div className="mt-2 line-clamp-2 text-xs text-red-600">
                     {event.errorMessage}
+                  </div>
+                ) : null}
+                {event.renewalStatus ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      className={renewalStatusBadgeClass(event.renewalStatus)}
+                    >
+                      {renewalStatusLabel(event.renewalStatus)}
+                    </Badge>
+                    {event.renewalDate ? (
+                      <span className="text-xs text-muted-foreground">
+                        Renews: {formatDate(event.renewalDate)}
+                      </span>
+                    ) : null}
+                    {event.renewalProductId ? (
+                      <span className="max-w-[180px] truncate text-xs text-muted-foreground">
+                        {event.renewalProductId}
+                      </span>
+                    ) : null}
                   </div>
                 ) : null}
                 <div className="mt-3 flex flex-wrap items-center gap-2">

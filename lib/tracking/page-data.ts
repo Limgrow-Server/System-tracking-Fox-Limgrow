@@ -130,6 +130,10 @@ export type IapNotificationEventDto = {
   receivedAt: string;
   processedAt: string | null;
   errorMessage: string | null;
+  renewalAutoRenewStatus: number | null;
+  renewalDate: string | null;
+  renewalProductId: string | null;
+  renewalStatus: "enabled" | "disabled" | null;
   rawPayload: unknown;
   decodedPayload: unknown;
 };
@@ -181,6 +185,7 @@ export type IapAppMetrics = {
 export type IapAppDetailPageData = {
   app: IapAppCard;
   filters: {
+    environment: string;
     kind: string;
     state: string;
     trial: string;
