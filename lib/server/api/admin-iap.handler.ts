@@ -10,6 +10,7 @@ import {
   getIapAppCards,
   getIapAppCardsPage,
   getIapAppTrialAnalytics,
+  getIapTransactionReceipt,
   getIapAppTransactionsPage,
 } from "@/lib/server/services/iap/iap-app.service";
 
@@ -114,6 +115,34 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
     });
   } catch (error) {
     return errorJson(error, "List IAP transactions failed.");
+  }
+}
+
+export async function handleAdminIapTransactionReceiptGet(request: Request) {
+  try {
+    const session = await requireConsoleApiSession([
+      "Admin",
+      "Dev",
+      "Marketing",
+    ]);
+    const url = new URL(request.url);
+    const id = clean(url.searchParams.get("id"));
+    const platform = platformFromSearch(clean(url.searchParams.get("platform")));
+
+    if (!id) throw badRequest("IAP transaction id is required.");
+
+    const detail = await getIapTransactionReceipt(id, platform);
+
+    if (!canAccessIapApp(session, detail.appCard)) {
+      throw forbidden("You do not have access to this IAP transaction.");
+    }
+
+    return Response.json({
+      success: true,
+      rawReceipt: detail.rawReceipt,
+    });
+  } catch (error) {
+    return errorJson(error, "Load IAP transaction receipt failed.");
   }
 }
 

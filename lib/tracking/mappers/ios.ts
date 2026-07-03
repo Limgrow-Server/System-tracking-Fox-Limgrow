@@ -11,6 +11,32 @@ export type IosStoreMappingRecord = IosStoreMapping & {
   storeProfile?: { storeAccountName: string } | null;
 };
 export type IosCredentialRecord = IosCredential;
+export type IosIapTransactionSummaryRecord = Pick<
+  IosIapTransaction,
+  | "billingPlanType"
+  | "bundleId"
+  | "createdAt"
+  | "currency"
+  | "environment"
+  | "expiresDate"
+  | "id"
+  | "isTrial"
+  | "offerDiscountType"
+  | "offerPeriod"
+  | "originalTransactionId"
+  | "priceMilliunits"
+  | "productId"
+  | "purchaseDate"
+  | "rawReceipt"
+  | "revenueMicros"
+  | "revocationDate"
+  | "state"
+  | "storefront"
+  | "transactionId"
+  | "transactionReason"
+  | "userId"
+  | "verifiedAt"
+>;
 
 function jsonRecord(value: unknown): Record<string, unknown> | null {
   return Boolean(value && typeof value === "object" && !Array.isArray(value))
@@ -123,7 +149,10 @@ export function iosCredentialToMetadata(credential: IosCredentialRecord): Creden
   };
 }
 
-export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosIapTransactionSummary {
+export function iosIapTransactionToSummary(
+  transaction: IosIapTransactionSummaryRecord,
+  options?: { includeRawReceipt?: boolean },
+): IosIapTransactionSummary {
   const renewalInfo = iosIapRenewalInfo(transaction.rawReceipt);
 
   return {
@@ -155,7 +184,7 @@ export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosI
         ? renewalInfo.autoRenewProductId
         : null,
     renewal_status: iosIapRenewalStatus(transaction.rawReceipt),
-    raw_receipt: transaction.rawReceipt,
+    raw_receipt: options?.includeRawReceipt ? transaction.rawReceipt : null,
     verified_at: transaction.verifiedAt.toISOString(),
     created_at: transaction.createdAt.toISOString(),
   };

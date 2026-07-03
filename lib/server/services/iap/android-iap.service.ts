@@ -1,9 +1,10 @@
 import "server-only";
 
-import type { IapAndroid, AndroidStoreProfile } from "@prisma/client";
+import type { AndroidStoreProfile, IapAndroid } from "@prisma/client";
 
-export type IapAndroidRecord = IapAndroid & {
-  storeProfile: AndroidStoreProfile | null;
+export type IapAndroidRecord = Omit<IapAndroid, "rawReceipt"> & {
+  rawReceipt?: unknown | null;
+  storeProfile: Pick<AndroidStoreProfile, "storeAccountName"> | null;
 };
 
 export type IapAndroidDto = {
@@ -27,14 +28,17 @@ export type IapAndroidDto = {
   basePlanId: string | null;
   offerId: string | null;
   isTestPurchase: boolean;
-  rawReceipt: unknown;
+  rawReceipt: unknown | null;
   verifiedAt: string;
   createdAt: string;
   updatedAt: string;
   storeAccountName: string | null;
 };
 
-export function iapAndroidToDto(tx: IapAndroidRecord): IapAndroidDto {
+export function iapAndroidToDto(
+  tx: IapAndroidRecord,
+  options?: { includeRawReceipt?: boolean },
+): IapAndroidDto {
   return {
     id: tx.id,
     storeProfileId: tx.storeProfileId,
@@ -56,7 +60,7 @@ export function iapAndroidToDto(tx: IapAndroidRecord): IapAndroidDto {
     basePlanId: tx.basePlanId,
     offerId: tx.offerId,
     isTestPurchase: tx.isTestPurchase,
-    rawReceipt: tx.rawReceipt,
+    rawReceipt: options?.includeRawReceipt ? tx.rawReceipt : null,
     verifiedAt: tx.verifiedAt.toISOString(),
     createdAt: tx.createdAt.toISOString(),
     updatedAt: tx.updatedAt.toISOString(),

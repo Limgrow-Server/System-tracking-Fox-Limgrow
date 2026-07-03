@@ -1,11 +1,11 @@
 import "server-only";
 
-import type { IosIapNotificationEvent, IosIapTransaction } from "@prisma/client";
-
 import {
   getIosIapNotificationEventSummaryByBundleId,
   getIosIapNotificationEventsByBundleId,
   getIosTrialAnalyticsTransactions,
+  type IosNotificationEventSummary,
+  type IosTrialAnalyticsTransaction,
 } from "@/lib/server/repositories/iap/iap-app.repository";
 import type {
   IapNotificationEventDto,
@@ -58,12 +58,12 @@ function dateFromMillis(value: unknown) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
-function renewalInfoFromEvent(event: IosIapNotificationEvent) {
+function renewalInfoFromEvent(event: IosNotificationEventSummary) {
   const decodedPayload = jsonRecord(event.decodedPayload);
   return jsonRecord(decodedPayload?.decodedRenewalInfo);
 }
 
-function renewalStatusFromEvent(event: IosIapNotificationEvent) {
+function renewalStatusFromEvent(event: IosNotificationEventSummary) {
   const renewalInfo = renewalInfoFromEvent(event);
   const autoRenewStatus = numberValue(renewalInfo?.autoRenewStatus);
 
@@ -77,7 +77,7 @@ function renewalStatusFromEvent(event: IosIapNotificationEvent) {
   return null;
 }
 
-function isTrialTransaction(transaction: IosIapTransaction) {
+function isTrialTransaction(transaction: IosTrialAnalyticsTransaction) {
   return (
     transaction.isTrial === true ||
     lower(transaction.offerDiscountType) === "free_trial" ||
@@ -87,21 +87,24 @@ function isTrialTransaction(transaction: IosIapTransaction) {
   );
 }
 
-function isRefundedTransaction(transaction: IosIapTransaction) {
+function isRefundedTransaction(transaction: IosTrialAnalyticsTransaction) {
   const state = lower(transaction.state);
   return state.includes("refund") || Boolean(transaction.revocationDate);
 }
 
-function isRevokedTransaction(transaction: IosIapTransaction) {
+function isRevokedTransaction(transaction: IosTrialAnalyticsTransaction) {
   const state = lower(transaction.state);
   return state.includes("revoke") || lower(transaction.revocationType).includes("revoke");
 }
 
-function paidAmount(transaction: IosIapTransaction) {
+function paidAmount(transaction: IosTrialAnalyticsTransaction) {
   return micros(transaction.revenueMicros);
 }
 
-function isPaidContinuation(transaction: IosIapTransaction, trial: IosIapTransaction) {
+function isPaidContinuation(
+  transaction: IosTrialAnalyticsTransaction,
+  trial: IosTrialAnalyticsTransaction,
+) {
   if (transaction.transactionId === trial.transactionId) return false;
   if (isTrialTransaction(transaction)) return false;
   if (paidAmount(transaction) <= BigInt(0)) return false;
@@ -111,11 +114,11 @@ function isPaidContinuation(transaction: IosIapTransaction, trial: IosIapTransac
   return transaction.purchaseDate.getTime() >= continuationStart.getTime();
 }
 
-function chainKey(transaction: IosIapTransaction) {
+function chainKey(transaction: IosTrialAnalyticsTransaction) {
   return transaction.originalTransactionId || transaction.transactionId;
 }
 
-function transactionTime(transaction: IosIapTransaction) {
+function transactionTime(transaction: IosTrialAnalyticsTransaction) {
   return (
     transaction.purchaseDate?.getTime() ??
     transaction.verifiedAt.getTime() ??
@@ -123,11 +126,11 @@ function transactionTime(transaction: IosIapTransaction) {
   );
 }
 
-function sortTransactions(transactions: IosIapTransaction[]) {
+function sortTransactions(transactions: IosTrialAnalyticsTransaction[]) {
   return [...transactions].sort((a, b) => transactionTime(a) - transactionTime(b));
 }
 
-function chainIsActiveAfterTrial(transactions: IosIapTransaction[]) {
+function chainIsActiveAfterTrial(transactions: IosTrialAnalyticsTransaction[]) {
   const latest = sortTransactions(transactions).at(-1);
   if (!latest) return false;
 
@@ -200,7 +203,7 @@ function cohortLimit(granularity: IapTrialConversionGranularity) {
   return 12;
 }
 
-function eventToDto(event: IosIapNotificationEvent): IapNotificationEventDto {
+function eventToDto(event: IosNotificationEventSummary): IapNotificationEventDto {
   const renewalInfo = renewalInfoFromEvent(event);
 
   return {
@@ -214,7 +217,7 @@ function eventToDto(event: IosIapNotificationEvent): IapNotificationEventDto {
     notificationUuid: event.notificationUuid,
     originalTransactionId: event.originalTransactionId,
     processedAt: event.processedAt?.toISOString() ?? null,
-    rawPayload: event.rawPayload,
+    rawPayload: null,
     receivedAt: event.receivedAt.toISOString(),
     renewalAutoRenewStatus: numberValue(renewalInfo?.autoRenewStatus),
     renewalDate: dateFromMillis(renewalInfo?.renewalDate),
@@ -234,7 +237,9 @@ function conversionRate(converted: number, total: number) {
   return total > 0 ? Math.round((converted / total) * 1000) / 10 : 0;
 }
 
-function buildChain(transactions: IosIapTransaction[]): TrialChain | null {
+function buildChain(
+  transactions: IosTrialAnalyticsTransaction[],
+): TrialChain | null {
   const sorted = sortTransactions(transactions);
   const trial = sorted.find(isTrialTransaction);
   if (!trial) return null;
@@ -316,7 +321,7 @@ export async function getIosTrialConversionAnalytics(
     getIosIapNotificationEventSummaryByBundleId(bundleId, storeProfileId),
   ]);
 
-  const groups = new Map<string, IosIapTransaction[]>();
+  const groups = new Map<string, IosTrialAnalyticsTransaction[]>();
   for (const transaction of transactions) {
     const key = chainKey(transaction);
     groups.set(key, [...(groups.get(key) ?? []), transaction]);

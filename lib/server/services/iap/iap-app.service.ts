@@ -6,10 +6,12 @@ import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { valuesMatchSearch } from "@/lib/search";
 import {
   getAllActiveStoreMappings,
+  getAndroidIapTransactionById,
   getAndroidMappingById,
   getAndroidTransactionStatesByPackageAndProfile,
   getAndroidTransactionsByPackageAndProfileMetrics,
   getAndroidTransactionsByPackageAndProfilePage,
+  getIosIapTransactionById,
   getIosMappingById,
   getIosTransactionStatesByBundleId,
   getIosTransactionsByBundleIdMetrics,
@@ -151,6 +153,11 @@ type IapTransactionPageResult = {
   transactions: PaginatedResult<IapAppTransaction>;
 };
 
+export type IapTransactionReceiptResult = {
+  appCard: IapAppCard;
+  rawReceipt: unknown;
+};
+
 function emptyIapAppMetrics(): IapAppMetrics {
   return {
     activeCount: 0,
@@ -205,7 +212,7 @@ export async function getIapAppTransactionsPage(
       return {
         appCard,
         transactions: paginatedResult(
-          rawTransactions.map(iapAndroidToDto),
+          rawTransactions.map((transaction) => iapAndroidToDto(transaction)),
           total ?? fallbackTotal,
           options,
         ),
@@ -232,7 +239,7 @@ export async function getIapAppTransactionsPage(
       metrics,
       transactionStates,
       transactions: paginatedResult(
-        rawTransactions.map(iapAndroidToDto),
+        rawTransactions.map((transaction) => iapAndroidToDto(transaction)),
         total ?? 0,
         options,
       ),
@@ -271,7 +278,9 @@ export async function getIapAppTransactionsPage(
       return {
         appCard,
         transactions: paginatedResult(
-          rawTransactions.map(iosIapTransactionToSummary),
+          rawTransactions.map((transaction) =>
+            iosIapTransactionToSummary(transaction),
+          ),
           total ?? fallbackTotal,
           options,
         ),
@@ -297,10 +306,59 @@ export async function getIapAppTransactionsPage(
       metrics,
       transactionStates,
       transactions: paginatedResult(
-        rawTransactions.map(iosIapTransactionToSummary),
+        rawTransactions.map((transaction) =>
+          iosIapTransactionToSummary(transaction),
+        ),
         total ?? 0,
         options,
       ),
+    };
+  }
+
+  throw new Error("Invalid platform");
+}
+
+export async function getIapTransactionReceipt(
+  id: string,
+  platform: string,
+): Promise<IapTransactionReceiptResult> {
+  if (platform === "android") {
+    const transaction = await getAndroidIapTransactionById(id);
+    if (!transaction) throw new Error("Android IAP transaction not found");
+
+    return {
+      appCard: {
+        appIconUrl: null,
+        appLink: null,
+        appName: transaction.productId,
+        identifier: transaction.packageName,
+        mappingId: transaction.packageName,
+        platform: "android",
+        storeAccountName:
+          transaction.storeProfile?.storeAccountName ?? "",
+        storeProfileId: transaction.storeProfileId ?? "",
+      },
+      rawReceipt: transaction.rawReceipt,
+    };
+  }
+
+  if (platform === "ios") {
+    const transaction = await getIosIapTransactionById(id);
+    if (!transaction) throw new Error("iOS IAP transaction not found");
+
+    return {
+      appCard: {
+        appIconUrl: null,
+        appLink: null,
+        appName: transaction.productId,
+        identifier: transaction.bundleId ?? "",
+        mappingId: transaction.bundleId ?? transaction.transactionId,
+        platform: "ios",
+        storeAccountName:
+          transaction.storeProfile?.storeAccountName ?? "",
+        storeProfileId: transaction.storeProfileId ?? "",
+      },
+      rawReceipt: transaction.rawReceipt,
     };
   }
 
@@ -356,7 +414,7 @@ export async function getIapAppDetail(
         metrics: emptyIapAppMetrics(),
         transactionStates: [],
         transactions: paginatedResult(
-          rawTransactions.map(iapAndroidToDto),
+          rawTransactions.map((transaction) => iapAndroidToDto(transaction)),
           total ?? 0,
           options,
         ),
@@ -384,7 +442,7 @@ export async function getIapAppDetail(
       metrics,
       transactionStates,
       transactions: paginatedResult(
-        rawTransactions.map(iapAndroidToDto),
+        rawTransactions.map((transaction) => iapAndroidToDto(transaction)),
         total ?? 0,
         options,
       ),
@@ -420,7 +478,9 @@ export async function getIapAppDetail(
         metrics: emptyIapAppMetrics(),
         transactionStates: [],
         transactions: paginatedResult(
-          rawTransactions.map(iosIapTransactionToSummary),
+          rawTransactions.map((transaction) =>
+            iosIapTransactionToSummary(transaction),
+          ),
           total ?? 0,
           options,
         ),
@@ -453,7 +513,9 @@ export async function getIapAppDetail(
       metrics,
       transactionStates,
       transactions: paginatedResult(
-        rawTransactions.map(iosIapTransactionToSummary),
+        rawTransactions.map((transaction) =>
+          iosIapTransactionToSummary(transaction),
+        ),
         total ?? 0,
         options,
       ),

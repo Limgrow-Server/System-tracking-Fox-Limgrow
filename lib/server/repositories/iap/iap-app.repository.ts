@@ -4,6 +4,107 @@ import { prisma } from "@/lib/prisma";
 import { searchTextVariants } from "@/lib/search";
 import type { IapAppMetrics, IapRevenueBucket } from "@/lib/tracking/page-data";
 
+const androidTransactionListSelect = {
+  id: true,
+  storeProfileId: true,
+  packageName: true,
+  productId: true,
+  purchaseKind: true,
+  purchaseToken: true,
+  orderId: true,
+  linkedPurchaseToken: true,
+  state: true,
+  acknowledged: true,
+  consumed: true,
+  autoRenewing: true,
+  purchaseDate: true,
+  expiresDate: true,
+  revenueMicros: true,
+  currency: true,
+  regionCode: true,
+  basePlanId: true,
+  offerId: true,
+  isTestPurchase: true,
+  verifiedAt: true,
+  createdAt: true,
+  updatedAt: true,
+  storeProfile: {
+    select: { storeAccountName: true },
+  },
+} satisfies Prisma.IapAndroidSelect;
+
+const iosTransactionSummarySelect = {
+  id: true,
+  transactionId: true,
+  originalTransactionId: true,
+  productId: true,
+  userId: true,
+  bundleId: true,
+  purchaseDate: true,
+  expiresDate: true,
+  state: true,
+  revenueMicros: true,
+  priceMilliunits: true,
+  currency: true,
+  isTrial: true,
+  transactionReason: true,
+  offerDiscountType: true,
+  offerPeriod: true,
+  billingPlanType: true,
+  storefront: true,
+  revocationDate: true,
+  environment: true,
+  rawReceipt: true,
+  verifiedAt: true,
+  createdAt: true,
+} satisfies Prisma.IosIapTransactionSelect;
+
+const iosTrialAnalyticsTransactionSelect = {
+  id: true,
+  transactionId: true,
+  originalTransactionId: true,
+  isTrial: true,
+  offerDiscountType: true,
+  offerType: true,
+  revenueMicros: true,
+  priceMilliunits: true,
+  purchaseDate: true,
+  expiresDate: true,
+  state: true,
+  revocationDate: true,
+  revocationType: true,
+  verifiedAt: true,
+  createdAt: true,
+} satisfies Prisma.IosIapTransactionSelect;
+
+const iosNotificationEventSummarySelect = {
+  id: true,
+  notificationUuid: true,
+  notificationType: true,
+  subtype: true,
+  environment: true,
+  bundleId: true,
+  appAppleId: true,
+  originalTransactionId: true,
+  transactionId: true,
+  signedDate: true,
+  status: true,
+  errorMessage: true,
+  decodedPayload: true,
+  receivedAt: true,
+  processedAt: true,
+} satisfies Prisma.IosIapNotificationEventSelect;
+
+export type IosTrialAnalyticsTransaction =
+  Prisma.IosIapTransactionGetPayload<{
+    select: typeof iosTrialAnalyticsTransactionSelect;
+  }>;
+
+export type IosNotificationEventSummary =
+  Prisma.IosIapNotificationEventGetPayload<{
+    select: typeof iosNotificationEventSummarySelect;
+  }>;
+
 type IapAppMappingOptions = {
   search?: string;
   storeAccountName?: string;
@@ -230,7 +331,7 @@ async function getIapMetrics(
       select
         count(*)::int as "totalCount",
         count(*) filter (where lower(state) in ('active', 'purchased'))::int as "activeCount",
-        count(*) filter (where lower(state) in ('canceled', 'expired'))::int as "canceledCount",
+        count(*) filter (where lower(state) in ('canceled', 'expired', 'refunded', 'revoked'))::int as "canceledCount",
         coalesce(extract(epoch from (select latest from anchor)) * 1000, 0)::float8 as "latestTimestamp",
         coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
           where coalesce(revenue_micros, 0) > 0
@@ -344,9 +445,7 @@ export async function getAndroidTransactionsByPackageAndProfilePage(
     orderBy: { verifiedAt: "desc" },
     skip: options.skip,
     take: options.take,
-    include: {
-      storeProfile: true,
-    },
+    select: androidTransactionListSelect,
   });
 
   if (options.includeTotal === false) {
@@ -359,6 +458,17 @@ export async function getAndroidTransactionsByPackageAndProfilePage(
   ]);
 
   return [rows, total] as const;
+}
+
+export function getAndroidIapTransactionById(id: string) {
+  return prisma.iapAndroid.findUnique({
+    where: { id },
+    include: {
+      storeProfile: {
+        select: { storeAccountName: true },
+      },
+    },
+  });
 }
 
 export function getAndroidTransactionsByPackageAndProfileMetrics(
@@ -480,6 +590,7 @@ export async function getIosTransactionsByBundleIdPage(
     orderBy: { verifiedAt: "desc" },
     skip: options.skip,
     take: options.take,
+    select: iosTransactionSummarySelect,
   });
 
   if (options.includeTotal === false) {
@@ -492,6 +603,17 @@ export async function getIosTransactionsByBundleIdPage(
   ]);
 
   return [rows, total] as const;
+}
+
+export function getIosIapTransactionById(id: string) {
+  return prisma.iosIapTransaction.findUnique({
+    where: { id },
+    include: {
+      storeProfile: {
+        select: { storeAccountName: true },
+      },
+    },
+  });
 }
 
 export function getIosTransactionsByBundleIdMetrics(
@@ -555,6 +677,7 @@ export function getIosTrialAnalyticsTransactions(
       { purchaseDate: "asc" },
       { verifiedAt: "asc" },
     ],
+    select: iosTrialAnalyticsTransactionSelect,
   });
 }
 
@@ -571,6 +694,7 @@ export function getIosIapNotificationEventsByBundleId(
     },
     orderBy: { receivedAt: "desc" },
     take,
+    select: iosNotificationEventSummarySelect,
   });
 }
 
