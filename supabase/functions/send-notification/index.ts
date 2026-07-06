@@ -1,38 +1,14 @@
-import {
-  corsHeaders,
-  createAdminClient,
-  jsonResponse as json,
-} from "../_shared/edge-config.ts";
-import {
-  requireAdminOrInternalCaller,
-  sendNotificationPayload,
-  type SendNotificationRequest,
-} from "./notification-sender.ts";
+const corsHeaders = {
+  "access-control-allow-headers": "authorization, x-client-info, apikey, x-api-key, content-type, x-dispatch-secret, x-notification-queue-secret",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-origin": "*",
+};
 
-function errorRecord(error: unknown) {
-  return error && typeof error === "object" && !Array.isArray(error)
-    ? error as Record<string, unknown>
-    : {};
-}
-
-function errorString(error: unknown, key: string) {
-  const value = errorRecord(error)[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function responseError(error: unknown) {
-  const message = error instanceof Error
-    ? error.message
-    : errorString(error, "message")
-      ?? errorString(error, "error")
-      ?? "Unknown send-notification error";
-
-  return {
-    code: errorString(error, "code"),
-    details: errorString(error, "details"),
-    error: message.slice(0, 500),
-    hint: errorString(error, "hint"),
-  };
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    headers: { ...corsHeaders, "content-type": "application/json" },
+    status,
+  });
 }
 
 Deno.serve(async (request) => {
@@ -44,30 +20,11 @@ Deno.serve(async (request) => {
     return json({ ok: false, error: "method_not_allowed" }, 405);
   }
 
-  try {
-    const payload = (await request.json()) as SendNotificationRequest;
-    const supabase = createAdminClient();
-    const caller = await requireAdminOrInternalCaller(supabase, request);
-    const result = await sendNotificationPayload(supabase, payload, caller.email);
+  console.warn("[send-notification] disabled: notification sends are handled by the Next.js server worker.");
 
-    return json({
-      ok: true,
-      result,
-    });
-  } catch (error) {
-    const failure = responseError(error);
-    console.error("[send-notification] request failed", {
-      error: failure,
-      method: request.method,
-      url: request.url,
-    });
-
-    return json(
-      {
-        ok: false,
-        ...failure,
-      },
-      500
-    );
-  }
+  return json({
+    disabled: true,
+    ok: false,
+    error: "supabase_send_notification_disabled_use_server_worker",
+  }, 409);
 });

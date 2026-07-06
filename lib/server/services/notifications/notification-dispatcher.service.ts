@@ -1,12 +1,15 @@
-import { clean } from "../_shared/edge-config.ts";
-import type {
-  LocaleNotificationInput,
-  SendNotificationRequest,
-} from "../send-notification/notification-sender.ts";
-import { scheduleAutomation } from "./notification-schedule-payload.ts";
+import "server-only";
+
+import { randomUUID } from "crypto";
+import type { NotificationSchedule, Prisma } from "@prisma/client";
+
+import { prisma } from "@/lib/prisma";
+import { sendNotificationPayloadLocal, type LocaleNotificationInput, type SendNotificationRequest } from "@/lib/server/services/notifications/local-notification-sender.service";
 
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
+const HCM_OFFSET_MINUTES = 7 * 60;
+const SCHEDULE_DATA_KEY = "__notificationSchedule";
 
 const LANGUAGES = [
   { topicCode: "zh", label: "Chinese" },
@@ -34,6 +37,14 @@ const FALLBACK_TEMPLATES = [
   { title: "Worth a quick look", message: "Open the app for something new today." },
   { title: "New today", message: "See the latest update when you are ready." },
 ];
+
+function clean(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
 
 function limitText(value: string, maxLength: number) {
   return Array.from(clean(value)).slice(0, maxLength).join("").trim();
@@ -90,7 +101,7 @@ async function openRouterGeneratedCopy(input: {
   now: Date;
   variantSeed: string;
 }) {
-  const apiKey = Deno.env.get("OPENROUTER_API_KEY");
+  const apiKey = clean(process.env.OPENROUTER_API_KEY);
   if (!apiKey) return null;
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -100,14 +111,13 @@ async function openRouterGeneratedCopy(input: {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: Deno.env.get("OPENROUTER_MODEL") ?? "google/gemini-2.5-flash",
+      max_tokens: 1800,
       messages: [
         {
-          role: "system",
           content: "You write concise generic mobile push notifications. Return only valid JSON and no markdown.",
+          role: "system",
         },
         {
-          role: "user",
           content: [
             "Generate fresh localized push notifications for today's scheduled send.",
             `Date: ${input.now.toISOString().slice(0, 10)}`,
@@ -125,9 +135,10 @@ async function openRouterGeneratedCopy(input: {
             "Return exactly this JSON shape with every language key:",
             openRouterJsonShape(),
           ].filter(Boolean).join("\n"),
+          role: "user",
         },
       ],
-      max_tokens: 1800,
+      model: process.env.OPENROUTER_MODEL ?? "google/gemini-2.5-flash",
       temperature: 0.9,
     }),
   });
@@ -193,12 +204,47 @@ async function fallbackGeneratedCopy(input: {
   );
 }
 
-export function primaryGeneratedNotification(rows: LocaleNotificationInput[]) {
+function scheduleAutomation(row: NotificationSchedule) {
+  const scheduleData = objectRecord(objectRecord(row.dataPayload)[SCHEDULE_DATA_KEY]);
+  return {
+    autoGenerateContent: (row.scheduleType === "daily" || row.scheduleType === "monthly") && scheduleData.autoGenerateContent === true,
+    generateNotes: clean(scheduleData.generateNotes),
+  };
+}
+
+function scheduleDeliveryData(row: NotificationSchedule) {
+  const dataPayload = { ...objectRecord(row.dataPayload) };
+  delete dataPayload[SCHEDULE_DATA_KEY];
+  return dataPayload;
+}
+
+function scheduleToPayload(row: NotificationSchedule): SendNotificationRequest {
+  return {
+    appId: clean(row.appId) || clean(row.appName),
+    appName: clean(row.appName),
+    bundleId: row.bundleId,
+    credentialRef: row.credentialRef,
+    data: scheduleDeliveryData(row),
+    deviceIds: row.targetValues,
+    imageUrl: row.imageUrl,
+    notifications: Array.isArray(row.localePayload) ? row.localePayload : [],
+    packageName: row.packageName,
+    platform: row.platform,
+    productAppId: clean(row.appId) || clean(row.appName),
+    scheduleId: row.id,
+    storeAccountName: row.storeAccountName,
+    storeProfileId: row.storeProfileId,
+    targetType: clean(row.targetType) === "device" ? "device" : "topic",
+    topicBase: clean(row.topicBase),
+  };
+}
+
+function primaryGeneratedNotification(rows: LocaleNotificationInput[]) {
   return rows.find((row) => clean(row.topicCode) === "en") ?? rows[0] ?? null;
 }
 
-export async function prepareSchedulePayload(
-  row: Record<string, unknown>,
+async function prepareSchedulePayload(
+  row: NotificationSchedule,
   payload: SendNotificationRequest,
   now: Date,
 ) {
@@ -207,14 +253,14 @@ export async function prepareSchedulePayload(
     return { generatedNotifications: null, payload };
   }
 
-  const appName = clean(row.app_name);
+  const appName = clean(row.appName);
   const variantSeed = [
     clean(row.id),
-    clean(row.app_id),
+    clean(row.appId),
     appName,
-    String(row.run_count ?? ""),
+    String(row.runCount ?? ""),
     now.toISOString(),
-    crypto.randomUUID(),
+    randomUUID(),
   ].filter(Boolean).join(":");
 
   const generatedNotifications = await openRouterGeneratedCopy({
@@ -232,5 +278,144 @@ export async function prepareSchedulePayload(
       ...payload,
       notifications: generatedNotifications,
     },
+  };
+}
+
+function parseTimeOfDay(value: unknown) {
+  const match = clean(value).match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return { hour: 9, minute: 0 };
+
+  return {
+    hour: Math.min(23, Math.max(0, Number(match[1]))),
+    minute: Math.min(59, Math.max(0, Number(match[2]))),
+  };
+}
+
+function hcmParts(date: Date) {
+  const shifted = new Date(date.getTime() + HCM_OFFSET_MINUTES * 60_000);
+  return {
+    date: shifted.getUTCDate(),
+    month: shifted.getUTCMonth(),
+    year: shifted.getUTCFullYear(),
+  };
+}
+
+function hcmDate(year: number, month: number, date: number, hour: number, minute: number) {
+  return new Date(Date.UTC(year, month, date, hour, minute) - HCM_OFFSET_MINUTES * 60_000);
+}
+
+function daysInMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+function nextDailyRun(timeOfDay: string | null, now: Date) {
+  const time = parseTimeOfDay(timeOfDay);
+  const current = hcmParts(now);
+  let candidate = hcmDate(current.year, current.month, current.date, time.hour, time.minute);
+  if (candidate <= now) {
+    candidate = hcmDate(current.year, current.month, current.date + 1, time.hour, time.minute);
+  }
+  return candidate;
+}
+
+function nextMonthlyRun(dayOfMonth: number | null, timeOfDay: string | null, now: Date) {
+  const time = parseTimeOfDay(timeOfDay);
+  const current = hcmParts(now);
+  const targetDay = Math.min(Math.max(dayOfMonth ?? 1, 1), 31);
+  let day = Math.min(targetDay, daysInMonth(current.year, current.month));
+  let candidate = hcmDate(current.year, current.month, day, time.hour, time.minute);
+
+  if (candidate <= now) {
+    const nextMonth = current.month + 1;
+    day = Math.min(targetDay, daysInMonth(current.year, nextMonth));
+    candidate = hcmDate(current.year, nextMonth, day, time.hour, time.minute);
+  }
+
+  return candidate;
+}
+
+function nextRunAfter(row: NotificationSchedule, now: Date) {
+  if (row.scheduleType === "daily") return nextDailyRun(row.timeOfDay, now);
+  if (row.scheduleType === "monthly") return nextMonthlyRun(row.dayOfMonth, row.timeOfDay, now);
+  return null;
+}
+
+export async function dispatchDueNotificationsOnServer(input: {
+  actorEmail: string;
+  limit?: number;
+  now?: string;
+  scheduleId?: string;
+}) {
+  const now = input.now ? new Date(input.now) : new Date();
+  const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
+  const schedules = await prisma.notificationSchedule.findMany({
+    where: clean(input.scheduleId)
+      ? { id: clean(input.scheduleId) }
+      : { nextRunAt: { lte: now }, status: "active" },
+    orderBy: { nextRunAt: "asc" },
+    take: limit,
+  });
+  const dispatched = [];
+
+  for (const schedule of schedules) {
+    const prepared = await prepareSchedulePayload(schedule, scheduleToPayload(schedule), now);
+    const result = await sendNotificationPayloadLocal(prepared.payload, input.actorEmail);
+    const hasErrors = Number(result.errorCount ?? 0) > 0;
+    const hasSent = Number(result.sentCount ?? 0) > 0;
+    const failed = hasErrors && !hasSent;
+
+    if (hasErrors) {
+      console.error("[notification-dispatcher] scheduled notification completed with failed targets", {
+        errorCount: result.errorCount,
+        firstError: result.results.find((item) => !item.ok)?.error ?? null,
+        jobId: result.job?.id ?? null,
+        scheduleId: schedule.id,
+        sentCount: result.sentCount,
+      });
+    }
+
+    const nextRunAt = nextRunAfter(schedule, now);
+    const nextStatus =
+      schedule.scheduleType === "once"
+        ? failed ? "failed" : "completed"
+        : schedule.status === "paused" ? "paused" : "active";
+    const lastError = result.results.find((item) => !item.ok)?.error ?? null;
+    const primaryGenerated = prepared.generatedNotifications
+      ? primaryGeneratedNotification(prepared.generatedNotifications)
+      : null;
+    const updatePayload: Prisma.NotificationScheduleUpdateInput = {
+      lastError,
+      lastRunAt: now,
+      lastStatus: hasSent ? "sent" : "failed",
+      nextRunAt,
+      runCount: schedule.runCount + 1,
+      status: nextStatus,
+      updatedAt: new Date(),
+    };
+
+    if (prepared.generatedNotifications) {
+      updatePayload.localePayload = prepared.generatedNotifications as unknown as Prisma.InputJsonValue;
+      updatePayload.message = clean(primaryGenerated?.message) || null;
+      updatePayload.title = clean(primaryGenerated?.title) || null;
+    }
+
+    await prisma.notificationSchedule.update({
+      where: { id: schedule.id },
+      data: updatePayload,
+    });
+
+    dispatched.push({
+      errorCount: result.errorCount,
+      job: result.job,
+      scheduleId: schedule.id,
+      sentCount: result.sentCount,
+      status: hasSent ? "sent" : "failed",
+    });
+  }
+
+  return {
+    dispatched,
+    now: now.toISOString(),
+    total: dispatched.length,
   };
 }

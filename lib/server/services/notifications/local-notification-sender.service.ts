@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createSign } from "crypto";
-import type { Prisma } from "@prisma/client";
+import type { NotificationJob, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
 import { normalizeAppId } from "@/lib/tracking/identity";
@@ -84,6 +84,7 @@ export type SendResult = {
 export type LocalNotificationSendResult = {
   credentialRef: string | null;
   errorCount: number;
+  job: NotificationJob | null;
   platform: MobilePlatform;
   projectId: string | null;
   results: SendResult[];
@@ -231,6 +232,10 @@ function fcmDataPayload(value: Record<string, unknown>) {
     items[cleanedKey] = typeof rawValue === "object" ? JSON.stringify(rawValue) : String(rawValue);
     return items;
   }, {});
+}
+
+function primaryLocale(locales: LocaleNotification[]) {
+  return locales.find((locale) => locale.topicCode === "en") ?? locales[0];
 }
 
 function chunks<T>(items: T[], size: number) {
@@ -965,8 +970,95 @@ async function markInvalidDeviceTokens(input: {
   }
 }
 
+async function createNotificationJobForLocalSend(input: {
+  actorEmail: string | null;
+  dataPayload: Record<string, unknown>;
+  imageUrl: string;
+  initialTargetValues: string[];
+  locales: LocaleNotification[];
+  payload: SendNotificationRequest;
+  platform: MobilePlatform;
+  targetType: TargetType;
+  topicBase: string;
+}) {
+  const appName = clean(input.payload.appName) || clean(input.payload.productAppId) || input.topicBase || "unknown_app";
+  const appId = normalizeAppId(input.payload.appId) || normalizeAppId(input.payload.productAppId) || null;
+  const firstLocale = primaryLocale(input.locales);
+
+  return prisma.notificationJob.create({
+    data: {
+      appId,
+      appName,
+      bundleId: input.platform === "ios" ? clean(input.payload.bundleId) || null : null,
+      credentialRef: clean(input.payload.credentialRef) || null,
+      dataPayload: input.dataPayload as Prisma.InputJsonValue,
+      imageUrl: input.imageUrl || null,
+      localePayload: input.locales as unknown as Prisma.InputJsonValue,
+      message: firstLocale?.body ?? null,
+      packageName: input.platform === "android" ? clean(input.payload.packageName) || null : null,
+      platform: input.platform,
+      requestedBy: input.actorEmail,
+      scheduleId: clean(input.payload.scheduleId) || null,
+      status: "sending",
+      storeAccountName: clean(input.payload.storeAccountName) || null,
+      storePlatform: input.platform === "android" ? "google_play" : "apple_app_store",
+      storeProfileId: clean(input.payload.storeProfileId) || null,
+      targetType: input.targetType,
+      targetValues: input.initialTargetValues,
+      title: firstLocale?.title ?? null,
+      topicBase: input.topicBase || "device",
+    },
+  });
+}
+
+async function updateNotificationJobAfterLocalSend(input: {
+  credentialRef?: string | null;
+  errorCount: number;
+  jobId: string;
+  platform: MobilePlatform;
+  projectId?: string | null;
+  resolvedPayload?: SendNotificationRequest;
+  sentCount: number;
+  targetValues: string[];
+}) {
+  const status = input.sentCount > 0 ? "sent" : "failed";
+
+  return prisma.notificationJob.update({
+    where: { id: input.jobId },
+    data: {
+      appId: input.resolvedPayload
+        ? normalizeAppId(input.resolvedPayload.appId) || normalizeAppId(input.resolvedPayload.productAppId) || null
+        : undefined,
+      appName: input.resolvedPayload
+        ? clean(input.resolvedPayload.appName) || clean(input.resolvedPayload.productAppId) || "unknown_app"
+        : undefined,
+      bundleId: input.resolvedPayload && input.platform === "ios"
+        ? clean(input.resolvedPayload.bundleId) || null
+        : undefined,
+      credentialRef: input.credentialRef ?? null,
+      errorCount: input.errorCount,
+      packageName: input.resolvedPayload && input.platform === "android"
+        ? clean(input.resolvedPayload.packageName) || null
+        : undefined,
+      projectId: input.projectId ?? null,
+      sentAt: new Date(),
+      sentCount: input.sentCount,
+      status,
+      storeAccountName: input.resolvedPayload
+        ? clean(input.resolvedPayload.storeAccountName) || null
+        : undefined,
+      storeProfileId: input.resolvedPayload
+        ? clean(input.resolvedPayload.storeProfileId) || null
+        : undefined,
+      targetValues: input.targetValues,
+      updatedAt: new Date(),
+    },
+  });
+}
+
 export async function sendNotificationPayloadLocal(
   payload: SendNotificationRequest,
+  actorEmail: string | null = null,
 ): Promise<LocalNotificationSendResult> {
   const platform = inferPlatform(payload);
   const appId = notificationAppId(payload);
@@ -987,11 +1079,28 @@ export async function sendNotificationPayloadLocal(
     || (platform === "android" ? clean(payload.packageName) : clean(payload.bundleId))
     || "notification",
   );
-  const jobId = clean(payload.jobId);
+  const initialTargetValues = targetType === "device"
+    ? deviceTargetValues
+    : locales.map((locale) => `${topicBase}-${locale.topicCode}`);
+  const queuedJobId = clean(payload.jobId);
 
-  if (!jobId) throw new Error("queued_notification_job_id_required");
   if (targetType === "device" && !deviceTargetValues.length) throw new Error("device_targets_required");
   if (targetType === "topic" && !topicBase) throw new Error("topic_base_required");
+
+  const createdJob = queuedJobId
+    ? null
+    : await createNotificationJobForLocalSend({
+      actorEmail,
+      dataPayload,
+      imageUrl,
+      initialTargetValues,
+      locales,
+      payload,
+      platform,
+      targetType,
+      topicBase,
+    });
+  const jobId = queuedJobId || createdJob?.id || "";
 
   try {
     const config = await resolveFirebaseConfig(payload);
@@ -1145,10 +1254,23 @@ export async function sendNotificationPayloadLocal(
 
     await writeEvents({ jobId, platform, results });
     await markInvalidDeviceTokens({ platform, results });
+    const updatedJob = createdJob
+      ? await updateNotificationJobAfterLocalSend({
+        credentialRef: config.credential.credentialRef,
+        errorCount,
+        jobId,
+        platform,
+        projectId,
+        resolvedPayload,
+        sentCount,
+        targetValues: targetType === "device" ? initialTargetValues : results.map((result) => result.targetValue),
+      })
+      : null;
 
     return {
       credentialRef: config.credential.credentialRef,
       errorCount,
+      job: updatedJob,
       platform,
       projectId,
       results,
@@ -1179,10 +1301,22 @@ export async function sendNotificationPayloadLocal(
       }),
     );
     await writeEvents({ jobId, platform, results });
+    const updatedJob = createdJob
+      ? await updateNotificationJobAfterLocalSend({
+        credentialRef: clean(payload.credentialRef) || null,
+        errorCount: results.length,
+        jobId,
+        platform,
+        projectId: null,
+        sentCount: 0,
+        targetValues: initialTargetValues,
+      })
+      : null;
 
     return {
       credentialRef: clean(payload.credentialRef) || null,
       errorCount: results.length,
+      job: updatedJob,
       platform,
       projectId: null,
       results,

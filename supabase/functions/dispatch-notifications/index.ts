@@ -1,18 +1,15 @@
-import {
-  corsHeaders,
-  createAdminClient,
-  jsonResponse as json,
-} from "../_shared/edge-config.ts";
-import {
-  dispatchDueNotifications,
-  requireAdminOrDispatchSecret,
-} from "./notification-dispatcher.ts";
-
-type DispatchRequest = {
-  limit?: number;
-  now?: string;
-  scheduleId?: string;
+const corsHeaders = {
+  "access-control-allow-headers": "authorization, x-client-info, apikey, x-api-key, content-type, x-dispatch-secret, x-notification-queue-secret",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-origin": "*",
 };
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    headers: { ...corsHeaders, "content-type": "application/json" },
+    status,
+  });
+}
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
@@ -23,36 +20,11 @@ Deno.serve(async (request) => {
     return json({ ok: false, error: "method_not_allowed" }, 405);
   }
 
-  try {
-    const payload = (await request.json().catch(() => ({}))) as DispatchRequest;
-    const supabase = createAdminClient();
-    const caller = await requireAdminOrDispatchSecret(supabase, request);
-    const result = await dispatchDueNotifications(supabase, {
-      actorEmail: caller.email,
-      limit: payload.limit,
-      now: payload.now,
-      scheduleId: payload.scheduleId,
-    });
+  console.warn("[dispatch-notifications] disabled: scheduled notification dispatch is handled by the Next.js server worker.");
 
-    return json({
-      ok: true,
-      result,
-    });
-  } catch (error) {
-    console.error("[dispatch-notifications] request failed", {
-      error: error instanceof Error
-        ? { message: error.message, name: error.name, stack: error.stack }
-        : { message: String(error) },
-      method: request.method,
-      url: request.url,
-    });
-
-    return json(
-      {
-        ok: false,
-        error: error instanceof Error ? error.message : "Unknown dispatch-notifications error",
-      },
-      500
-    );
-  }
+  return json({
+    disabled: true,
+    ok: false,
+    error: "supabase_dispatch_notifications_disabled_use_server_worker",
+  }, 409);
 });
