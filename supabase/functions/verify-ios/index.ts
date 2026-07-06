@@ -496,6 +496,42 @@ async function scheduleIosIapTwoHourCheck(
   };
 }
 
+async function runIosIapTwoHourSchedule(
+  supabase: SupabaseAdminClient,
+  transaction: Record<string, unknown>,
+  payload: VerifyIosRequest
+) {
+  try {
+    return await scheduleIosIapTwoHourCheck(supabase, transaction, payload);
+  } catch (error) {
+    const transactionId = stringValue(transaction.transaction_id) || clean(payload.transactionId);
+    const bundleId = stringValue(transaction.bundle_id) || clean(payload.bundleId);
+    const message = error instanceof Error ? error.message : "schedule_failed";
+    console.error("Apple transaction 2-hour GA4 check schedule failed", {
+      bundleId,
+      error: message,
+      transactionId,
+    });
+
+    return {
+      error: message,
+      scheduled: false,
+    };
+  }
+}
+
+function waitUntilBackgroundTask(task: Promise<unknown>) {
+  const runtime = globalThis as typeof globalThis & {
+    EdgeRuntime?: {
+      waitUntil?: (promise: Promise<unknown>) => void;
+    };
+  };
+
+  if (typeof runtime.EdgeRuntime?.waitUntil !== "function") return false;
+  runtime.EdgeRuntime.waitUntil(task);
+  return true;
+}
+
 async function verifyApple(
   supabase: SupabaseAdminClient,
   payload: VerifyIosRequest
@@ -592,18 +628,22 @@ async function verifyApple(
     reason: "not_requested",
   };
 
-  try {
-    twoHourGa4Check = await scheduleIosIapTwoHourCheck(supabase, data, payload);
-  } catch (error) {
-    twoHourGa4Check = {
-      error: error instanceof Error ? error.message : "schedule_failed",
-      scheduled: false,
-    };
-    console.error("Apple transaction 2-hour GA4 check schedule failed", {
+  const scheduleTask = runIosIapTwoHourSchedule(supabase, data, payload).then((result) => {
+    console.info("Apple transaction 2-hour GA4 check schedule completed", {
       bundleId,
-      error: twoHourGa4Check.error,
+      result,
       transactionId: resolvedTransactionId,
     });
+    return result;
+  });
+
+  if (waitUntilBackgroundTask(scheduleTask)) {
+    twoHourGa4Check = {
+      scheduled: true,
+      status: "queued",
+    };
+  } else {
+    twoHourGa4Check = await scheduleTask;
   }
 
   console.info("Apple transaction verify saved", {
