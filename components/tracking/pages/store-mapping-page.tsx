@@ -173,6 +173,13 @@ function parseFirebaseAnalyticsConfigText(text: string) {
   return config;
 }
 
+function hasFirebaseAnalyticsConfigValue(config: {
+  firebaseAnalyticsApiSecret: string;
+  firebaseAppId: string;
+}) {
+  return Boolean(config.firebaseAnalyticsApiSecret || config.firebaseAppId);
+}
+
 function MappingFormSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-3 rounded-lg border p-4">
@@ -243,13 +250,14 @@ export function StoreMappingPage({
 
   function updateFirebaseAnalyticsConfigText(nextValue: string) {
     const parsed = parseFirebaseAnalyticsConfigText(nextValue);
+    const hasParsedValue = hasFirebaseAnalyticsConfigValue(parsed);
 
     setForm((current) => ({
       ...current,
       firebaseAnalyticsApiSecret:
         parsed.firebaseAnalyticsApiSecret ||
         current.firebaseAnalyticsApiSecret,
-      firebaseAnalyticsConfigText: nextValue,
+      firebaseAnalyticsConfigText: hasParsedValue ? "" : nextValue,
       firebaseAppId: parsed.firebaseAppId || current.firebaseAppId,
     }));
   }
@@ -620,10 +628,11 @@ export function StoreMappingPage({
                                 event.target.value,
                               )
                             }
-                          placeholder={[
-                            "FIREBASE_APP_ID=1:1234567890:ios:abcdef123456",
-                            "FIREBASE_ANALYTICS_API_SECRET=...",
-                          ].join("\n")}
+                            placeholder={[
+                              "FIREBASE_APP_ID=1:1234567890:ios:abcdef123456",
+                              "FIREBASE_ANALYTICS_API_SECRET=...",
+                            ].join("\n")}
+                            autoComplete="off"
                             rows={3}
                           />
                         </div>
@@ -656,6 +665,7 @@ export function StoreMappingPage({
                           </div>
                           <Input
                             id="firebaseAnalyticsApiSecret"
+                            type="password"
                             value={form.firebaseAnalyticsApiSecret}
                             onChange={(event) =>
                               updateField(
@@ -663,6 +673,7 @@ export function StoreMappingPage({
                                 event.target.value,
                               )
                             }
+                            autoComplete="new-password"
                             placeholder={
                               firebaseAnalyticsSecretConfigured
                                 ? "Leave blank to keep current secret"
