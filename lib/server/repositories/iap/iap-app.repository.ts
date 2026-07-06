@@ -3,7 +3,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { searchTextVariants } from "@/lib/search";
 import { convertCurrencyAmountToVnd } from "@/lib/server/currency-conversion";
-import type { IapAppMetrics, IapRevenueBucket } from "@/lib/tracking/page-data";
+import type {
+  IapAppMetrics,
+  IapRevenueBucket,
+  IapRevenueGranularity,
+} from "@/lib/tracking/page-data";
 
 const androidTransactionListSelect = {
   id: true,
@@ -238,6 +242,10 @@ type AndroidTransactionPageOptions = {
   kind?: string;
   page: number;
   pageSize: number;
+  purchaseDateFrom?: string;
+  purchaseDateTo?: string;
+  revenueGranularity?: string;
+  revenueSort?: string;
   skip: number;
   state?: string;
   take: number;
@@ -270,6 +278,77 @@ function numberValue(value: number | string | bigint | null | undefined) {
   if (value === null || value === undefined) return 0;
   const numeric = typeof value === "bigint" ? Number(value) : Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function inputDate(value: string | null | undefined) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value?.trim() ?? "");
+  if (!match) return null;
+
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function purchaseDateRange(
+  fromValue: string | null | undefined,
+  toValue: string | null | undefined,
+) {
+  const from = inputDate(fromValue);
+  const to = inputDate(toValue);
+  if (!from && !to) return null;
+
+  const start = from ?? undefined;
+  const end = to ? new Date(to) : undefined;
+  end?.setDate(end.getDate() + 1);
+
+  return { end, start };
+}
+
+function normalizeRevenueGranularity(
+  value: string | null | undefined,
+): IapRevenueGranularity {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "day" || normalized === "week" || normalized === "month"
+    ? normalized
+    : "month";
+}
+
+function revenueSortOrder(value: string | null | undefined): Prisma.SortOrder | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "asc" || normalized === "desc" ? normalized : null;
+}
+
+function revenueBucketSql(granularity: IapRevenueGranularity) {
+  if (granularity === "day") {
+    return {
+      anchorSql: Prisma.sql`date_trunc('day', coalesce(max(purchase_date), now()))`,
+      intervalSql: Prisma.sql`interval '13 days'`,
+      joinSql: Prisma.sql`date_trunc('day', metric_source.purchase_date) = buckets.bucket_start`,
+      labelSql: Prisma.sql`to_char(buckets.bucket_start, 'Mon DD')`,
+      stepSql: Prisma.sql`interval '1 day'`,
+    };
+  }
+
+  if (granularity === "week") {
+    return {
+      anchorSql: Prisma.sql`date_trunc('week', coalesce(max(purchase_date), now()))`,
+      intervalSql: Prisma.sql`interval '11 weeks'`,
+      joinSql: Prisma.sql`date_trunc('week', metric_source.purchase_date) = buckets.bucket_start`,
+      labelSql: Prisma.sql`to_char(buckets.bucket_start, 'Mon DD') || ' - ' || to_char(buckets.bucket_start + interval '6 days', 'Mon DD')`,
+      stepSql: Prisma.sql`interval '1 week'`,
+    };
+  }
+
+  return {
+    anchorSql: Prisma.sql`date_trunc('month', coalesce(max(purchase_date), now()))`,
+    intervalSql: Prisma.sql`interval '11 months'`,
+    joinSql: Prisma.sql`date_trunc('month', metric_source.purchase_date) = buckets.bucket_start`,
+    labelSql: Prisma.sql`to_char(buckets.bucket_start, 'Mon')`,
+    stepSql: Prisma.sql`interval '1 month'`,
+  };
 }
 
 function joinSql(parts: Prisma.Sql[], separator: Prisma.Sql) {
@@ -355,11 +434,17 @@ async function getIapMetrics(
   sourceSql: Prisma.Sql,
   whereSql: Prisma.Sql,
   testExpression: Prisma.Sql,
-  options?: { includeTest?: boolean },
+  options?: {
+    includeTest?: boolean;
+    revenueGranularity?: string;
+  },
 ) {
   const metricScopeSql = options?.includeTest
     ? Prisma.sql`true`
     : Prisma.sql`not is_test`;
+  const bucketSql = revenueBucketSql(
+    normalizeRevenueGranularity(options?.revenueGranularity),
+  );
 
   const [metricsRows, revenueRows, bucketRows] = await Promise.all([
     prisma.$queryRaw<IapMetricsRow[]>(Prisma.sql`
@@ -447,18 +532,18 @@ async function getIapMetrics(
         where ${metricScopeSql}
       ),
       anchor as (
-        select date_trunc('month', coalesce(max(purchase_date), '2026-06-01'::timestamptz)) as chart_end
+        select ${bucketSql.anchorSql} as chart_end
         from metric_source
       ),
-      months as (
+      buckets as (
         select generate_series(
-          (select chart_end from anchor) - interval '11 months',
+          (select chart_end from anchor) - ${bucketSql.intervalSql},
           (select chart_end from anchor),
-          interval '1 month'
-        ) as month_start
+          ${bucketSql.stepSql}
+        ) as bucket_start
       )
       select
-        to_char(months.month_start, 'Mon') as label,
+        ${bucketSql.labelSql} as label,
         upper(coalesce(nullif(trim(metric_source.currency), ''), 'VND')) as currency,
         coalesce(sum((metric_source.revenue_micros::numeric / 1000000.0)) filter (
           where not metric_source.is_test
@@ -468,11 +553,11 @@ async function getIapMetrics(
           where metric_source.is_test
             and coalesce(metric_source.revenue_micros, 0) > 0
         ), 0)::float8 as sand
-      from months
+      from buckets
       left join metric_source
-        on date_trunc('month', metric_source.purchase_date) = months.month_start
-      group by months.month_start, upper(coalesce(nullif(trim(metric_source.currency), ''), 'VND'))
-      order by months.month_start
+        on ${bucketSql.joinSql}
+      group by buckets.bucket_start, upper(coalesce(nullif(trim(metric_source.currency), ''), 'VND'))
+      order by buckets.bucket_start
     `),
   ]);
 
@@ -491,6 +576,10 @@ function androidTransactionWhere(
   const environment = options?.environment?.trim();
   const state = options?.state?.trim();
   const kind = options?.kind?.trim();
+  const purchaseDate = purchaseDateRange(
+    options?.purchaseDateFrom,
+    options?.purchaseDateTo,
+  );
 
   if (environment === "production") {
     where.isTestPurchase = false;
@@ -508,6 +597,12 @@ function androidTransactionWhere(
     where.purchaseKind = { equals: kind, mode: "insensitive" };
   }
 
+  if (purchaseDate) {
+    where.purchaseDate = {};
+    if (purchaseDate.start) where.purchaseDate.gte = purchaseDate.start;
+    if (purchaseDate.end) where.purchaseDate.lt = purchaseDate.end;
+  }
+
   return where;
 }
 
@@ -519,7 +614,12 @@ export async function getAndroidTransactionsByPackageAndProfilePage(
   const where = androidTransactionWhere(packageName, storeProfileId, options);
   const rowsPromise = prisma.iapAndroid.findMany({
     where,
-    orderBy: { verifiedAt: "desc" },
+    orderBy: revenueSortOrder(options.revenueSort)
+      ? [
+          { revenueMicros: revenueSortOrder(options.revenueSort) ?? "desc" },
+          { verifiedAt: "desc" },
+        ]
+      : { verifiedAt: "desc" },
     skip: options.skip,
     take: options.take,
     select: androidTransactionListSelect,
@@ -578,7 +678,10 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
     Prisma.sql`public.iap_android`,
     Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
     Prisma.sql`is_test_purchase`,
-    { includeTest: environment !== "production" },
+    {
+      includeTest: environment !== "production",
+      revenueGranularity: options.revenueGranularity,
+    },
   );
 }
 
@@ -600,6 +703,10 @@ type IosTransactionPageOptions = {
   includeTotal?: boolean;
   page: number;
   pageSize: number;
+  purchaseDateFrom?: string;
+  purchaseDateTo?: string;
+  revenueGranularity?: string;
+  revenueSort?: string;
   skip: number;
   state?: string;
   take: number;
@@ -631,6 +738,10 @@ function iosTransactionWhere(
   };
   const state = options?.state?.trim();
   const trial = options?.trial?.trim();
+  const purchaseDate = purchaseDateRange(
+    options?.purchaseDateFrom,
+    options?.purchaseDateTo,
+  );
   const andConditions: Prisma.IosIapTransactionWhereInput[] = [];
 
   if (storeProfileId) {
@@ -649,6 +760,12 @@ function iosTransactionWhere(
     andConditions.push({ NOT: iosFreeTrialWhere() });
   }
 
+  if (purchaseDate) {
+    where.purchaseDate = {};
+    if (purchaseDate.start) where.purchaseDate.gte = purchaseDate.start;
+    if (purchaseDate.end) where.purchaseDate.lt = purchaseDate.end;
+  }
+
   if (andConditions.length) {
     where.AND = andConditions;
   }
@@ -664,7 +781,12 @@ export async function getIosTransactionsByBundleIdPage(
   const where = iosTransactionWhere(bundleId, storeProfileId, options);
   const rowsPromise = prisma.iosIapTransaction.findMany({
     where,
-    orderBy: { verifiedAt: "desc" },
+    orderBy: revenueSortOrder(options.revenueSort)
+      ? [
+          { revenueMicros: revenueSortOrder(options.revenueSort) ?? "desc" },
+          { verifiedAt: "desc" },
+        ]
+      : { verifiedAt: "desc" },
     skip: options.skip,
     take: options.take,
     select: iosTransactionSummarySelect,
@@ -740,6 +862,7 @@ export function getIosTransactionsByBundleIdMetrics(
     Prisma.sql`public.ios_iap_transactions`,
     Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
     Prisma.sql`lower(environment) = 'sandbox'`,
+    { revenueGranularity: options.revenueGranularity },
   );
 }
 

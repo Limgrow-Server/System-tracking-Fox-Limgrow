@@ -101,6 +101,10 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
       includeContext: clean(url.searchParams.get("context")) !== "false",
       knownTotal: optionalPositiveInt(url.searchParams.get("knownTotal")),
       kind: clean(url.searchParams.get("kind")) || "all",
+      purchaseDateFrom: clean(url.searchParams.get("purchaseDateFrom")),
+      purchaseDateTo: clean(url.searchParams.get("purchaseDateTo")),
+      revenueGranularity: clean(url.searchParams.get("revenueGranularity")),
+      revenueSort: clean(url.searchParams.get("revenueSort")),
       state: clean(url.searchParams.get("state")) || "all",
       trial: clean(url.searchParams.get("trial")) || "all",
     });
@@ -162,6 +166,7 @@ export async function handleAdminIapAppContextGet(request: Request) {
     const detail = await getIapAppContext(mappingId, platform, {
       environment: clean(url.searchParams.get("environment")) || undefined,
       kind: clean(url.searchParams.get("kind")) || "all",
+      revenueGranularity: clean(url.searchParams.get("revenueGranularity")),
       state: clean(url.searchParams.get("state")) || "all",
       trial: clean(url.searchParams.get("trial")) || "all",
     });

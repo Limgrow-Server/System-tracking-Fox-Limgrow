@@ -2,9 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import type { DateRange } from "react-day-picker";
 import {
   ArrowDownRight,
   ArrowLeft,
+  ArrowUpDown,
   ArrowUpRight,
   Apple,
   Calendar,
@@ -12,15 +14,22 @@ import {
   CreditCard,
   FileJson,
   Smartphone,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Calendar as CalendarPicker } from "@/components/ui/calendar";
 import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import {
   TableEmptyState,
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -32,6 +41,7 @@ import type {
   IapAppDetailPageData,
   IapAppMetrics,
   IapAppTransaction,
+  IapRevenueGranularity,
   IapTrialConversionAnalytics,
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
@@ -128,6 +138,37 @@ function formatDate(dateVal: number | string | null) {
   }
   if (Number.isNaN(d.getTime())) return "N/A";
   return d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+}
+
+function dateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateFromInputValue(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function displayDateValue(value: string) {
+  const date = dateFromInputValue(value);
+  if (!date) return "Purchase date";
+
+  return date.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function isIosTransaction(
@@ -495,6 +536,118 @@ function IapMetricsSkeleton() {
   );
 }
 
+function displayDateRangeValue(from: string, to: string) {
+  const fromLabel = displayDateValue(from);
+  const toLabel = displayDateValue(to);
+
+  if (from && to) return `${fromLabel} - ${toLabel}`;
+  if (from) return `From ${fromLabel}`;
+  if (to) return `To ${toLabel}`;
+  return "Purchase date";
+}
+
+function dateOnlyTime(date: Date) {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  ).getTime();
+}
+
+function TransactionPurchaseDateRangePicker({
+  onChange,
+  valueFrom,
+  valueTo,
+}: {
+  onChange: (value: { from: string; to: string }) => void;
+  valueFrom: string;
+  valueTo: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draftRange, setDraftRange] = useState<DateRange | undefined>();
+
+  function resetDraftRange() {
+    setDraftRange(
+      valueFrom || valueTo
+        ? {
+            from: dateFromInputValue(valueFrom) ?? undefined,
+            to: dateFromInputValue(valueTo) ?? undefined,
+        }
+      : undefined,
+    );
+  }
+
+  function applyRange(from: Date, to: Date) {
+    onChange({
+      from: dateInputValue(from),
+      to: dateInputValue(to),
+    });
+    setOpen(false);
+  }
+
+  function handleDayClick(day: Date) {
+    if (!draftRange?.from || draftRange.to) {
+      setDraftRange({ from: day, to: undefined });
+      return;
+    }
+
+    if (dateOnlyTime(day) < dateOnlyTime(draftRange.from)) {
+      setDraftRange({ from: day, to: undefined });
+      return;
+    }
+
+    setDraftRange({ from: draftRange.from, to: day });
+    applyRange(draftRange.from, day);
+  }
+
+  return (
+    <div className="flex w-full items-center gap-2 sm:w-auto">
+      <Popover
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (nextOpen) resetDraftRange();
+          setOpen(nextOpen);
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-9 w-full justify-start gap-2 bg-background px-3 font-normal sm:w-[270px]"
+          >
+            <Calendar size={14} />
+            <span className="truncate">
+              {displayDateRangeValue(valueFrom, valueTo)}
+            </span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="end">
+          <CalendarPicker
+            mode="range"
+            numberOfMonths={2}
+            selected={draftRange}
+            onDayClick={handleDayClick}
+            className="rounded-lg border"
+            captionLayout="dropdown"
+          />
+        </PopoverContent>
+      </Popover>
+      {valueFrom || valueTo ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-9 w-9 shrink-0 bg-background"
+          onClick={() => onChange({ from: "", to: "" })}
+          title="Clear purchase date range"
+        >
+          <X size={14} />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const { app } = data;
   const isIos = app.platform === "ios";
@@ -526,6 +679,21 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [filterState, setFilterState] = useState<string>(data.filters.state);
   const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
   const [filterTrial, setFilterTrial] = useState<string>(data.filters.trial);
+  const [filterPurchaseDateFrom, setFilterPurchaseDateFrom] = useState<string>(
+    data.filters.purchaseDateFrom,
+  );
+  const [filterPurchaseDateTo, setFilterPurchaseDateTo] = useState<string>(
+    data.filters.purchaseDateTo,
+  );
+  const [revenueGranularity, setRevenueGranularity] =
+    useState<IapRevenueGranularity>(
+      data.filters.revenueGranularity,
+  );
+  const [revenueSort, setRevenueSort] = useState<string>(
+    data.filters.revenueSort,
+  );
+  const [revenueGranularityLoading, setRevenueGranularityLoading] =
+    useState(false);
   const [tableLoading, setTableLoading] = useState(false);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
@@ -533,9 +701,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const latestViewRef = useRef({
     filterEnvironment: data.filters.environment,
     filterKind: data.filters.kind,
+    filterPurchaseDateFrom: data.filters.purchaseDateFrom,
+    filterPurchaseDateTo: data.filters.purchaseDateTo,
     filterState: data.filters.state,
     filterTrial: data.filters.trial,
     page: data.transactionPagination.page,
+    revenueGranularity: data.filters.revenueGranularity,
+    revenueSort: data.filters.revenueSort,
   });
   const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -548,8 +720,12 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     overrides?: {
       filterEnvironment?: string;
       filterKind?: string;
+      filterPurchaseDateFrom?: string;
+      filterPurchaseDateTo?: string;
       filterState?: string;
       filterTrial?: string;
+      revenueGranularity?: IapRevenueGranularity;
+      revenueSort?: string;
     },
     options?: {
       silent?: boolean;
@@ -560,6 +736,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     const nextFilterState = overrides?.filterState ?? filterState;
     const nextFilterKind = overrides?.filterKind ?? filterKind;
     const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
+    const nextFilterPurchaseDateFrom =
+      overrides?.filterPurchaseDateFrom ?? filterPurchaseDateFrom;
+    const nextFilterPurchaseDateTo =
+      overrides?.filterPurchaseDateTo ?? filterPurchaseDateTo;
+    const nextRevenueGranularity =
+      overrides?.revenueGranularity ?? revenueGranularity;
+    const nextRevenueSort = overrides?.revenueSort ?? revenueSort;
     const params = new URLSearchParams({
       context: overrides ? "true" : "false",
       mappingId: app.mappingId,
@@ -575,6 +758,18 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
     if (isIos && nextFilterTrial !== "all") {
       params.set("trial", nextFilterTrial);
+    }
+    if (nextFilterPurchaseDateFrom) {
+      params.set("purchaseDateFrom", nextFilterPurchaseDateFrom);
+    }
+    if (nextFilterPurchaseDateTo) {
+      params.set("purchaseDateTo", nextFilterPurchaseDateTo);
+    }
+    if (nextRevenueGranularity) {
+      params.set("revenueGranularity", nextRevenueGranularity);
+    }
+    if (nextRevenueSort === "asc" || nextRevenueSort === "desc") {
+      params.set("revenueSort", nextRevenueSort);
     }
     if (!overrides) {
       params.set("knownTotal", String(transactionPagination.total));
@@ -627,6 +822,53 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     }
   }
 
+  async function loadRevenueGranularity(
+    nextGranularity: IapRevenueGranularity,
+  ) {
+    const previousGranularity = revenueGranularity;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
+      revenueGranularity: nextGranularity,
+    });
+
+    if (!isIos && filterEnvironment !== "all") {
+      params.set("environment", filterEnvironment);
+    }
+    if (filterState !== "all") params.set("state", filterState);
+    if (!isIos && filterKind !== "all") params.set("kind", filterKind);
+    if (isIos && filterTrial !== "all") {
+      params.set("trial", filterTrial);
+    }
+
+    setRevenueGranularity(nextGranularity);
+    setRevenueGranularityLoading(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/iap/app-context?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapAppContextResponse;
+
+      if (!response.ok || !payload.success || !payload.metrics) {
+        throw new Error(payload.error ?? "Load IAP metrics failed.");
+      }
+
+      setMetrics(payload.metrics);
+      setMetricsLoaded(true);
+      setTransactionStates(payload.transactionStates ?? []);
+    } catch (error) {
+      setRevenueGranularity(previousGranularity);
+      void showToast("error",
+        error instanceof Error
+          ? error.message
+          : "Load IAP metrics failed.",
+      );
+    } finally {
+      setRevenueGranularityLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (metricsLoaded) return;
 
@@ -644,6 +886,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     if (isIos && filterTrial !== "all") {
       params.set("trial", filterTrial);
     }
+    params.set("revenueGranularity", revenueGranularity);
 
     async function loadIapContext() {
       try {
@@ -687,6 +930,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     filterTrial,
     isIos,
     metricsLoaded,
+    revenueGranularity,
   ]);
 
   useEffect(() => {
@@ -804,15 +1048,23 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     latestViewRef.current = {
       filterEnvironment,
       filterKind,
+      filterPurchaseDateFrom,
+      filterPurchaseDateTo,
       filterState,
       filterTrial,
       page: transactionPagination.page,
+      revenueGranularity,
+      revenueSort,
     };
   }, [
     filterEnvironment,
     filterKind,
+    filterPurchaseDateFrom,
+    filterPurchaseDateTo,
     filterState,
     filterTrial,
+    revenueGranularity,
+    revenueSort,
     transactionPagination.page,
   ]);
 
@@ -834,8 +1086,12 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           {
             filterEnvironment: latest.filterEnvironment,
             filterKind: latest.filterKind,
+            filterPurchaseDateFrom: latest.filterPurchaseDateFrom,
+            filterPurchaseDateTo: latest.filterPurchaseDateTo,
             filterState: latest.filterState,
             filterTrial: latest.filterTrial,
+            revenueGranularity: latest.revenueGranularity,
+            revenueSort: latest.revenueSort,
           },
           { silent: true },
         ),
@@ -981,6 +1237,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const tableStartIndex =
     (transactionPagination.page - 1) * transactionPagination.pageSize;
   const visible = transactions;
+  const nextRevenueSort = revenueSort === "asc" ? "desc" : "asc";
+  const revenueSortLabel =
+    revenueSort === "asc"
+      ? "Revenue ascending"
+      : revenueSort === "desc"
+        ? "Revenue descending"
+        : "Sort revenue";
   const realtimeMeta = realtimeStatusMeta(realtimeStatus);
 
   const fmtVND = (n: number) =>
@@ -1068,10 +1331,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
 
         <IapRevenueChart
           buckets={metrics.revenueBuckets}
-          revenue={stats.rev}
-          trendPct={stats.sg}
+          granularity={revenueGranularity}
+          loading={revenueGranularityLoading}
+          onGranularityChange={(granularity) =>
+            void loadRevenueGranularity(granularity)
+          }
         />
-        </div>
+      </div>
       ) : (
         <IapMetricsSkeleton />
       )}
@@ -1108,7 +1374,19 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
               {realtimeMeta.label}
             </Badge>
           </div>
-          <div className="flex w-full items-center gap-2 sm:w-auto">
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+            <TransactionPurchaseDateRangePicker
+              valueFrom={filterPurchaseDateFrom}
+              valueTo={filterPurchaseDateTo}
+              onChange={(value) => {
+                setFilterPurchaseDateFrom(value.from);
+                setFilterPurchaseDateTo(value.to);
+                void loadTransactionsPage(1, {
+                  filterPurchaseDateFrom: value.from,
+                  filterPurchaseDateTo: value.to,
+                });
+              }}
+            />
             {!isIos && (
               <Select
                 value={filterEnvironment}
@@ -1192,7 +1470,26 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 <th className="px-4 py-3">Transaction / Order</th>
                 <th className="px-4 py-3">Product Info</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Revenue / Price</th>
+                <th className="px-4 py-3">
+                  <button
+                    type="button"
+                    className={`inline-flex items-center gap-1.5 rounded-md text-left font-semibold uppercase tracking-wider transition-colors hover:text-foreground ${
+                      revenueSort === "asc" || revenueSort === "desc"
+                        ? "text-foreground"
+                        : ""
+                    }`}
+                    title={revenueSortLabel}
+                    onClick={() => {
+                      setRevenueSort(nextRevenueSort);
+                      void loadTransactionsPage(1, {
+                        revenueSort: nextRevenueSort,
+                      });
+                    }}
+                  >
+                    Revenue / Price
+                    <ArrowUpDown size={13} />
+                  </button>
+                </th>
                 <th className="px-4 py-3">Purchase time</th>
                 <th className="px-4 py-3">Receipt</th>
               </tr>
