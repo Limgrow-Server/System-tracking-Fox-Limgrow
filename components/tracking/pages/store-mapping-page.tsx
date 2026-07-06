@@ -50,6 +50,7 @@ type StoreMappingListResponse = {
 };
 
 const APP_MAPPING_PAGE_SIZE = 10;
+const MASKED_SECRET_PLACEHOLDER = "\u2022".repeat(18);
 
 function appInitial(value: string | null | undefined) {
   return (value?.trim().charAt(0) || "A").toUpperCase();
@@ -644,10 +645,12 @@ export function StoreMappingPage({
                           </Label>
                           <Input
                             id="firebaseAppId"
+                            type="password"
                             value={form.firebaseAppId}
                             onChange={(event) =>
                               updateField("firebaseAppId", event.target.value)
                             }
+                            autoComplete="new-password"
                             placeholder="1:1234567890:ios:abcdef123456"
                             readOnly={drawerReadOnly}
                           />
@@ -676,7 +679,7 @@ export function StoreMappingPage({
                             autoComplete="new-password"
                             placeholder={
                               firebaseAnalyticsSecretConfigured
-                                ? "Leave blank to keep current secret"
+                                ? MASKED_SECRET_PLACEHOLDER
                                 : "FIREBASE_ANALYTICS_API_SECRET"
                             }
                             readOnly={drawerReadOnly}
