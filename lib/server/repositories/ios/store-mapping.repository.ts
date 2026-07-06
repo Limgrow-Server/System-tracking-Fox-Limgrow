@@ -109,6 +109,16 @@ export async function getIosStoreMappingId(id: string) {
   return mapping?.id ?? null;
 }
 
+export function getIosStoreMappingFirebaseAnalyticsSecret(id: string) {
+  return prisma.iosStoreMapping.findUnique({
+    where: { id },
+    select: {
+      firebaseAnalyticsApiSecret: true,
+      id: true,
+    },
+  });
+}
+
 export async function saveIosStoreMapping(
   tx: Prisma.TransactionClient,
   input: SaveIosStoreMappingInput
