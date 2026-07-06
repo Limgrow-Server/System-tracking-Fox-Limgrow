@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, type ReactNode, useMemo, useState } from "react";
-import { Cable, Eye, Link2, Pencil, Plus, Power, PowerOff, Search, Trash2 } from "lucide-react";
+import { FormEvent, type ReactNode, useMemo, useRef, useState } from "react";
+import { Cable, Eye, EyeOff, Link2, Pencil, Plus, Power, PowerOff, Search, Trash2 } from "lucide-react";
 import { showToast } from "@/lib/client/toast";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
@@ -47,6 +47,23 @@ type StoreMappingListResponse = {
   pageSize?: number;
   total?: number;
   totalPages?: number;
+};
+type CredentialSecretOtpResponse = {
+  email?: string;
+  error?: string;
+  expiresAt?: string | null;
+  ok?: boolean;
+  otpExpiresAt?: string | null;
+  unlocked?: boolean;
+};
+type SecretAccessOptions = {
+  forceSend?: boolean;
+};
+type IosMappingSecretResponse = {
+  error?: string;
+  firebaseAnalyticsApiSecret?: string;
+  id?: string;
+  ok?: boolean;
 };
 
 const APP_MAPPING_PAGE_SIZE = 10;
@@ -214,6 +231,26 @@ export function StoreMappingPage({
   const [searchQuery, setSearchQuery] = useState("");
   const [storeFilter, setStoreFilter] = useState("all");
   const [tableLoading, setTableLoading] = useState(false);
+  const [firebaseAppIdRevealed, setFirebaseAppIdRevealed] = useState(false);
+  const [firebaseAnalyticsSecretRevealed, setFirebaseAnalyticsSecretRevealed] =
+    useState(false);
+  const [firebaseAnalyticsSecretPending, setFirebaseAnalyticsSecretPending] =
+    useState(false);
+  const [secretOtpOpen, setSecretOtpOpen] = useState(false);
+  const [secretOtpEmail, setSecretOtpEmail] = useState("");
+  const [secretOtpExpiresAt, setSecretOtpExpiresAt] = useState<string | null>(
+    null,
+  );
+  const [secretUnlockExpiresAt, setSecretUnlockExpiresAt] = useState<
+    string | null
+  >(null);
+  const [secretOtpCode, setSecretOtpCode] = useState("");
+  const [secretOtpError, setSecretOtpError] = useState<string | null>(null);
+  const [secretOtpSending, setSecretOtpSending] = useState(false);
+  const [secretOtpVerifying, setSecretOtpVerifying] = useState(false);
+  const secretOtpResolveRef = useRef<((unlocked: boolean) => void) | null>(
+    null,
+  );
   const storeOptions = useMemo(() => {
     return data.storeOptions
       .filter((store) => store.platform === form.platform)
@@ -221,7 +258,14 @@ export function StoreMappingPage({
       .sort((left, right) => left.name.localeCompare(right.name));
   }, [data.storeOptions, form.platform]);
 
+  function resetSecretRevealState() {
+    setFirebaseAppIdRevealed(false);
+    setFirebaseAnalyticsSecretRevealed(false);
+    setFirebaseAnalyticsSecretPending(false);
+  }
+
   function openCreate() {
+    resetSecretRevealState();
     setDrawerMode("create");
     setEditingId(null);
     setForm(createEmptyForm(platformFilter ?? "android"));
@@ -229,6 +273,7 @@ export function StoreMappingPage({
   }
 
   function openEdit(mapping: StoreMapping) {
+    resetSecretRevealState();
     setDrawerMode("edit");
     setEditingId(mapping.id);
     setForm(formFromMapping(mapping));
@@ -236,6 +281,7 @@ export function StoreMappingPage({
   }
 
   function openView(mapping: StoreMapping) {
+    resetSecretRevealState();
     setDrawerMode("view");
     setEditingId(mapping.id);
     setForm(formFromMapping(mapping));
@@ -317,6 +363,219 @@ export function StoreMappingPage({
   function updateStoreFilter(nextValue: string) {
     setStoreFilter(nextValue);
     void loadMappingsPage(1, { storeFilter: nextValue });
+  }
+
+  function resolveSecretOtpWaiter(unlocked: boolean) {
+    const resolve = secretOtpResolveRef.current;
+    secretOtpResolveRef.current = null;
+    resolve?.(unlocked);
+  }
+
+  function credentialOtpError(payload: CredentialSecretOtpResponse) {
+    return payload.error ?? "Credential OTP operation failed.";
+  }
+
+  async function requestCredentialSecretOtp() {
+    setSecretOtpSending(true);
+    setSecretOtpError(null);
+
+    try {
+      const response = await fetch("/api/admin/credentials/otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "send" }),
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      setSecretOtpEmail(payload.email ?? "");
+      setSecretOtpExpiresAt(payload.otpExpiresAt ?? null);
+      void showToast("success", "OTP sent to your email.");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not send credential OTP.";
+      setSecretOtpError(message);
+      throw error;
+    } finally {
+      setSecretOtpSending(false);
+    }
+  }
+
+  async function ensureCredentialSecretAccess(
+    options?: SecretAccessOptions,
+  ) {
+    if (!options?.forceSend) {
+      const response = await fetch("/api/admin/credentials/otp", {
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      if (payload.unlocked) {
+        setSecretUnlockExpiresAt(payload.expiresAt ?? null);
+        return true;
+      }
+    }
+
+    if (secretOtpResolveRef.current) {
+      setSecretOtpOpen(true);
+      return new Promise<boolean>((resolve) => {
+        const previousResolve = secretOtpResolveRef.current;
+        secretOtpResolveRef.current = (unlocked) => {
+          previousResolve?.(unlocked);
+          resolve(unlocked);
+        };
+      });
+    }
+
+    const waitForOtp = new Promise<boolean>((resolve) => {
+      secretOtpResolveRef.current = resolve;
+    });
+
+    setSecretOtpCode("");
+    setSecretOtpError(null);
+    setSecretOtpOpen(true);
+
+    try {
+      await requestCredentialSecretOtp();
+    } catch (error) {
+      setSecretOtpOpen(false);
+      resolveSecretOtpWaiter(false);
+      throw error instanceof Error
+        ? error
+        : new Error("Could not send credential OTP.");
+    }
+
+    return waitForOtp;
+  }
+
+  async function verifyCredentialSecretAccessOtp() {
+    const code = secretOtpCode.replace(/\D/g, "");
+    if (!/^\d{6}$/.test(code)) {
+      setSecretOtpError("OTP code must contain 6 digits.");
+      return;
+    }
+
+    setSecretOtpVerifying(true);
+    setSecretOtpError(null);
+
+    try {
+      const response = await fetch("/api/admin/credentials/otp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "verify", code }),
+      });
+      const payload = (await response.json()) as CredentialSecretOtpResponse;
+
+      if (!response.ok || !payload.ok || !payload.unlocked) {
+        throw new Error(credentialOtpError(payload));
+      }
+
+      setSecretUnlockExpiresAt(payload.expiresAt ?? null);
+      setSecretOtpOpen(false);
+      setSecretOtpCode("");
+      void showToast("success", "Credential keys unlocked for 1 hour.");
+      resolveSecretOtpWaiter(true);
+    } catch (error) {
+      setSecretOtpError(
+        error instanceof Error
+          ? error.message
+          : "Could not verify credential OTP.",
+      );
+    } finally {
+      setSecretOtpVerifying(false);
+    }
+  }
+
+  function closeSecretOtpDialog() {
+    if (secretOtpSending || secretOtpVerifying) return;
+    setSecretOtpOpen(false);
+    setSecretOtpCode("");
+    setSecretOtpError(null);
+    resolveSecretOtpWaiter(false);
+  }
+
+  async function revealSavedFirebaseAnalyticsSecret() {
+    if (!editingId) {
+      return false;
+    }
+
+    setFirebaseAnalyticsSecretPending(true);
+
+    try {
+      const unlocked = await ensureCredentialSecretAccess();
+      if (!unlocked) return false;
+
+      const params = new URLSearchParams({
+        id: editingId,
+        platform: "ios",
+        reveal: "firebaseAnalyticsApiSecret",
+      });
+      const response = await fetch(
+        `/api/admin/store-mappings?${params.toString()}`,
+        { cache: "no-store" },
+      );
+      const payload = (await response.json()) as IosMappingSecretResponse;
+
+      if (
+        !response.ok ||
+        !payload.ok ||
+        typeof payload.firebaseAnalyticsApiSecret !== "string"
+      ) {
+        throw new Error(payload.error ?? "Could not load Analytics API secret.");
+      }
+
+      setForm((current) => ({
+        ...current,
+        firebaseAnalyticsApiSecret: payload.firebaseAnalyticsApiSecret ?? "",
+      }));
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not load Analytics API secret.";
+
+      if (message.toLowerCase().includes("otp")) {
+        const unlockedAfterRetry = await ensureCredentialSecretAccess({
+          forceSend: true,
+        });
+        if (unlockedAfterRetry) return revealSavedFirebaseAnalyticsSecret();
+      }
+
+      void showToast("error", message);
+      return false;
+    } finally {
+      setFirebaseAnalyticsSecretPending(false);
+    }
+  }
+
+  async function toggleFirebaseAnalyticsSecretReveal() {
+    if (firebaseAnalyticsSecretRevealed) {
+      setFirebaseAnalyticsSecretRevealed(false);
+      return;
+    }
+
+    if (form.firebaseAnalyticsApiSecret) {
+      setFirebaseAnalyticsSecretRevealed(true);
+      return;
+    }
+
+    if (!firebaseAnalyticsSecretConfigured) {
+      setFirebaseAnalyticsSecretRevealed(true);
+      return;
+    }
+
+    const loaded = await revealSavedFirebaseAnalyticsSecret();
+    if (loaded) setFirebaseAnalyticsSecretRevealed(true);
   }
 
   async function loadMappingsPage(
@@ -643,17 +902,50 @@ export function StoreMappingPage({
                           <Label htmlFor="firebaseAppId">
                             Firebase App ID
                           </Label>
-                          <Input
-                            id="firebaseAppId"
-                            type="password"
-                            value={form.firebaseAppId}
-                            onChange={(event) =>
-                              updateField("firebaseAppId", event.target.value)
-                            }
-                            autoComplete="new-password"
-                            placeholder="1:1234567890:ios:abcdef123456"
-                            readOnly={drawerReadOnly}
-                          />
+                          <div className="relative">
+                            <Input
+                              id="firebaseAppId"
+                              type={firebaseAppIdRevealed ? "text" : "password"}
+                              value={form.firebaseAppId}
+                              onChange={(event) =>
+                                updateField(
+                                  "firebaseAppId",
+                                  event.target.value,
+                                )
+                              }
+                              autoComplete="new-password"
+                              className="pr-11"
+                              placeholder="1:1234567890:ios:abcdef123456"
+                              readOnly={drawerReadOnly}
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              className="absolute right-1 top-1/2 size-8 -translate-y-1/2"
+                              disabled={!form.firebaseAppId}
+                              aria-label={
+                                firebaseAppIdRevealed
+                                  ? "Hide Firebase App ID"
+                                  : "Show Firebase App ID"
+                              }
+                              aria-pressed={firebaseAppIdRevealed}
+                              onClick={() =>
+                                setFirebaseAppIdRevealed((current) => !current)
+                              }
+                            >
+                              {firebaseAppIdRevealed ? (
+                                <EyeOff size={15} />
+                              ) : (
+                                <Eye size={15} />
+                              )}
+                              <span className="sr-only">
+                                {firebaseAppIdRevealed
+                                  ? "Hide Firebase App ID"
+                                  : "Show Firebase App ID"}
+                              </span>
+                            </Button>
+                          </div>
                         </div>
                         <div className="grid gap-2">
                           <div className="flex items-center justify-between gap-2">
@@ -666,24 +958,64 @@ export function StoreMappingPage({
                               </Badge>
                             ) : null}
                           </div>
-                          <Input
-                            id="firebaseAnalyticsApiSecret"
-                            type="password"
-                            value={form.firebaseAnalyticsApiSecret}
-                            onChange={(event) =>
-                              updateField(
-                                "firebaseAnalyticsApiSecret",
-                                event.target.value,
-                              )
-                            }
-                            autoComplete="new-password"
-                            placeholder={
-                              firebaseAnalyticsSecretConfigured
-                                ? MASKED_SECRET_PLACEHOLDER
-                                : "FIREBASE_ANALYTICS_API_SECRET"
-                            }
-                            readOnly={drawerReadOnly}
-                          />
+                          <div className="relative">
+                            <Input
+                              id="firebaseAnalyticsApiSecret"
+                              type={
+                                firebaseAnalyticsSecretRevealed
+                                  ? "text"
+                                  : "password"
+                              }
+                              value={form.firebaseAnalyticsApiSecret}
+                              onChange={(event) =>
+                                updateField(
+                                  "firebaseAnalyticsApiSecret",
+                                  event.target.value,
+                                )
+                              }
+                              autoComplete="new-password"
+                              className="pr-11"
+                              placeholder={
+                                firebaseAnalyticsSecretConfigured
+                                  ? MASKED_SECRET_PLACEHOLDER
+                                  : "FIREBASE_ANALYTICS_API_SECRET"
+                              }
+                              readOnly={drawerReadOnly}
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              className="absolute right-1 top-1/2 size-8 -translate-y-1/2"
+                              disabled={
+                                firebaseAnalyticsSecretPending ||
+                                (!form.firebaseAnalyticsApiSecret &&
+                                  !firebaseAnalyticsSecretConfigured)
+                              }
+                              aria-label={
+                                firebaseAnalyticsSecretRevealed
+                                  ? "Hide Analytics API secret"
+                                  : "Show Analytics API secret"
+                              }
+                              aria-pressed={firebaseAnalyticsSecretRevealed}
+                              onClick={() => {
+                                void toggleFirebaseAnalyticsSecretReveal();
+                              }}
+                            >
+                              {firebaseAnalyticsSecretPending ? (
+                                <Spinner />
+                              ) : firebaseAnalyticsSecretRevealed ? (
+                                <EyeOff size={15} />
+                              ) : (
+                                <Eye size={15} />
+                              )}
+                              <span className="sr-only">
+                                {firebaseAnalyticsSecretRevealed
+                                  ? "Hide Analytics API secret"
+                                  : "Show Analytics API secret"}
+                              </span>
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -749,6 +1081,90 @@ export function StoreMappingPage({
               {deleteTarget && pendingRow === deleteTarget.id ? <Spinner /> : <Trash2 size={15} />}
               Delete
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={secretOtpOpen}
+        onOpenChange={(open) => {
+          if (!open) closeSecretOtpDialog();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Verify credential access</DialogTitle>
+            <DialogDescription>
+              Enter the OTP sent to{" "}
+              {secretOtpEmail || "the configured security email"} to view
+              hidden Firebase Analytics keys for 1 hour.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="grid gap-2">
+              <Label htmlFor="storeMappingSecretOtp">OTP code</Label>
+              <Input
+                id="storeMappingSecretOtp"
+                inputMode="numeric"
+                maxLength={6}
+                value={secretOtpCode}
+                onChange={(event) =>
+                  setSecretOtpCode(
+                    event.target.value.replace(/\D/g, "").slice(0, 6),
+                  )
+                }
+                placeholder="123456"
+                autoComplete="one-time-code"
+              />
+            </div>
+            {secretOtpExpiresAt ? (
+              <p className="text-xs text-muted-foreground">
+                OTP expires at {dateTime(secretOtpExpiresAt)}.
+              </p>
+            ) : null}
+            {secretUnlockExpiresAt ? (
+              <p className="text-xs text-muted-foreground">
+                Current unlock expires at {dateTime(secretUnlockExpiresAt)}.
+              </p>
+            ) : null}
+            {secretOtpError ? (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {secretOtpError}
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter className="gap-2 sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={secretOtpSending || secretOtpVerifying}
+              onClick={() => {
+                void requestCredentialSecretOtp();
+              }}
+            >
+              {secretOtpSending ? <Spinner /> : null}
+              Resend OTP
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={secretOtpSending || secretOtpVerifying}
+                onClick={closeSecretOtpDialog}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={secretOtpSending || secretOtpVerifying}
+                onClick={() => {
+                  void verifyCredentialSecretAccessOtp();
+                }}
+              >
+                {secretOtpVerifying ? <Spinner /> : null}
+                Verify
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

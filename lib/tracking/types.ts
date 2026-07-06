@@ -20,7 +20,7 @@ export type BackgroundJob = {
   source_job_id: string | null;
   source_run_ids: string[];
   started_at: string | null;
-  status: "queued" | "running" | "succeeded" | "failed" | "partial";
+  status: "queued" | "running" | "paused" | "succeeded" | "failed" | "partial";
   store_account_name: string | null;
   title: string;
   type: "notification_send" | "review_fetch";

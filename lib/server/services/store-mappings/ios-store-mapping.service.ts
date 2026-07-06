@@ -7,6 +7,7 @@ import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
   deleteIosStoreMapping,
+  getIosStoreMappingFirebaseAnalyticsSecret,
   getIosStoreMappingId,
   getIosStoreMappings,
   getIosStoreMappingsPage,
@@ -127,6 +128,24 @@ export async function getIosStoreMappingsResult() {
 
 export async function iosStoreMappingExists(id: string) {
   return Boolean(await getIosStoreMappingId(id));
+}
+
+export async function revealIosStoreMappingFirebaseAnalyticsSecret(id: string) {
+  const cleanedId = cleanText(id);
+  if (!cleanedId) {
+    throw badRequest("Mapping id is required.");
+  }
+
+  const mapping = await getIosStoreMappingFirebaseAnalyticsSecret(cleanedId);
+  if (!mapping) {
+    throw notFound("iOS mapping was not found.");
+  }
+
+  return {
+    firebaseAnalyticsApiSecret:
+      mapping.firebaseAnalyticsApiSecret ?? "",
+    id: mapping.id,
+  };
 }
 
 export async function saveIosStoreMappingDto(input: {

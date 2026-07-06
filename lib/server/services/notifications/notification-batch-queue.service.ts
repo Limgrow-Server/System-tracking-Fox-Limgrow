@@ -522,7 +522,7 @@ async function claimNotificationBatches(limit: number) {
   const lockedBy = `notification-worker-${randomUUID()}`;
 
   return prisma.$queryRaw<NotificationBatchRow[]>`
-    update notification_job_batches
+    update notification_job_batches as batches
     set
       status = 'processing',
       locked_at = ${now},
@@ -530,12 +530,15 @@ async function claimNotificationBatches(limit: number) {
       started_at = coalesce(started_at, ${now}),
       attempt_count = attempt_count + 1,
       updated_at = ${now}
-    where id in (
-      select id
-      from notification_job_batches
-      where status in ('queued', 'retrying')
-        and next_attempt_at <= ${now}
-      order by next_attempt_at asc, created_at asc
+    where batches.id in (
+      select candidate_batches.id
+      from notification_job_batches as candidate_batches
+      join notification_jobs as jobs
+        on jobs.id = candidate_batches.job_id
+      where candidate_batches.status in ('queued', 'retrying')
+        and candidate_batches.next_attempt_at <= ${now}
+        and jobs.status <> 'paused'
+      order by candidate_batches.next_attempt_at asc, candidate_batches.created_at asc
       for update skip locked
       limit ${limit}
     )
@@ -661,38 +664,51 @@ async function callSendNotificationBatch(job: NotificationJob, batch: Notificati
 }
 
 async function updateParentJobAggregate(jobId: string) {
-  const [summary] = await prisma.$queryRaw<NotificationBatchAggregate[]>`
-    select
-      count(*)::int as total_count,
-      count(*) filter (where status in ('queued', 'retrying', 'processing'))::int as pending_count,
-      count(*) filter (where status = 'failed')::int as failed_count,
-      coalesce(sum(sent_count), 0)::int as sent_count,
-      coalesce(sum(error_count), 0)::int as error_count,
-      max(last_error) filter (where last_error is not null) as last_error
-    from notification_job_batches
-    where job_id = ${jobId}::uuid
-  `;
+  const [parentJob, summaryRows] = await Promise.all([
+    prisma.notificationJob.findUnique({
+      where: { id: jobId },
+      select: { status: true },
+    }),
+    prisma.$queryRaw<NotificationBatchAggregate[]>`
+      select
+        count(*)::int as total_count,
+        count(*) filter (where status in ('queued', 'retrying', 'processing', 'paused'))::int as pending_count,
+        count(*) filter (where status = 'failed')::int as failed_count,
+        coalesce(sum(sent_count), 0)::int as sent_count,
+        coalesce(sum(error_count), 0)::int as error_count,
+        max(last_error) filter (where last_error is not null) as last_error
+      from notification_job_batches
+      where job_id = ${jobId}::uuid
+    `,
+  ]);
+  if (!parentJob) return;
+
+  const summary = summaryRows[0];
   const total = summary?.total_count ?? 0;
   const pending = summary?.pending_count ?? 0;
   const failed = summary?.failed_count ?? 0;
   const sentCount = summary?.sent_count ?? 0;
   const errorCount = summary?.error_count ?? 0;
   const complete = total > 0 && pending === 0;
-  const status = !complete
+  const status = parentJob.status === "paused"
+    ? "paused"
+    : !complete
     ? "processing"
     : failed > 0 && sentCount === 0
       ? "failed"
       : failed > 0 || errorCount > 0
         ? "sent_with_issues"
         : "sent";
-  const backgroundStatus: BackgroundJobStatus = !complete
+  const backgroundStatus: BackgroundJobStatus = status === "paused"
+    ? "QUEUED"
+    : !complete
     ? "RUNNING"
     : status === "failed"
       ? "FAILED"
       : status === "sent_with_issues"
         ? "PARTIAL"
         : "SUCCEEDED";
-  const finishedAt = complete ? new Date() : null;
+  const finishedAt = complete && status !== "paused" ? new Date() : null;
 
   await Promise.all([
     prisma.notificationJob.update({
@@ -714,6 +730,103 @@ async function updateParentJobAggregate(jobId: string) {
       status: backgroundStatus,
     }),
   ]);
+}
+
+export async function pauseNotificationQueueJob(jobId: string) {
+  const job = await prisma.notificationJob.findUnique({
+    where: { id: jobId },
+    select: { id: true, status: true, targetType: true },
+  });
+  if (!job) throw badRequest("Notification job was not found.");
+  if (job.targetType !== "device") {
+    throw badRequest("Only device notification jobs can be paused.");
+  }
+  if (["sent", "sent_with_issues", "failed"].includes(job.status)) {
+    throw badRequest("Finished notification jobs cannot be paused.");
+  }
+
+  const now = new Date();
+  const [updatedBatches] = await prisma.$transaction([
+    prisma.notificationJobBatch.updateMany({
+      where: {
+        jobId,
+        status: { in: ["queued", "retrying"] },
+      },
+      data: {
+        status: "paused",
+        updatedAt: now,
+      },
+    }),
+    prisma.notificationJob.update({
+      where: { id: jobId },
+      data: {
+        status: "paused",
+        updatedAt: now,
+      },
+    }),
+  ]);
+
+  await updateBackgroundJobBySourceJob({
+    finishedAt: null,
+    lastError: null,
+    sourceJobId: jobId,
+    status: "QUEUED",
+  });
+
+  return {
+    jobId,
+    pausedBatchCount: updatedBatches.count,
+    status: "paused",
+  };
+}
+
+export async function resumeNotificationQueueJob(jobId: string) {
+  const job = await prisma.notificationJob.findUnique({
+    where: { id: jobId },
+    select: { id: true, status: true, targetType: true },
+  });
+  if (!job) throw badRequest("Notification job was not found.");
+  if (job.targetType !== "device") {
+    throw badRequest("Only device notification jobs can be resumed.");
+  }
+  if (job.status !== "paused") {
+    throw badRequest("Only paused notification jobs can be resumed.");
+  }
+
+  const now = new Date();
+  const [updatedBatches] = await prisma.$transaction([
+    prisma.notificationJobBatch.updateMany({
+      where: {
+        jobId,
+        status: "paused",
+      },
+      data: {
+        nextAttemptAt: now,
+        status: "queued",
+        updatedAt: now,
+      },
+    }),
+    prisma.notificationJob.update({
+      where: { id: jobId },
+      data: {
+        status: "queued",
+        updatedAt: now,
+      },
+    }),
+  ]);
+
+  await updateBackgroundJobBySourceJob({
+    finishedAt: null,
+    lastError: null,
+    sourceJobId: jobId,
+    status: "RUNNING",
+  });
+
+  return {
+    jobId,
+    resumedBatchCount: updatedBatches.count,
+    status: "queued",
+  };
 }
 
 async function finishBatchSuccess(batch: NotificationBatchRow, result: EdgeFunctionResult) {

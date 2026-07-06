@@ -151,6 +151,52 @@ function deviceTokenError(error: unknown, expectedPlatform: MobilePlatform) {
   };
 }
 
+async function markReplacedDeviceTokens(
+  supabase: SupabaseAdminClient,
+  row: {
+    app_id: string | null;
+    app_identifier: string | null;
+    bundle_id: string | null;
+    device_id: string;
+    package_name: string | null;
+    product_app_id: string | null;
+  },
+  tokenHash: string,
+  expectedPlatform: MobilePlatform,
+  now: string
+) {
+  const identityFields: Array<["app_id" | "product_app_id" | "app_identifier" | "package_name" | "bundle_id", string | null]> = [
+    ["app_id", row.app_id],
+    ["product_app_id", row.product_app_id],
+    ["app_identifier", row.app_identifier],
+    ["package_name", row.package_name],
+    ["bundle_id", row.bundle_id],
+  ];
+  let replacedCount = 0;
+
+  for (const [column, value] of identityFields) {
+    if (!value) continue;
+
+    const { data, error } = await supabase
+      .from("device_tokens")
+      .update({
+        status: "replaced",
+        updated_at: now,
+      })
+      .eq("platform", expectedPlatform)
+      .eq("device_id", row.device_id)
+      .eq("status", "active")
+      .eq(column, value)
+      .neq("token_hash", tokenHash)
+      .select("id");
+
+    if (error) throw error;
+    replacedCount += data?.length ?? 0;
+  }
+
+  return replacedCount;
+}
+
 export function serveDeviceToken(expectedPlatform: MobilePlatform) {
   Deno.serve(async (request) => {
     if (request.method === "OPTIONS") {
@@ -274,12 +320,20 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         .single();
 
       if (error) throw error;
+      const replacedTokenCount = await markReplacedDeviceTokens(
+        supabase,
+        row,
+        tokenHash,
+        expectedPlatform,
+        now
+      );
 
       return json({
         ok: true,
         action,
         platform: expectedPlatform,
         device: data,
+        replacedTokenCount,
         app: {
           appId,
           appIdentifier,
