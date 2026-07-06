@@ -191,7 +191,6 @@ export async function handleAdminNotificationHistoryJobsGet(request: Request) {
         totalPages: page?.totalPages ?? 1,
       },
       {
-        notificationEvents: data.notificationEvents,
         storeMappings: data.storeMappings,
         storeOptions: data.notificationStoreOptions,
       },

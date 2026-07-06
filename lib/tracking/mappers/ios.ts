@@ -1,11 +1,13 @@
 import { enumValue, iso } from "@/lib/tracking/mappers/shared";
 import type {
   CredentialSecretMetadata,
+  IosIapTwoHourCheck,
   IosIapTransactionSummary,
   StoreMapping,
 } from "@/lib/tracking/types";
 
 import type { IosCredential, IosIapTransaction, IosStoreMapping } from "@prisma/client";
+import type { IosIapTwoHourCheckRecord } from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
 
 export type IosStoreMappingRecord = IosStoreMapping & {
   storeProfile?: { storeAccountName: string } | null;
@@ -115,6 +117,10 @@ export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): Store
     platform: "ios",
     package_name: null,
     bundle_id: mapping.bundleId,
+    firebase_app_id: mapping.firebaseAppId,
+    firebase_analytics_api_secret_configured: Boolean(
+      mapping.firebaseAnalyticsApiSecret,
+    ),
     status: enumValue(mapping.status),
     created_at: mapping.createdAt.toISOString(),
     updated_at: mapping.updatedAt.toISOString(),
@@ -187,5 +193,32 @@ export function iosIapTransactionToSummary(
     raw_receipt: options?.includeRawReceipt ? transaction.rawReceipt : null,
     verified_at: transaction.verifiedAt.toISOString(),
     created_at: transaction.createdAt.toISOString(),
+  };
+}
+
+export function iosIapTwoHourCheckToTracking(
+  check: IosIapTwoHourCheckRecord,
+): IosIapTwoHourCheck {
+  return {
+    id: check.id,
+    transaction_id: check.transactionId,
+    original_transaction_id: check.originalTransactionId,
+    user_id: check.userId,
+    bundle_id: check.bundleId,
+    product_id: check.productId,
+    environment: check.environment,
+    app_instance_id: check.appInstanceId,
+    firebase_app_id: check.firebaseAppId,
+    ga4_event_name: check.ga4EventName,
+    check_at: check.checkAt.toISOString(),
+    status: check.status,
+    renewed: check.renewed,
+    renewal_status: check.renewalStatus,
+    ga4_sent_at: iso(check.ga4SentAt),
+    attempts: check.attempts,
+    last_error: check.lastError,
+    raw_context: check.rawContext,
+    created_at: check.createdAt.toISOString(),
+    updated_at: check.updatedAt.toISOString(),
   };
 }

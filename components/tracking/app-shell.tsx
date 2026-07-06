@@ -545,6 +545,7 @@ export function AppShell({
   session: ConsoleSession;
 }) {
   const role = session.role;
+  const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -686,7 +687,12 @@ export function AppShell({
             </div>
           </header>
 
-          <main className="flex-1 p-4 sm:p-6">{children}</main>
+          <main
+            key={pathname}
+            className="flex-1 p-4 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 sm:p-6"
+          >
+            {children}
+          </main>
           {backgroundTrayReady ? <BackgroundJobTray /> : null}
         </div>
       </div>

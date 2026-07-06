@@ -35,7 +35,14 @@ export async function getIapAppDetailPageData(
   const environment =
     platform === "android" ? clean(options?.environment) || "all" : "production";
   const trial = clean(options?.trial) || "all";
-  const { appCard, metrics, transactions, transactionStates, trialAnalytics } =
+  const {
+    appCard,
+    metrics,
+    transactions,
+    transactionStates,
+    trialAnalytics,
+    twoHourChecks,
+  } =
     await getIapAppDetail(mappingId, platform, {
       environment,
       includeContext: false,
@@ -69,5 +76,6 @@ export async function getIapAppDetailPageData(
     },
     transactionStates,
     transactions: transactions.data,
+    twoHourChecks,
   };
 }

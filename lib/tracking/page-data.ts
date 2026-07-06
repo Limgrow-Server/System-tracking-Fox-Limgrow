@@ -1,6 +1,7 @@
 import type {
   CredentialSecretMetadata,
   DeviceToken,
+  IosIapTwoHourCheck,
   IosIapTransactionSummary,
   NotificationEvent,
   NotificationJob,
@@ -196,6 +197,7 @@ export type IapAppDetailPageData = {
   transactionPagination: PaginationMeta;
   transactionStates: string[];
   transactions: IapAppTransaction[];
+  twoHourChecks: IosIapTwoHourCheck[];
 };
 
 export type ReviewAppCard = {

@@ -315,11 +315,18 @@ export async function getIosTrialConversionAnalytics(
   bundleId: string,
   storeProfileId: string | undefined,
 ): Promise<IapTrialConversionAnalytics> {
-  const [transactions, notificationEvents, notificationSummary] = await Promise.all([
-    getIosTrialAnalyticsTransactions(bundleId, storeProfileId),
-    getIosIapNotificationEventsByBundleId(bundleId, storeProfileId),
-    getIosIapNotificationEventSummaryByBundleId(bundleId, storeProfileId),
-  ]);
+  const transactions = await getIosTrialAnalyticsTransactions(
+    bundleId,
+    storeProfileId,
+  );
+  const notificationEvents = await getIosIapNotificationEventsByBundleId(
+    bundleId,
+    storeProfileId,
+  );
+  const notificationSummary = await getIosIapNotificationEventSummaryByBundleId(
+    bundleId,
+    storeProfileId,
+  );
 
   const groups = new Map<string, IosTrialAnalyticsTransaction[]>();
   for (const transaction of transactions) {

@@ -543,23 +543,11 @@ export async function getNotificationHistoryPageData(
       storeMappings,
     }),
   );
-  const notificationEvents = await getNotificationEventsForJobs(
-    scoped.notificationJobs.map((job) => job.id),
-    EVENT_SCAN_LIMIT,
-  );
-  const scopedPage = scopedNotificationsData(
-    session,
-    notificationData({
-      notificationEvents,
-      notificationJobs: scoped.notificationJobs,
-      storeMappings: scoped.storeMappings,
-    }),
-  );
 
   return {
-    ...scopedPage,
+    ...scoped,
     notificationPagination: {
-      ...scopedPage.notificationPagination,
+      ...scoped.notificationPagination,
       historyJobs: metaFromResult(jobPage),
     },
     notificationStoreOptions: notificationStoreOptions(scoped.storeMappings),

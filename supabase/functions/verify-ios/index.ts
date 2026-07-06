@@ -15,6 +15,8 @@ type VerifyIosRequest = {
   environment?: string;
   userId?: string;
   credentialRef?: string;
+  appInstanceId?: string;
+  firebaseAppId?: string;
 };
 
 type StoreConfigContext = {
@@ -154,6 +156,11 @@ function finiteInt(value: unknown) {
 
 function normalizeEnvironment(value: unknown) {
   return clean(value).toLowerCase() === "sandbox" ? "sandbox" : "production";
+}
+
+function positiveIntEnv(name: string, fallback: number) {
+  const parsed = Number(Deno.env.get(name));
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 function appleApiBaseUrl(environment: AppleEnvironment) {
@@ -325,12 +332,15 @@ async function persistIosTransaction(
   supabase: SupabaseAdminClient,
   row: Record<string, unknown> & { transaction_id: string }
 ) {
+  const select =
+    "id,state,transaction_id,original_transaction_id,product_id,user_id,bundle_id,purchase_date,environment,store_profile_id";
+
   const updateExisting = async (id: string) => {
     const { data, error } = await supabase
       .from("ios_iap_transactions")
       .update(row)
       .eq("id", id)
-      .select("state")
+      .select(select)
       .single();
 
     if (error) throw error;
@@ -353,7 +363,7 @@ async function persistIosTransaction(
   const { data, error } = await supabase
     .from("ios_iap_transactions")
     .insert({ id: crypto.randomUUID(), ...row })
-    .select("state")
+    .select(select)
     .single();
 
   if (error) {
@@ -373,6 +383,117 @@ async function persistIosTransaction(
   }
 
   return data;
+}
+
+async function scheduleIosIapTwoHourCheck(
+  supabase: SupabaseAdminClient,
+  transaction: Record<string, unknown>,
+  payload: VerifyIosRequest
+) {
+  const appInstanceId = clean(payload.appInstanceId);
+  const transactionId = clean(transaction.transaction_id);
+  const bundleId = clean(transaction.bundle_id);
+  const productId = clean(transaction.product_id) || clean(payload.productId) || "unknown_product";
+
+  if (!appInstanceId) {
+    return {
+      reason: "app_instance_id_missing",
+      scheduled: false,
+    };
+  }
+
+  if (!transactionId || !bundleId) {
+    return {
+      reason: "transaction_context_missing",
+      scheduled: false,
+    };
+  }
+
+  const delayMs = positiveIntEnv("IOS_IAP_2HOUR_CHECK_DELAY_MS", 2 * 60 * 60 * 1000);
+  const purchaseDateText = stringValue(transaction.purchase_date);
+  const purchaseTime = purchaseDateText ? Date.parse(purchaseDateText) : Date.now();
+  const checkAt = new Date((Number.isFinite(purchaseTime) ? purchaseTime : Date.now()) + delayMs);
+  const firebaseAppId = clean(payload.firebaseAppId);
+  const row = {
+    app_instance_id: appInstanceId,
+    bundle_id: bundleId,
+    check_at: checkAt.toISOString(),
+    environment: normalizeEnvironment(transaction.environment),
+    firebase_app_id: firebaseAppId || null,
+    ga4_event_name: "purchase_2hour",
+    last_error: null,
+    original_transaction_id: stringValue(transaction.original_transaction_id),
+    product_id: productId,
+    raw_context: {
+      delayMs,
+      firebaseAppIdProvided: Boolean(firebaseAppId),
+      scheduledAt: new Date().toISOString(),
+      source: "verify_ios_edge_function",
+    },
+    renewed: null,
+    renewal_status: null,
+    store_profile_id: stringValue(transaction.store_profile_id),
+    transaction_id: transactionId,
+    user_id: (stringValue(transaction.user_id) ?? clean(payload.userId)) || null,
+  };
+
+  const { data: existing, error: existingError } = await supabase
+    .from("ios_iap_two_hour_checks")
+    .select("id,status")
+    .eq("transaction_id", transactionId)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingError) throw existingError;
+
+  if (existing?.id) {
+    const nextStatus = clean(existing.status) === "sent" ? "sent" : "pending";
+    const updateRow = nextStatus === "sent"
+      ? {
+          app_instance_id: row.app_instance_id,
+          firebase_app_id: row.firebase_app_id,
+          updated_at: new Date().toISOString(),
+        }
+      : {
+          ...row,
+          status: nextStatus,
+          updated_at: new Date().toISOString(),
+        };
+    const { data, error } = await supabase
+      .from("ios_iap_two_hour_checks")
+      .update(updateRow)
+      .eq("id", existing.id)
+      .select("id,check_at,status")
+      .single();
+
+    if (error) throw error;
+
+    return {
+      checkAt: stringValue(data.check_at),
+      id: stringValue(data.id),
+      scheduled: true,
+      status: stringValue(data.status),
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("ios_iap_two_hour_checks")
+    .insert({
+      id: crypto.randomUUID(),
+      ...row,
+      status: "pending",
+    })
+    .select("id,check_at,status")
+    .single();
+
+  if (error) throw error;
+
+  return {
+    checkAt: stringValue(data.check_at),
+    id: stringValue(data.id),
+    scheduled: true,
+    status: stringValue(data.status),
+  };
 }
 
 async function verifyApple(
@@ -466,6 +587,24 @@ async function verifyApple(
   };
 
   const data = await persistIosTransaction(supabase, row);
+  let twoHourGa4Check: Record<string, unknown> = {
+    scheduled: false,
+    reason: "not_requested",
+  };
+
+  try {
+    twoHourGa4Check = await scheduleIosIapTwoHourCheck(supabase, data, payload);
+  } catch (error) {
+    twoHourGa4Check = {
+      error: error instanceof Error ? error.message : "schedule_failed",
+      scheduled: false,
+    };
+    console.error("Apple transaction 2-hour GA4 check schedule failed", {
+      bundleId,
+      error: twoHourGa4Check.error,
+      transactionId: resolvedTransactionId,
+    });
+  }
 
   console.info("Apple transaction verify saved", {
     bundleId,
@@ -473,11 +612,13 @@ async function verifyApple(
     source: "verify_ios_edge_function",
     state: data.state,
     transactionId: resolvedTransactionId,
+    twoHourGa4Check,
   });
 
   return {
     tracked: true,
     state: data.state,
+    twoHourGa4Check,
   };
 }
 

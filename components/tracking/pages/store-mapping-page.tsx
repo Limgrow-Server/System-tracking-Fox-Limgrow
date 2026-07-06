@@ -6,6 +6,7 @@ import { showToast } from "@/lib/client/toast";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 import { PageHeader, StatusBadge, TableEmptyState, TablePaginationFooter } from "@/components/tracking/primitives";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -15,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { dateTime } from "@/lib/tracking/format";
 import type { StoreMappingPageData } from "@/lib/tracking/page-data";
 import type { StoreMapping } from "@/lib/tracking/types";
@@ -29,6 +31,9 @@ type StoreMappingForm = {
   platform: "android" | "ios";
   packageName: string;
   bundleId: string;
+  firebaseAnalyticsApiSecret: string;
+  firebaseAnalyticsConfigText: string;
+  firebaseAppId: string;
   status: string;
 };
 
@@ -102,6 +107,9 @@ function createEmptyForm(platform: StoreMappingPlatformFilter): StoreMappingForm
     platform,
     packageName: "",
     bundleId: "",
+    firebaseAnalyticsApiSecret: "",
+    firebaseAnalyticsConfigText: "",
+    firebaseAppId: "",
     status: "active",
   };
 }
@@ -121,8 +129,48 @@ function formFromMapping(mapping: StoreMapping): StoreMappingForm {
     platform: mapping.platform,
     packageName: value(mapping.package_name),
     bundleId: value(mapping.bundle_id),
+    firebaseAnalyticsApiSecret: "",
+    firebaseAnalyticsConfigText: "",
+    firebaseAppId: value(mapping.firebase_app_id),
     status: mapping.status,
   };
+}
+
+function unquoteEnvValue(value: string) {
+  const cleaned = value.trim();
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    return cleaned.slice(1, -1).trim();
+  }
+
+  return cleaned;
+}
+
+function parseFirebaseAnalyticsConfigText(text: string) {
+  const config = {
+    firebaseAnalyticsApiSecret: "",
+    firebaseAppId: "",
+  };
+
+  text.split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.+?)\s*$/);
+    if (!match) return;
+
+    const key = match[1];
+    const parsedValue = unquoteEnvValue(match[2]);
+
+    if (key === "FIREBASE_APP_ID") {
+      config.firebaseAppId = parsedValue;
+    }
+
+    if (key === "FIREBASE_ANALYTICS_API_SECRET") {
+      config.firebaseAnalyticsApiSecret = parsedValue;
+    }
+  });
+
+  return config;
 }
 
 function MappingFormSection({ title, children }: { title: string; children: ReactNode }) {
@@ -191,6 +239,41 @@ export function StoreMappingPage({
     nextValue: StoreMappingForm[K],
   ) {
     setForm((current) => ({ ...current, [key]: nextValue }));
+  }
+
+  function updateFirebaseAnalyticsConfigText(nextValue: string) {
+    const parsed = parseFirebaseAnalyticsConfigText(nextValue);
+
+    setForm((current) => ({
+      ...current,
+      firebaseAnalyticsApiSecret:
+        parsed.firebaseAnalyticsApiSecret ||
+        current.firebaseAnalyticsApiSecret,
+      firebaseAnalyticsConfigText: nextValue,
+      firebaseAppId: parsed.firebaseAppId || current.firebaseAppId,
+    }));
+  }
+
+  function storeMappingPayloadFromForm(
+    formValue: StoreMappingForm = form,
+    id: string | null = editingId,
+  ) {
+    const payload: Partial<StoreMappingForm> = { ...formValue };
+    delete payload.firebaseAnalyticsConfigText;
+    const body: Partial<StoreMappingForm> & {
+      id: string | null;
+      platform: StoreMappingForm["platform"];
+    } = {
+      id,
+      ...payload,
+      platform: formValue.platform,
+    };
+
+    if (!body.firebaseAnalyticsApiSecret?.trim()) {
+      delete body.firebaseAnalyticsApiSecret;
+    }
+
+    return body;
   }
 
   function selectStoreProfile(nextValue: string) {
@@ -282,7 +365,7 @@ export function StoreMappingPage({
       const response = await fetch("/api/admin/store-mappings", {
         method: editingId ? "PATCH" : "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: editingId, ...form }),
+        body: JSON.stringify(storeMappingPayloadFromForm()),
       });
       const payload = (await response.json()) as {
         ok?: boolean;
@@ -322,7 +405,7 @@ export function StoreMappingPage({
     const response = await fetch("/api/admin/store-mappings", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: mapping.id, ...nextForm }),
+      body: JSON.stringify(storeMappingPayloadFromForm(nextForm, mapping.id)),
     });
     const payload = (await response.json()) as { ok?: boolean; mapping?: StoreMapping; error?: string };
 
@@ -406,6 +489,12 @@ export function StoreMappingPage({
   const drawerReadOnly = drawerMode === "view";
   const drawerTitle =
     drawerMode === "view" ? "View app mapping" : drawerMode === "edit" ? "Edit app mapping" : "Create app mapping";
+  const editingMapping = editingId
+    ? mappings.find((mapping) => mapping.id === editingId)
+    : null;
+  const firebaseAnalyticsSecretConfigured = Boolean(
+    editingMapping?.firebase_analytics_api_secret_configured,
+  );
   const deleteExpectedName = deleteTarget?.app_name ?? "";
   const deleteConfirmDisabled =
     !deleteTarget ||
@@ -514,6 +603,78 @@ export function StoreMappingPage({
                     </div>
                   </div>
                 </MappingFormSection>
+
+                {!isAndroidForm ? (
+                  <MappingFormSection title="Firebase Analytics">
+                    <div className="grid gap-4">
+                      {drawerReadOnly ? null : (
+                        <div className="grid gap-2">
+                          <Label htmlFor="firebaseAnalyticsConfigText">
+                            Paste env keys
+                          </Label>
+                          <Textarea
+                            id="firebaseAnalyticsConfigText"
+                            value={form.firebaseAnalyticsConfigText}
+                            onChange={(event) =>
+                              updateFirebaseAnalyticsConfigText(
+                                event.target.value,
+                              )
+                            }
+                          placeholder={[
+                            "FIREBASE_APP_ID=1:1234567890:ios:abcdef123456",
+                            "FIREBASE_ANALYTICS_API_SECRET=...",
+                          ].join("\n")}
+                            rows={3}
+                          />
+                        </div>
+                      )}
+                      <div className="grid gap-4 2xl:grid-cols-2">
+                        <div className="grid gap-2">
+                          <Label htmlFor="firebaseAppId">
+                            Firebase App ID
+                          </Label>
+                          <Input
+                            id="firebaseAppId"
+                            value={form.firebaseAppId}
+                            onChange={(event) =>
+                              updateField("firebaseAppId", event.target.value)
+                            }
+                            placeholder="1:1234567890:ios:abcdef123456"
+                            readOnly={drawerReadOnly}
+                          />
+                        </div>
+                        <div className="grid gap-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <Label htmlFor="firebaseAnalyticsApiSecret">
+                              Analytics API secret
+                            </Label>
+                            {firebaseAnalyticsSecretConfigured ? (
+                              <Badge variant="secondary">
+                                Secret configured
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <Input
+                            id="firebaseAnalyticsApiSecret"
+                            value={form.firebaseAnalyticsApiSecret}
+                            onChange={(event) =>
+                              updateField(
+                                "firebaseAnalyticsApiSecret",
+                                event.target.value,
+                              )
+                            }
+                            placeholder={
+                              firebaseAnalyticsSecretConfigured
+                                ? "Leave blank to keep current secret"
+                                : "FIREBASE_ANALYTICS_API_SECRET"
+                            }
+                            readOnly={drawerReadOnly}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </MappingFormSection>
+                ) : null}
 
                 {drawerReadOnly ? null : (
                   <Button disabled={pending} className="w-full">
@@ -645,6 +806,18 @@ export function StoreMappingPage({
                     </TableCell>
                     <TableCell>
                       <div className="max-w-[260px] truncate font-mono text-sm">{runtimeId ?? "N/A"}</div>
+                      {mapping.platform === "ios" ? (
+                        <div className="mt-1 flex max-w-[260px] flex-wrap gap-1">
+                          {mapping.firebase_app_id ? (
+                            <Badge variant="outline" className="font-mono">
+                              Firebase App ID
+                            </Badge>
+                          ) : null}
+                          {mapping.firebase_analytics_api_secret_configured ? (
+                            <Badge variant="secondary">GA4 secret</Badge>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </TableCell>
                     <TableCell>
                       <div className="max-w-[220px] truncate text-sm">{mapping.store_account_name}</div>

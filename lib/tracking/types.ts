@@ -56,6 +56,8 @@ export type StoreMapping = {
   platform: "android" | "ios";
   package_name: string | null;
   bundle_id: string | null;
+  firebase_app_id: string | null;
+  firebase_analytics_api_secret_configured: boolean;
   status: string;
   created_at: string;
   updated_at: string;
@@ -120,6 +122,29 @@ export type IosIapTransactionSummary = {
   raw_receipt: unknown | null;
   verified_at: string;
   created_at: string;
+};
+
+export type IosIapTwoHourCheck = {
+  id: string;
+  transaction_id: string;
+  original_transaction_id: string | null;
+  user_id: string | null;
+  bundle_id: string;
+  product_id: string;
+  environment: string;
+  app_instance_id: string;
+  firebase_app_id: string | null;
+  ga4_event_name: string;
+  check_at: string;
+  status: string;
+  renewed: boolean | null;
+  renewal_status: string | null;
+  ga4_sent_at: string | null;
+  attempts: number;
+  last_error: string | null;
+  raw_context: unknown;
+  created_at: string;
+  updated_at: string;
 };
 
 export type NotificationJob = {

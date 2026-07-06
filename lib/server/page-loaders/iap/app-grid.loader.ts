@@ -3,7 +3,7 @@ import "server-only";
 import { canAccessIapApp } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import {
-  getIapAppCards,
+  getIapAppCardLists,
   getIapAppCardsPage,
 } from "@/lib/server/services/iap/iap-app.service";
 import type { IapAppGridPageData } from "@/lib/tracking/page-data";
@@ -38,14 +38,11 @@ export async function getIapAppGridPageData(
     skip: (page - 1) * IAP_APP_PAGE_SIZE,
     take: IAP_APP_PAGE_SIZE,
   };
-  const [allApps, matchingApps] = await Promise.all([
-    getIapAppCards({ platform }),
-    getIapAppCards({
-      platform,
-      search: search || undefined,
-      storeAccountName: storeAccountName || undefined,
-    }),
-  ]);
+  const { allApps, matchingApps } = await getIapAppCardLists({
+    platform,
+    search: search || undefined,
+    storeAccountName: storeAccountName || undefined,
+  });
   const scopedApps = matchingApps.filter((app) => canAccessIapApp(session, app));
   const appPage = getIapAppCardsPage(scopedApps, pagination);
   const scopedStoreApps = allApps.filter((app) => canAccessIapApp(session, app));
