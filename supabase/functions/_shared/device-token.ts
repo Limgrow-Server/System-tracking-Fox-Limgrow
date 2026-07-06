@@ -50,6 +50,8 @@ type DeviceTokenRequest = {
 const safeColumns =
   "id,user_id,app_id,device_id,platform,firebase_app_id,firebase_project_id,app_identifier,app_version,os_version,locale,status,last_seen_at,store_platform,store_account_name,product_app_id,package_name,bundle_id,device_type,device_model,device_manufacturer,created_at,updated_at";
 
+const DEFAULT_REGISTER_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
 function requestAppId(payload: DeviceTokenRequest) {
   return normalizeAppId(payload.appId) || normalizeAppId(payload.app_id);
 }
@@ -60,6 +62,52 @@ function requestLocale(payload: DeviceTokenRequest) {
 
 function inferredStorePlatform(platform: MobilePlatform): StorePlatform {
   return platform === "android" ? "google_play" : "apple_app_store";
+}
+
+function positiveIntEnv(name: string, fallback: number) {
+  const value = Number(Deno.env.get(name));
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+}
+
+function existingString(row: Record<string, unknown>, key: string) {
+  const value = row[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isFreshRegistration(row: Record<string, unknown>, nowMs: number, cooldownMs: number) {
+  const seenAt = existingString(row, "last_seen_at") || existingString(row, "updated_at");
+  const timestamp = seenAt ? Date.parse(seenAt) : NaN;
+  return Number.isFinite(timestamp) && nowMs - timestamp < cooldownMs;
+}
+
+function existingTokenMatchesRequest(
+  row: Record<string, unknown>,
+  payload: DeviceTokenRequest,
+  expectedPlatform: MobilePlatform
+) {
+  if (existingString(row, "platform") !== expectedPlatform) return false;
+  if (existingString(row, "status") !== "active") return false;
+
+  const appId = requestAppId(payload);
+  const productAppId = normalizeAppId(payload.productAppId);
+  const appIdentifier = existingString(row, "app_identifier");
+  const rowAppId = normalizeAppId(existingString(row, "app_id") ?? undefined);
+  const rowProductAppId = normalizeAppId(existingString(row, "product_app_id") ?? undefined);
+
+  if (appId && rowAppId !== appId && rowProductAppId !== appId) return false;
+  if (productAppId && rowProductAppId !== productAppId && rowAppId !== productAppId) return false;
+
+  if (expectedPlatform === "android") {
+    const packageName = normalizePackageName(payload.packageName);
+    const rowPackageName = normalizePackageName(existingString(row, "package_name") ?? undefined);
+    if (packageName && rowPackageName !== packageName && appIdentifier !== packageName) return false;
+  } else {
+    const bundleId = normalizeBundleId(payload.bundleId);
+    const rowBundleId = normalizeBundleId(existingString(row, "bundle_id") ?? undefined);
+    if (bundleId && rowBundleId !== bundleId && appIdentifier !== bundleId) return false;
+  }
+
+  return true;
 }
 
 async function findIntegration(
@@ -234,11 +282,48 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         return json({ ok: false, error: "fcm_token_required" }, 400);
       }
 
-      const supabase = createAdminClient();
-      const integration = await findIntegration(supabase, payload, expectedPlatform);
       const tokenHash = fcmToken ? await sha256Hex(fcmToken) : null;
       const deviceId = requestedDeviceId || (tokenHash ? tokenHash.slice(0, 24) : "");
       const now = new Date().toISOString();
+      const nowMs = Date.parse(now);
+      const supabase = createAdminClient();
+
+      if ((action === "register" || action === "heartbeat") && tokenHash) {
+        const cooldownMs = positiveIntEnv("DEVICE_TOKEN_REGISTER_COOLDOWN_MS", DEFAULT_REGISTER_COOLDOWN_MS);
+        const { data: existing, error: existingError } = await supabase
+          .from("device_tokens")
+          .select(safeColumns)
+          .eq("token_hash", tokenHash)
+          .eq("platform", expectedPlatform)
+          .maybeSingle();
+
+        if (existingError) throw existingError;
+
+        if (
+          existing
+          && isFreshRegistration(existing, nowMs, cooldownMs)
+          && existingTokenMatchesRequest(existing, payload, expectedPlatform)
+        ) {
+          return json({
+            ok: true,
+            action,
+            platform: expectedPlatform,
+            device: existing,
+            fastPath: true,
+            skippedWrite: true,
+            app: {
+              appId,
+              appIdentifier: existingString(existing, "app_identifier"),
+              productAppId: existingString(existing, "product_app_id"),
+              packageName: existingString(existing, "package_name"),
+              bundleId: existingString(existing, "bundle_id"),
+              firebaseProjectId: existingString(existing, "firebase_project_id"),
+            },
+          });
+        }
+      }
+
+      const integration = await findIntegration(supabase, payload, expectedPlatform);
 
       if (action === "unregister" || action === "mark_invalid") {
         if (!tokenHash && !deviceId) {
