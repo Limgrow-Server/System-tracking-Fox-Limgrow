@@ -51,7 +51,7 @@ export type BackgroundJobTracking = {
   source_job_id: string | null;
   source_run_ids: string[];
   started_at: string | null;
-  status: "queued" | "running" | "succeeded" | "failed" | "partial";
+  status: "queued" | "running" | "paused" | "succeeded" | "failed" | "partial";
   store_account_name: string | null;
   title: string;
   type: "notification_send" | "review_fetch";
@@ -84,6 +84,8 @@ function trackingStatusToBackground(status: BackgroundJobTracking["status"]): Ba
       return "FAILED";
     case "partial":
       return "PARTIAL";
+    case "paused":
+      return "QUEUED";
     case "running":
       return "RUNNING";
     case "succeeded":
@@ -229,6 +231,8 @@ function notificationStatusToBackground(status: string): BackgroundJobTracking["
     case "processing":
     case "materializing":
       return "running";
+    case "paused":
+      return "paused";
     case "queued":
     case "retrying":
     default:
@@ -267,7 +271,7 @@ async function hydrateNotificationJobs(jobs: BackgroundJob[]) {
     const current = batchesByJob.get(batch.jobId) ?? { done: 0, total: 0 };
     const count = batch._count._all;
     current.total += count;
-    if (!["queued", "retrying", "processing"].includes(batch.status)) {
+    if (!["queued", "retrying", "processing", "paused"].includes(batch.status)) {
       current.done += count;
     }
     batchesByJob.set(batch.jobId, current);
@@ -482,9 +486,11 @@ export async function listBackgroundJobsForSession(session: ConsoleSession) {
   });
 
   const activeJobs = jobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));
-  const reviewJobsNeedingDestination = jobs.filter((job) =>
-    job.type === "REVIEW_FETCH" && !hasReviewResultUrl(job),
-  );
+  const reviewJobsNeedingDestination = activeJobs.length
+    ? []
+    : jobs
+        .filter((job) => job.type === "REVIEW_FETCH" && !hasReviewResultUrl(job))
+        .slice(0, 5);
   const reviewHydrationTargets = Array.from(
     new Map(
       [...activeJobs.filter((job) => job.type === "REVIEW_FETCH"), ...reviewJobsNeedingDestination]
@@ -497,19 +503,33 @@ export async function listBackgroundJobsForSession(session: ConsoleSession) {
     hydrateReviewJobs(reviewHydrationTargets),
   ]);
 
+  const hydratedForJob = (job: BackgroundJob) => (
+    job.type === "NOTIFICATION_SEND"
+      ? notificationHydration.get(job.sourceJobId ?? "")
+      : reviewHydration.get(job.id)
+  );
+
   const refreshedJobs = await Promise.all(
     jobs.map((job) => {
       const hydrated =
-        job.type === "NOTIFICATION_SEND"
-          ? notificationHydration.get(job.sourceJobId ?? "")
-          : reviewHydration.get(job.id);
+        hydratedForJob(job);
       return hydrated ? persistHydratedJob(job, hydrated) : job;
     }),
   );
 
   const data = refreshedJobs
     .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
-    .map(toTracking);
+    .map((job) => {
+      const tracking = toTracking(job);
+      const hydrated = hydratedForJob(job);
+      return hydrated
+        ? {
+            ...tracking,
+            ...hydrated,
+            metadata: hydrated.metadata ?? tracking.metadata,
+          }
+        : tracking;
+    });
   const activeCount = data.filter((job) =>
     job.status === "queued" || job.status === "running",
   ).length;

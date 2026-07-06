@@ -10,6 +10,8 @@ import {
   GripHorizontal,
   Loader2,
   MessageSquareText,
+  Pause,
+  Play,
   RotateCcw,
   Send,
   TriangleAlert,
@@ -41,6 +43,8 @@ const TRAY_MARGIN = 16;
 const TRAY_POSITION_STORAGE_KEY = "tracking-background-job-tray-position";
 const DISMISSED_JOBS_STORAGE_KEY = "tracking-background-job-dismissed-ids";
 const MAX_DISMISSED_JOB_IDS = 200;
+const ACTIVE_POLLING_MS = 5_000;
+const IDLE_POLLING_MS = 30_000;
 
 type TrayPosition = {
   x: number;
@@ -155,6 +159,8 @@ function statusLabel(status: BackgroundJob["status"]) {
       return "Failed";
     case "partial":
       return "Partial";
+    case "paused":
+      return "Paused";
     case "queued":
       return "Queued";
     case "running":
@@ -170,6 +176,7 @@ function statusTone(status: BackgroundJob["status"]) {
   if (status === "succeeded") return "text-emerald-700";
   if (status === "failed") return "text-rose-700";
   if (status === "partial") return "text-amber-700";
+  if (status === "paused") return "text-amber-700";
   return "text-sky-700";
 }
 
@@ -182,6 +189,8 @@ function progressPercent(job: BackgroundJob) {
 }
 
 function progressText(job: BackgroundJob) {
+  if (job.status === "paused") return "Paused";
+
   if (!job.progress_total) {
     return job.status === "queued" ? "Preparing" : "Processing";
   }
@@ -245,20 +254,57 @@ function BackgroundJobStatusIcon({
   if (status === "failed" || status === "partial") {
     return <TriangleAlert size={11} className={className} />;
   }
+  if (status === "paused") {
+    return <Pause size={11} className={className} />;
+  }
 
   return <Loader2 size={11} className={className} />;
 }
 
 function BackgroundJobRow({
+  busy,
   job,
   onOpen,
+  onTogglePause,
 }: {
+  busy: boolean;
   job: BackgroundJob;
   onOpen: (job: BackgroundJob) => void;
+  onTogglePause: (job: BackgroundJob, action: "pause" | "resume") => void;
 }) {
   const percent = progressPercent(job);
   const isActive = ACTIVE_STATUSES.has(job.status);
   const canOpen = Boolean(job.result_url);
+  const pauseAction =
+    job.type === "notification_send" && (job.status === "queued" || job.status === "running")
+      ? "pause"
+      : job.type === "notification_send" && job.status === "paused"
+        ? "resume"
+        : null;
+  const actionButton = pauseAction ? (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label={pauseAction === "pause" ? "Pause notification job" : "Resume notification job"}
+      title={pauseAction === "pause" ? "Pause notification job" : "Resume notification job"}
+      disabled={busy}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onTogglePause(job, pauseAction);
+      }}
+      className="h-7 w-7 bg-background/90 shadow-sm hover:bg-muted"
+    >
+      {busy ? (
+        <Loader2 size={14} className="animate-spin" />
+      ) : pauseAction === "pause" ? (
+        <Pause size={14} />
+      ) : (
+        <Play size={14} />
+      )}
+    </Button>
+  ) : null;
 
   const content = (
     <>
@@ -321,19 +367,30 @@ function BackgroundJobRow({
 
   if (canOpen) {
     return (
-      <Link
-        href={job.result_url ?? "#"}
-        onClick={() => onOpen(job)}
-        className="block w-full border-b px-3 py-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 last:border-b-0"
-      >
-        {content}
-      </Link>
+      <div className="relative border-b last:border-b-0">
+        <Link
+          href={job.result_url ?? "#"}
+          onClick={() => onOpen(job)}
+          className={cn(
+            "block w-full px-3 py-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0",
+            actionButton && "pr-12",
+          )}
+        >
+          {content}
+        </Link>
+        {actionButton ? (
+          <span className="absolute right-3 top-12">{actionButton}</span>
+        ) : null}
+      </div>
     );
   }
 
   return (
-    <div className="border-b px-3 py-3 last:border-b-0">
+    <div className={cn("relative border-b px-3 py-3 last:border-b-0", actionButton && "pr-12")}>
       {content}
+      {actionButton ? (
+        <span className="absolute right-3 top-12">{actionButton}</span>
+      ) : null}
     </div>
   );
 }
@@ -344,6 +401,7 @@ export function BackgroundJobTray() {
   const [dragging, setDragging] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [open, setOpen] = useState(false);
+  const [actionJobId, setActionJobId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [trayPosition, setTrayPosition] = useState<TrayPosition | null>(null);
@@ -358,7 +416,7 @@ export function BackgroundJobTray() {
   const trayRef = useRef<HTMLDivElement | null>(null);
 
   const hasJobs = jobs.length > 0;
-  const pollingMs = activeCount > 0 ? 1500 : 10000;
+  const pollingMs = activeCount > 0 ? ACTIVE_POLLING_MS : IDLE_POLLING_MS;
   const visibleJobs = useMemo(() => jobs.slice(0, 8), [jobs]);
 
   useEffect(() => {
@@ -502,8 +560,44 @@ export function BackgroundJobTray() {
     setActiveCount(0);
     setDragging(false);
     setHidden(true);
+    setLoading(false);
     setOpen(false);
   }, [dismissJobs, jobs]);
+
+  const toggleNotificationJob = useCallback(
+    async (job: BackgroundJob, action: "pause" | "resume") => {
+      setActionJobId(job.id);
+      try {
+        const response = await fetch("/api/admin/background-jobs", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action, id: job.id }),
+        });
+        const payload = (await response.json()) as BackgroundJobsResponse;
+
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error ?? "Background job could not be updated.");
+        }
+
+        updateJobs(payload.data ?? []);
+        void showToast(
+          "success",
+          action === "pause"
+            ? `${job.title} paused.`
+            : `${job.title} resumed.`,
+        );
+        setRefreshVersion((current) => current + 1);
+      } catch (error) {
+        void showToast(
+          "error",
+          error instanceof Error ? error.message : "Background job could not be updated.",
+        );
+      } finally {
+        setActionJobId(null);
+      }
+    },
+    [updateJobs],
+  );
 
   const startTrayDrag = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>) => {
@@ -567,6 +661,10 @@ export function BackgroundJobTray() {
   }, []);
 
   useEffect(() => {
+    if (hidden) {
+      return;
+    }
+
     let cancelled = false;
     let timeoutId: number | undefined;
 
@@ -622,7 +720,7 @@ export function BackgroundJobTray() {
       cancelled = true;
       if (timeoutId) window.clearTimeout(timeoutId);
     };
-  }, [pollingMs, refreshVersion, updateJobs]);
+  }, [hidden, pollingMs, refreshVersion, updateJobs]);
 
   if (hidden || (!hasJobs && !loading)) return null;
 
@@ -630,7 +728,7 @@ export function BackgroundJobTray() {
     <div
       ref={trayRef}
       className={cn(
-        "fixed z-50 w-[calc(100vw-2rem)] max-w-sm",
+        "fixed z-50 w-[calc(100vw-2rem)] max-w-sm motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2 motion-safe:duration-200",
         !trayPosition && "bottom-4 right-4",
       )}
       style={
@@ -730,9 +828,11 @@ export function BackgroundJobTray() {
               {visibleJobs.length ? (
                 visibleJobs.map((job) => (
                   <BackgroundJobRow
+                    busy={actionJobId === job.id}
                     key={job.id}
                     job={job}
                     onOpen={openJobResult}
+                    onTogglePause={toggleNotificationJob}
                   />
                 ))
               ) : (

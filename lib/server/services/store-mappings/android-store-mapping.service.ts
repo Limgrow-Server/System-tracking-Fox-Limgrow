@@ -78,8 +78,17 @@ const getCachedAndroidStoreMappingDtos = unstable_cache(
   },
 );
 
+const MAX_CACHED_STORE_MAPPING_TAKE = 500;
+
 export async function getAndroidStoreMappingDtos(options?: { take?: number }) {
-  return getCachedAndroidStoreMappingDtos(options?.take ?? 200);
+  const take = options?.take ?? 200;
+
+  if (take > MAX_CACHED_STORE_MAPPING_TAKE) {
+    const mappings = await getAndroidStoreMappings({ take });
+    return mappings.map(androidStoreMappingToTracking);
+  }
+
+  return getCachedAndroidStoreMappingDtos(take);
 }
 
 export async function getAndroidStoreMappingPageResult(options: PaginationQuery & {

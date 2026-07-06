@@ -16,6 +16,8 @@ type SaveIosStoreMappingInput = {
   appLink: string | null;
   appName: string;
   bundleId: string;
+  firebaseAnalyticsApiSecret?: string | null;
+  firebaseAppId: string | null;
   id?: string | null;
   status: MappingStatus;
   storeAccountName: string;
@@ -62,6 +64,7 @@ function iosStoreMappingWhere(options: IosStoreMappingPageOptions): Prisma.IosSt
         { appName: contains },
         { appId: contains },
         { bundleId: contains },
+        { firebaseAppId: contains },
         { storeAccountName: contains },
         { storeProfile: { storeAccountName: contains } },
       ];
@@ -106,6 +109,16 @@ export async function getIosStoreMappingId(id: string) {
   return mapping?.id ?? null;
 }
 
+export function getIosStoreMappingFirebaseAnalyticsSecret(id: string) {
+  return prisma.iosStoreMapping.findUnique({
+    where: { id },
+    select: {
+      firebaseAnalyticsApiSecret: true,
+      id: true,
+    },
+  });
+}
+
 export async function saveIosStoreMapping(
   tx: Prisma.TransactionClient,
   input: SaveIosStoreMappingInput
@@ -126,9 +139,13 @@ export async function saveIosStoreMapping(
     appLink: input.appLink,
     appName: input.appName,
     bundleId: input.bundleId,
+    firebaseAppId: input.firebaseAppId,
     status: input.status,
     storeAccountName: profile.storeAccountName,
     storeProfileId: profile.id,
+    ...(input.firebaseAnalyticsApiSecret !== undefined
+      ? { firebaseAnalyticsApiSecret: input.firebaseAnalyticsApiSecret }
+      : {}),
     ...(appleAppId ? { appleAppId } : {}),
   };
 
@@ -161,4 +178,31 @@ export async function saveIosStoreMapping(
 
 export function deleteIosStoreMapping(id: string) {
   return prisma.iosStoreMapping.delete({ where: { id } });
+}
+
+export async function getIosStoreMappingGa4Config(input: {
+  bundleId: string;
+  storeProfileId?: string | null;
+}) {
+  const select = {
+    firebaseAnalyticsApiSecret: true,
+    firebaseAppId: true,
+  } satisfies Prisma.IosStoreMappingSelect;
+
+  if (input.storeProfileId) {
+    const exact = await prisma.iosStoreMapping.findFirst({
+      where: {
+        bundleId: input.bundleId,
+        storeProfileId: input.storeProfileId,
+      },
+      select,
+    });
+
+    if (exact) return exact;
+  }
+
+  return prisma.iosStoreMapping.findFirst({
+    where: { bundleId: input.bundleId },
+    select,
+  });
 }

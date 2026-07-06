@@ -19,6 +19,7 @@ model IosStoreProfile {
   credentials      IosCredential[]
   iapTransactions  IosIapTransaction[]
   iapNotifications IosIapNotificationEvent[]
+  iapTwoHourChecks IosIapTwoHourCheck[]
   reviewTarget     ReviewStoreTarget?
 
   @@index([status, storeAccountName], map: "ios_store_profiles_status_name_idx")
@@ -26,20 +27,22 @@ model IosStoreProfile {
 }
 
 model IosStoreMapping {
-  id               String           @id @default(uuid()) @db.Uuid
-  storeProfileId   String           @map("store_profile_id") @db.Uuid
-  storeAccountName String           @map("store_account_name")
-  appId            String?          @map("app_id")
-  appleAppId       String?          @map("apple_app_id")
-  appName          String           @map("app_name")
-  appIconUrl       String?          @map("app_icon_url")
-  appLink          String?          @map("app_link")
-  bundleId         String           @map("bundle_id")
-  status           MappingStatus    @default(ACTIVE)
-  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
-  storeProfile     IosStoreProfile  @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
-  reviewTarget     ReviewAppTarget?
+  id                         String           @id @default(uuid()) @db.Uuid
+  storeProfileId             String           @map("store_profile_id") @db.Uuid
+  storeAccountName           String           @map("store_account_name")
+  appId                      String?          @map("app_id")
+  appleAppId                 String?          @map("apple_app_id")
+  appName                    String           @map("app_name")
+  appIconUrl                 String?          @map("app_icon_url")
+  appLink                    String?          @map("app_link")
+  bundleId                   String           @map("bundle_id")
+  firebaseAppId              String?          @map("firebase_app_id")
+  firebaseAnalyticsApiSecret String?          @map("firebase_analytics_api_secret") @db.Text
+  status                     MappingStatus    @default(ACTIVE)
+  createdAt                  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile               IosStoreProfile  @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+  reviewTarget               ReviewAppTarget?
 
   @@unique([storeProfileId, appName], map: "ios_store_mappings_profile_app_name_key")
   @@unique([storeProfileId, appId], map: "ios_store_mappings_profile_app_id_key")
@@ -127,6 +130,9 @@ model IosIapTransaction {
   @@index([bundleId, verifiedAt], map: "ios_iap_transactions_bundle_verified_idx")
   @@index([bundleId, storeProfileId, verifiedAt], map: "ios_iap_transactions_bundle_profile_verified_idx")
   @@index([bundleId, storeProfileId, purchaseDate], map: "ios_iap_transactions_bundle_profile_purchase_idx")
+  @@index([bundleId, environment, storeProfileId, verifiedAt], map: "ios_iap_transactions_bundle_env_profile_verified_idx")
+  @@index([bundleId, environment, storeProfileId, purchaseDate], map: "ios_iap_transactions_bundle_env_profile_purchase_idx")
+  @@index([bundleId, environment, storeProfileId, state], map: "ios_iap_transactions_bundle_env_profile_state_idx")
   @@index([productId, verifiedAt], map: "ios_iap_transactions_product_verified_idx")
   @@index([userId, verifiedAt], map: "ios_iap_transactions_user_verified_idx")
   @@index([originalTransactionId, purchaseDate], map: "ios_iap_transactions_original_purchase_idx")
@@ -158,10 +164,43 @@ model IosIapNotificationEvent {
 
   @@index([notificationType, receivedAt], map: "ios_iap_notification_events_type_received_idx")
   @@index([bundleId, receivedAt], map: "ios_iap_notification_events_bundle_received_idx")
+  @@index([bundleId, environment, storeProfileId, receivedAt], map: "ios_iap_notification_events_bundle_env_profile_received_idx")
+  @@index([bundleId, environment, storeProfileId, status], map: "ios_iap_notification_events_bundle_env_profile_status_idx")
   @@index([originalTransactionId], map: "ios_iap_notification_events_original_idx")
   @@index([transactionId], map: "ios_iap_notification_events_transaction_idx")
   @@index([status, receivedAt], map: "ios_iap_notification_events_status_received_idx")
   @@map("ios_iap_notification_events")
+}
+
+model IosIapTwoHourCheck {
+  id                    String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeProfileId        String?          @map("store_profile_id") @db.Uuid
+  transactionId         String           @unique @map("transaction_id")
+  originalTransactionId String?          @map("original_transaction_id")
+  userId                String?          @map("user_id")
+  bundleId              String           @map("bundle_id")
+  productId             String           @map("product_id")
+  environment           String           @default("production")
+  appInstanceId         String           @map("app_instance_id")
+  firebaseAppId         String?          @map("firebase_app_id")
+  ga4EventName          String           @default("purchase_2hour") @map("ga4_event_name")
+  checkAt               DateTime         @map("check_at") @db.Timestamptz(6)
+  status                String           @default("pending")
+  renewed               Boolean?
+  renewalStatus         String?          @map("renewal_status")
+  ga4SentAt             DateTime?        @map("ga4_sent_at") @db.Timestamptz(6)
+  attempts              Int              @default(0)
+  lastError             String?          @map("last_error") @db.Text
+  rawContext            Json             @default("{}") @map("raw_context")
+  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile          IosStoreProfile? @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
+
+  @@index([status, checkAt], map: "ios_iap_two_hour_checks_status_check_idx")
+  @@index([bundleId, environment, storeProfileId, checkAt], map: "ios_iap_two_hour_checks_bundle_env_profile_check_idx")
+  @@index([originalTransactionId], map: "ios_iap_two_hour_checks_original_idx")
+  @@index([storeProfileId, checkAt], map: "ios_iap_two_hour_checks_store_profile_check_idx")
+  @@map("ios_iap_two_hour_checks")
 }
 
 model IosStoreReview {

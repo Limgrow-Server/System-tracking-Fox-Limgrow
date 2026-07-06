@@ -58,7 +58,14 @@ export async function getIapAppDetailPageData(
       ? clean(options?.revenueSort)
       : "none";
   const trial = clean(options?.trial) || "all";
-  const { appCard, metrics, transactions, transactionStates, trialAnalytics } =
+  const {
+    appCard,
+    metrics,
+    transactions,
+    transactionStates,
+    trialAnalytics,
+    twoHourChecks,
+  } =
     await getIapAppDetail(mappingId, platform, {
       environment,
       includeContext: false,
@@ -100,5 +107,6 @@ export async function getIapAppDetailPageData(
     },
     transactionStates,
     transactions: transactions.data,
+    twoHourChecks,
   };
 }

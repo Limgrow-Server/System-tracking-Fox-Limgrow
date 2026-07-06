@@ -222,45 +222,50 @@ function isUniqueViolation(error: unknown) {
   return errorString(error, "code") === "23505";
 }
 
-async function deactivatePreviousActiveTokens(
+async function markReplacedDeviceTokens(
   supabase: SupabaseAdminClient,
-  input: {
-    currentId: string;
-    deviceId: string;
-    platform: MobilePlatform;
-    row: Record<string, unknown>;
-    updatedAt: string;
+  row: {
+    app_id: string | null;
+    app_identifier: string | null;
+    bundle_id: string | null;
+    device_id: string;
+    package_name: string | null;
+    product_app_id: string | null;
   },
+  tokenHash: string,
+  expectedPlatform: MobilePlatform,
+  now: string
 ) {
-  if (!input.currentId || !input.deviceId) return;
+  const identityFields: Array<["app_id" | "product_app_id" | "app_identifier" | "package_name" | "bundle_id", string | null]> = [
+    ["app_id", row.app_id],
+    ["product_app_id", row.product_app_id],
+    ["app_identifier", row.app_identifier],
+    ["package_name", row.package_name],
+    ["bundle_id", row.bundle_id],
+  ];
+  let replacedCount = 0;
 
-  let query = supabase
-    .from("device_tokens")
-    .update({
-      status: "inactive",
-      updated_at: input.updatedAt,
-    })
-    .eq("platform", input.platform)
-    .eq("device_id", input.deviceId)
-    .eq("status", "active")
-    .neq("id", input.currentId);
+  for (const [column, value] of identityFields) {
+    if (!value) continue;
 
-  if (comparable(input.row.app_identifier)) {
-    query = query.eq("app_identifier", comparable(input.row.app_identifier));
-  } else if (comparable(input.row.package_name)) {
-    query = query.eq("package_name", comparable(input.row.package_name));
-  } else if (comparable(input.row.bundle_id)) {
-    query = query.eq("bundle_id", comparable(input.row.bundle_id));
-  } else if (comparable(input.row.product_app_id)) {
-    query = query.eq("product_app_id", comparable(input.row.product_app_id));
-  } else if (comparable(input.row.app_id)) {
-    query = query.eq("app_id", comparable(input.row.app_id));
-  } else {
-    return;
+    const { data, error } = await supabase
+      .from("device_tokens")
+      .update({
+        status: "replaced",
+        updated_at: now,
+      })
+      .eq("platform", expectedPlatform)
+      .eq("device_id", row.device_id)
+      .eq("status", "active")
+      .eq(column, value)
+      .neq("token_hash", tokenHash)
+      .select("id");
+
+    if (error) throw error;
+    replacedCount += data?.length ?? 0;
   }
 
-  const { error } = await query;
-  if (error) throw error;
+  return replacedCount;
 }
 
 export function serveDeviceToken(expectedPlatform: MobilePlatform) {
@@ -390,7 +395,6 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
 
       let data = existing;
       let skipped = false;
-      let inserted = false;
 
       if (existing) {
         const updatePayload = deviceTokenUpdatePayload(existing, row, now, nowMs);
@@ -443,19 +447,18 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
           }
         } else {
           data = insertedData;
-          inserted = true;
         }
       }
 
-      if (inserted && data) {
-        await deactivatePreviousActiveTokens(supabase, {
-          currentId: comparable(data.id),
-          deviceId,
-          platform: expectedPlatform,
-          row,
-          updatedAt: now,
-        });
-      }
+      const replacedTokenCount = data
+        ? await markReplacedDeviceTokens(
+            supabase,
+            row,
+            tokenHash,
+            expectedPlatform,
+            now
+          )
+        : 0;
 
       return json({
         ok: true,
@@ -463,6 +466,7 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         platform: expectedPlatform,
         device: data,
         skipped,
+        replacedTokenCount,
         app: {
           appId,
           appIdentifier,

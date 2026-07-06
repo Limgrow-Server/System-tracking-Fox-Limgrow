@@ -6,6 +6,7 @@ import { badRequest } from "@/lib/server/api/errors";
 import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
+import { assertCredentialSecretUnlocked } from "@/lib/server/services/credentials/credential-secret-otp.service";
 import {
   createAndroidStoreMapping,
   deleteAndroidStoreMappingConfig,
@@ -16,6 +17,7 @@ import {
   createIosStoreMapping,
   deleteIosStoreMappingConfig,
   getIosStoreMappingPageResult,
+  revealIosStoreMappingFirebaseAnalyticsSecret,
   updateIosStoreMapping,
 } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import type { StoreMappingPayload } from "@/lib/server/services/store-mappings/types";
@@ -42,10 +44,25 @@ function knownTotalFromSearch(value: string) {
 
 export async function handleAdminStoreMappingsGet(request: Request) {
   try {
-    await requireAdminSession();
+    const admin = await requireAdminSession();
 
     const url = new URL(request.url);
     const platform = platformFromSearch(clean(url.searchParams.get("platform")));
+
+    if (url.searchParams.get("reveal") === "firebaseAnalyticsApiSecret") {
+      if (platform !== "ios") {
+        throw badRequest("Firebase Analytics secret is only available for iOS mappings.");
+      }
+
+      await assertCredentialSecretUnlocked(admin);
+
+      return okJson(
+        await revealIosStoreMappingFirebaseAnalyticsSecret(
+          clean(url.searchParams.get("id")),
+        ),
+      );
+    }
+
     const pagination = paginationFromSearchParams(url.searchParams);
     const query = {
       ...pagination,

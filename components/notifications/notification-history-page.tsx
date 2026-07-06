@@ -35,12 +35,8 @@ import {
   localeRowsFromPayload,
   notificationJobCompletionPercent,
   notificationJobBadgeStatus,
-  notificationImpressionEventCount,
   notificationOpenEventCount,
-  notificationReceivedEventCount,
-  notificationUniqueImpressionCount,
   notificationUniqueOpenCount,
-  notificationUniqueReceivedCount,
   numberLabel,
   primaryLocaleRow,
   rateLabel,
@@ -77,7 +73,6 @@ type DeliveryRow = {
 type HistoryJobsResponse = {
   data?: NotificationJob[];
   error?: string;
-  notificationEvents?: NotificationEvent[];
   page?: number;
   pageSize?: number;
   storeMappings?: StoreMapping[];
@@ -409,17 +404,6 @@ export function NotificationHistoryPage({
 
   const historyListJobs = notificationJobs;
 
-  const eventsByJobId = useMemo(() => {
-    const byJobId = new Map<string, NotificationEvent[]>();
-    notificationEvents.forEach((event) => {
-      if (!event.job_id) return;
-      const current = byJobId.get(event.job_id) ?? [];
-      current.push(event);
-      byJobId.set(event.job_id, current);
-    });
-    return byJobId;
-  }, [notificationEvents]);
-
   const historyDetailJob = historyJobId ? notificationJobs.find((job) => job.id === historyJobId) ?? null : null;
   const historyDetailEvents = useMemo(
     () => historyDetailJob ? notificationEvents.filter((event) => event.job_id === historyDetailJob.id) : [],
@@ -428,12 +412,8 @@ export function NotificationHistoryPage({
   const historyDetailRequested = historyDetailJob ? jobRequestedCount(historyDetailJob) : 0;
   const historyDetailFailed = historyDetailJob ? jobFailedCount(historyDetailJob) : 0;
   const historyDetailSent = historyDetailJob ? Math.max(0, historyDetailJob.sent_count) : 0;
-  const historyDetailReceived = notificationUniqueReceivedCount(historyDetailEvents);
   const historyDetailOpened = notificationUniqueOpenCount(historyDetailEvents);
-  const historyDetailImpressions = notificationUniqueImpressionCount(historyDetailEvents);
-  const historyDetailReceivedEvents = notificationReceivedEventCount(historyDetailEvents);
   const historyDetailOpenEvents = notificationOpenEventCount(historyDetailEvents);
-  const historyDetailImpressionEvents = notificationImpressionEventCount(historyDetailEvents);
   const deviceTokensById = useMemo(() => new Map(data.deviceTokens.map((token) => [token.id, token])), [data.deviceTokens]);
   const deviceTokensByDeviceId = useMemo(() => {
     const byDeviceId = new Map<string, DeviceToken[]>();
@@ -517,7 +497,6 @@ export function NotificationHistoryPage({
       }
 
       setNotificationJobs(payload.data);
-      setNotificationEvents(payload.notificationEvents ?? []);
       if (payload.storeMappings) setStoreMappings(payload.storeMappings);
       setHistoryPagination({
         page: payload.page ?? page,
@@ -641,14 +620,11 @@ export function NotificationHistoryPage({
             />
           </div>
           <div className="overflow-auto">
-            <Table className="min-w-[1220px] text-sm">
+            <Table className="min-w-[880px] text-sm">
               <TableHeader>
                 <TableRow>
                   <TableHead>Job</TableHead>
                   <TableHead className="w-28">Sent</TableHead>
-                  <TableHead className="w-32">Received</TableHead>
-                  <TableHead className="w-32">Opened</TableHead>
-                  <TableHead className="w-36">Impressions</TableHead>
                   <TableHead className="w-28">Failed</TableHead>
                   <TableHead className="w-32">Status</TableHead>
                   <TableHead className="w-40">Sent date</TableHead>
@@ -661,13 +637,6 @@ export function NotificationHistoryPage({
                     const requested = jobRequestedCount(job);
                     const failed = jobFailedCount(job);
                     const sent = Math.max(0, job.sent_count);
-                    const jobEvents = eventsByJobId.get(job.id) ?? [];
-                    const received = notificationUniqueReceivedCount(jobEvents);
-                    const receivedEvents = notificationReceivedEventCount(jobEvents);
-                    const opened = notificationUniqueOpenCount(jobEvents);
-                    const openEvents = notificationOpenEventCount(jobEvents);
-                    const impressions = notificationUniqueImpressionCount(jobEvents);
-                    const impressionEvents = notificationImpressionEventCount(jobEvents);
                     const isPending = pendingHistoryJobId === job.id;
                     const badgeStatus = notificationJobBadgeStatus(job);
                     const completionPercent = notificationJobCompletionPercent(job);
@@ -702,18 +671,6 @@ export function NotificationHistoryPage({
                           <div className="text-xs text-muted-foreground">of {numberLabel(requested)}</div>
                         </TableCell>
                         <TableCell>
-                          <div className="font-mono text-lg font-semibold tabular-nums text-sky-700">{numberLabel(receivedEvents)}</div>
-                          <div className="text-xs text-muted-foreground">{numberLabel(received)} token(s)</div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="font-mono text-lg font-semibold tabular-nums text-violet-700">{numberLabel(openEvents)}</div>
-                          <div className="text-xs text-muted-foreground">{numberLabel(opened)} token(s)</div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="font-mono text-lg font-semibold tabular-nums text-amber-700">{numberLabel(impressionEvents)}</div>
-                          <div className="text-xs text-muted-foreground">{numberLabel(impressions)} token(s)</div>
-                        </TableCell>
-                        <TableCell>
                           <div className={cn("font-mono text-lg font-semibold tabular-nums", failed ? "text-rose-700" : "text-muted-foreground")}>
                             {numberLabel(failed)}
                           </div>
@@ -740,7 +697,7 @@ export function NotificationHistoryPage({
                   })
                 ) : (
                   <TableEmptyState
-                    colSpan={9}
+                    colSpan={6}
                     icon={History}
                     title={loadingHistoryJobs ? "Loading send jobs" : "No send jobs"}
                     description={
@@ -790,7 +747,7 @@ export function NotificationHistoryPage({
                     </div>
                     <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">Job {historyDetailJob.id}</div>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4 xl:grid-cols-7">
+                  <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4 xl:grid-cols-5">
                     <div className="rounded-md bg-muted/35 p-3">
                       <div className="text-xs text-muted-foreground">Requested</div>
                       <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailRequested}</div>
@@ -798,16 +755,6 @@ export function NotificationHistoryPage({
                     <div className="rounded-md bg-blue-50 p-3 text-blue-700">
                       <div className="text-xs">Sent</div>
                       <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailSent}</div>
-                    </div>
-                    <div className="rounded-md bg-sky-50 p-3 text-sky-700">
-                      <div className="text-xs">Received</div>
-                      <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailReceivedEvents}</div>
-                      <div className="mt-0.5 text-[11px] opacity-75">{historyDetailReceived} token(s)</div>
-                    </div>
-                    <div className="rounded-md bg-amber-50 p-3 text-amber-700">
-                      <div className="text-xs">Impressions</div>
-                      <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailImpressionEvents}</div>
-                      <div className="mt-0.5 text-[11px] opacity-75">{historyDetailImpressions} token(s)</div>
                     </div>
                     <div className="rounded-md bg-rose-50 p-3 text-rose-700">
                       <div className="text-xs">Failed</div>
@@ -818,38 +765,38 @@ export function NotificationHistoryPage({
                       <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailOpenEvents}</div>
                       <div className="mt-0.5 text-[11px] opacity-75">{historyDetailOpened} token(s)</div>
                     </div>
-                      <div className="rounded-md bg-emerald-50 p-3 text-emerald-700">
-                        <div className="text-xs">Rate</div>
-                        <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{rateLabel(jobSuccessRate(historyDetailJob))}</div>
+                    <div className="rounded-md bg-emerald-50 p-3 text-emerald-700">
+                      <div className="text-xs">Rate</div>
+                      <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{rateLabel(jobSuccessRate(historyDetailJob))}</div>
+                    </div>
+                  </div>
+                </div>
+                <div className="border-t bg-background p-4">
+                  <div className="flex flex-wrap items-center gap-2 font-heading text-base font-semibold">
+                    <MessageSquareText size={17} />
+                    Sent content
+                    {historyPrimaryContent?.topicCode ? (
+                      <Badge variant="secondary" className="h-6 rounded-md px-2 font-mono text-xs">
+                        {historyPrimaryContent.topicCode}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+                    <div className="min-w-0 rounded-md border bg-muted/15 p-3">
+                      <div className="text-xs text-muted-foreground">Title</div>
+                      <div className="mt-1 min-w-0 break-words text-sm font-medium">
+                        {historyPrimaryContent?.title ?? "Untitled notification"}
+                      </div>
+                    </div>
+                    <div className="min-w-0 rounded-md border bg-muted/15 p-3">
+                      <div className="text-xs text-muted-foreground">Content</div>
+                      <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">
+                        {historyPrimaryContent?.message ?? "No content"}
                       </div>
                     </div>
                   </div>
-                  <div className="border-t bg-background p-4">
-                    <div className="flex flex-wrap items-center gap-2 font-heading text-base font-semibold">
-                      <MessageSquareText size={17} />
-                      Sent content
-                      {historyPrimaryContent?.topicCode ? (
-                        <Badge variant="secondary" className="h-6 rounded-md px-2 font-mono text-xs">
-                          {historyPrimaryContent.topicCode}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-                      <div className="min-w-0 rounded-md border bg-muted/15 p-3">
-                        <div className="text-xs text-muted-foreground">Title</div>
-                        <div className="mt-1 min-w-0 break-words text-sm font-medium">
-                          {historyPrimaryContent?.title ?? "Untitled notification"}
-                        </div>
-                      </div>
-                      <div className="min-w-0 rounded-md border bg-muted/15 p-3">
-                        <div className="text-xs text-muted-foreground">Content</div>
-                        <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">
-                          {historyPrimaryContent?.message ?? "No content"}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </section>
+                </div>
+              </section>
 
                 <Tabs defaultValue="dashboard" className="space-y-3">
                   <TabsList>

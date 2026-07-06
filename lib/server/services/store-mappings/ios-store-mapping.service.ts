@@ -7,6 +7,7 @@ import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
   deleteIosStoreMapping,
+  getIosStoreMappingFirebaseAnalyticsSecret,
   getIosStoreMappingId,
   getIosStoreMappings,
   getIosStoreMappingsPage,
@@ -29,6 +30,12 @@ function nullableText(value: unknown) {
   return cleaned || null;
 }
 
+function optionalSecretText(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.trim();
+  return cleaned || undefined;
+}
+
 const mappingStatusMap: Record<string, MappingStatus> = {
   active: MappingStatus.ACTIVE,
   inactive: MappingStatus.INACTIVE,
@@ -42,6 +49,10 @@ function normalizeIosMappingPayload(payload: StoreMappingPayload) {
     appLink: nullableText(payload.appLink),
     appName: cleanText(payload.appName),
     bundleId: nullableText(payload.bundleId),
+    firebaseAnalyticsApiSecret: optionalSecretText(
+      payload.firebaseAnalyticsApiSecret,
+    ),
+    firebaseAppId: nullableText(payload.firebaseAppId),
     status: mappingStatusMap[cleanText(payload.status).toLowerCase()] ?? MappingStatus.ACTIVE,
     storeAccountName: cleanText(payload.storeAccountName),
     storeProfileId: cleanText(payload.storeProfileId),
@@ -78,8 +89,17 @@ const getCachedIosStoreMappingDtos = unstable_cache(
   },
 );
 
+const MAX_CACHED_STORE_MAPPING_TAKE = 500;
+
 export async function getIosStoreMappingDtos(options?: { take?: number }) {
-  return getCachedIosStoreMappingDtos(options?.take ?? 200);
+  const take = options?.take ?? 200;
+
+  if (take > MAX_CACHED_STORE_MAPPING_TAKE) {
+    const mappings = await getIosStoreMappings({ take });
+    return mappings.map(iosStoreMappingToTracking);
+  }
+
+  return getCachedIosStoreMappingDtos(take);
 }
 
 export async function getIosStoreMappingPageResult(options: PaginationQuery & {
@@ -110,12 +130,32 @@ export async function iosStoreMappingExists(id: string) {
   return Boolean(await getIosStoreMappingId(id));
 }
 
+export async function revealIosStoreMappingFirebaseAnalyticsSecret(id: string) {
+  const cleanedId = cleanText(id);
+  if (!cleanedId) {
+    throw badRequest("Mapping id is required.");
+  }
+
+  const mapping = await getIosStoreMappingFirebaseAnalyticsSecret(cleanedId);
+  if (!mapping) {
+    throw notFound("iOS mapping was not found.");
+  }
+
+  return {
+    firebaseAnalyticsApiSecret:
+      mapping.firebaseAnalyticsApiSecret ?? "",
+    id: mapping.id,
+  };
+}
+
 export async function saveIosStoreMappingDto(input: {
   appIconUrl: string | null;
   appLink: string | null;
   appId: string | null;
   appName: string;
   bundleId: string;
+  firebaseAnalyticsApiSecret?: string | null;
+  firebaseAppId: string | null;
   id?: string;
   status: MappingStatus;
   storeAccountName: string;
@@ -162,6 +202,8 @@ export async function createIosStoreMapping(payload: StoreMappingPayload) {
       appId: row.appId,
       appName: row.appName,
       bundleId: row.bundleId!,
+      firebaseAnalyticsApiSecret: row.firebaseAnalyticsApiSecret ?? null,
+      firebaseAppId: row.firebaseAppId,
       status: row.status,
       storeAccountName: row.storeAccountName,
       storeProfileId: row.storeProfileId,
@@ -194,6 +236,8 @@ export async function updateIosStoreMapping(payload: StoreMappingPayload) {
       appId: row.appId,
       appName: row.appName,
       bundleId: row.bundleId!,
+      firebaseAnalyticsApiSecret: row.firebaseAnalyticsApiSecret,
+      firebaseAppId: row.firebaseAppId,
       id,
       status: row.status,
       storeAccountName: row.storeAccountName,

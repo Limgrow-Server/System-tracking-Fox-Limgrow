@@ -734,7 +734,7 @@ function iosTransactionWhere(
 ): Prisma.IosIapTransactionWhereInput {
   const where: Prisma.IosIapTransactionWhereInput = {
     bundleId,
-    environment: { equals: "production", mode: "insensitive" },
+    environment: "production",
   };
   const state = options?.state?.trim();
   const trial = options?.trial?.trim();
@@ -822,7 +822,7 @@ export function getIosTransactionsByBundleIdMetrics(
 ) {
   const conditions = [
     Prisma.sql`bundle_id = ${bundleId}`,
-    Prisma.sql`lower(environment) = 'production'`,
+    Prisma.sql`environment = 'production'`,
   ];
   const state = options.state?.trim();
   const trial = options.trial?.trim();
@@ -889,7 +889,7 @@ export function getIosIapNotificationEventsByBundleId(
   return prisma.iosIapNotificationEvent.findMany({
     where: {
       bundleId,
-      environment: { equals: "production", mode: "insensitive" },
+      environment: "production",
       ...(storeProfileId ? { storeProfileId } : {}),
     },
     orderBy: { receivedAt: "desc" },
@@ -904,7 +904,7 @@ export async function getIosIapNotificationEventSummaryByBundleId(
 ) {
   const where: Prisma.IosIapNotificationEventWhereInput = {
     bundleId,
-    environment: { equals: "production", mode: "insensitive" },
+    environment: "production",
     ...(storeProfileId ? { storeProfileId } : {}),
   };
   const [counts, latest] = await Promise.all([
