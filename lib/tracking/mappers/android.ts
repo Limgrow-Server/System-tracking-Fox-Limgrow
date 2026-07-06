@@ -24,6 +24,8 @@ export function androidStoreMappingToTracking(mapping: AndroidStoreMappingRecord
     platform: "android",
     package_name: mapping.packageName,
     bundle_id: null,
+    firebase_app_id: null,
+    firebase_analytics_api_secret_configured: false,
     status: enumValue(mapping.status),
     created_at: mapping.createdAt.toISOString(),
     updated_at: mapping.updatedAt.toISOString(),

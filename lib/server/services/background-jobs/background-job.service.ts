@@ -482,9 +482,11 @@ export async function listBackgroundJobsForSession(session: ConsoleSession) {
   });
 
   const activeJobs = jobs.filter((job) => ACTIVE_JOB_STATUSES.includes(job.status));
-  const reviewJobsNeedingDestination = jobs.filter((job) =>
-    job.type === "REVIEW_FETCH" && !hasReviewResultUrl(job),
-  );
+  const reviewJobsNeedingDestination = activeJobs.length
+    ? []
+    : jobs
+        .filter((job) => job.type === "REVIEW_FETCH" && !hasReviewResultUrl(job))
+        .slice(0, 5);
   const reviewHydrationTargets = Array.from(
     new Map(
       [...activeJobs.filter((job) => job.type === "REVIEW_FETCH"), ...reviewJobsNeedingDestination]

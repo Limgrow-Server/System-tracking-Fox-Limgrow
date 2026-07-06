@@ -41,6 +41,8 @@ const TRAY_MARGIN = 16;
 const TRAY_POSITION_STORAGE_KEY = "tracking-background-job-tray-position";
 const DISMISSED_JOBS_STORAGE_KEY = "tracking-background-job-dismissed-ids";
 const MAX_DISMISSED_JOB_IDS = 200;
+const ACTIVE_POLLING_MS = 5_000;
+const IDLE_POLLING_MS = 30_000;
 
 type TrayPosition = {
   x: number;
@@ -358,7 +360,7 @@ export function BackgroundJobTray() {
   const trayRef = useRef<HTMLDivElement | null>(null);
 
   const hasJobs = jobs.length > 0;
-  const pollingMs = activeCount > 0 ? 1500 : 10000;
+  const pollingMs = activeCount > 0 ? ACTIVE_POLLING_MS : IDLE_POLLING_MS;
   const visibleJobs = useMemo(() => jobs.slice(0, 8), [jobs]);
 
   useEffect(() => {
@@ -502,6 +504,7 @@ export function BackgroundJobTray() {
     setActiveCount(0);
     setDragging(false);
     setHidden(true);
+    setLoading(false);
     setOpen(false);
   }, [dismissJobs, jobs]);
 
@@ -567,6 +570,10 @@ export function BackgroundJobTray() {
   }, []);
 
   useEffect(() => {
+    if (hidden) {
+      return;
+    }
+
     let cancelled = false;
     let timeoutId: number | undefined;
 
@@ -622,7 +629,7 @@ export function BackgroundJobTray() {
       cancelled = true;
       if (timeoutId) window.clearTimeout(timeoutId);
     };
-  }, [pollingMs, refreshVersion, updateJobs]);
+  }, [hidden, pollingMs, refreshVersion, updateJobs]);
 
   if (hidden || (!hasJobs && !loading)) return null;
 
@@ -630,7 +637,7 @@ export function BackgroundJobTray() {
     <div
       ref={trayRef}
       className={cn(
-        "fixed z-50 w-[calc(100vw-2rem)] max-w-sm",
+        "fixed z-50 w-[calc(100vw-2rem)] max-w-sm motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2 motion-safe:duration-200",
         !trayPosition && "bottom-4 right-4",
       )}
       style={

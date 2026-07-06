@@ -7,7 +7,7 @@ import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagi
 import { errorJson } from "@/lib/server/api/responses";
 import {
   getIapAppContext,
-  getIapAppCards,
+  getIapAppCardLists,
   getIapAppCardsPage,
   getIapAppTrialAnalytics,
   getIapTransactionReceipt,
@@ -47,14 +47,11 @@ export async function handleAdminIapAppsGet(request: Request) {
         : "all";
     const search = clean(url.searchParams.get("search"));
     const storeAccountName = clean(url.searchParams.get("store"));
-    const [allApps, matchingApps] = await Promise.all([
-      getIapAppCards({ platform }),
-      getIapAppCards({
-        platform,
-        search: search || undefined,
-        storeAccountName: storeAccountName || undefined,
-      }),
-    ]);
+    const { allApps, matchingApps } = await getIapAppCardLists({
+      platform,
+      search: search || undefined,
+      storeAccountName: storeAccountName || undefined,
+    });
     const scopedApps = matchingApps.filter((app) =>
       canAccessIapApp(session, app),
     );
@@ -112,6 +109,7 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
     return paginatedJson(detail.transactions, {
       metrics: detail.metrics,
       transactionStates: detail.transactionStates,
+      twoHourChecks: detail.twoHourChecks ?? [],
     });
   } catch (error) {
     return errorJson(error, "List IAP transactions failed.");

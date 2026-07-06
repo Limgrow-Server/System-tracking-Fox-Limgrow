@@ -35,7 +35,10 @@ import type {
   IapTrialConversionAnalytics,
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
-import type { IosIapTransactionSummary } from "@/lib/tracking/types";
+import type {
+  IosIapTransactionSummary,
+  IosIapTwoHourCheck,
+} from "@/lib/tracking/types";
 import { showToast } from "@/lib/client/toast";
 import type { IapRevenueChartProps } from "./iap-revenue-chart";
 import type { IosTrialAnalyticsPanelProps } from "./ios-trial-analytics-panel";
@@ -83,6 +86,7 @@ type IapTransactionListResponse = {
   total?: number;
   totalPages?: number;
   transactionStates?: string[];
+  twoHourChecks?: IosIapTwoHourCheck[];
 };
 
 type IapTrialAnalyticsResponse = {
@@ -247,6 +251,55 @@ function renewalStatusMeta(status: "enabled" | "disabled" | null) {
   }
 
   return null;
+}
+
+function twoHourCheckMeta(check: IosIapTwoHourCheck | null) {
+  if (!check) {
+    return null;
+  }
+
+  const status = check.status.toLowerCase();
+  if (status === "sent") {
+    return {
+      className: check.renewed
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+        : "border-rose-200 bg-rose-50 text-rose-700",
+      label: `2h ${check.renewed ? "renewed" : "cancelled"}`,
+      title: check.ga4_sent_at
+        ? `GA4 sent at ${formatDate(check.ga4_sent_at)}`
+        : "GA4 event sent",
+    };
+  }
+
+  if (status === "failed") {
+    return {
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      label: "2h failed",
+      title: check.last_error ?? "GA4 2-hour check failed",
+    };
+  }
+
+  if (status === "processing") {
+    return {
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      label: "2h processing",
+      title: "GA4 2-hour check is processing",
+    };
+  }
+
+  if (status === "retrying") {
+    return {
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      label: "2h retrying",
+      title: check.last_error ?? "GA4 2-hour check will retry",
+    };
+  }
+
+  return {
+    className: "border-slate-200 bg-slate-50 text-slate-600",
+    label: "2h pending",
+    title: `Scheduled for ${formatDate(check.check_at)}`,
+  };
 }
 
 function sourceMeta(source: string | null) {
@@ -501,6 +554,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
 
   const [metrics, setMetrics] = useState(data.metrics);
   const [transactions, setTransactions] = useState(data.transactions);
+  const [twoHourChecks, setTwoHourChecks] = useState(data.twoHourChecks);
   const [transactionPagination, setTransactionPagination] = useState(
     data.transactionPagination,
   );
@@ -608,6 +662,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       }
       if (payload.transactionStates) {
         setTransactionStates(payload.transactionStates);
+      }
+      if (payload.twoHourChecks) {
+        setTwoHourChecks(payload.twoHourChecks);
       }
     } catch (error) {
       if (options?.silent) {
@@ -828,21 +885,20 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     try {
       const latest = latestViewRef.current;
 
-      await Promise.all([
-        loadTransactionsPage(
-          latest.page,
-          {
-            filterEnvironment: latest.filterEnvironment,
-            filterKind: latest.filterKind,
-            filterState: latest.filterState,
-            filterTrial: latest.filterTrial,
-          },
-          { silent: true },
-        ),
-        isIos
-          ? refreshTrialAnalytics({ silent: true })
-          : Promise.resolve(),
-      ]);
+      await loadTransactionsPage(
+        latest.page,
+        {
+          filterEnvironment: latest.filterEnvironment,
+          filterKind: latest.filterKind,
+          filterState: latest.filterState,
+          filterTrial: latest.filterTrial,
+        },
+        { silent: true },
+      );
+
+      if (isIos) {
+        await refreshTrialAnalytics({ silent: true });
+      }
     } catch (error) {
       console.error("Realtime IAP detail refresh failed", error);
       setRealtimeStatus("error");
@@ -976,6 +1032,12 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       new Set(transactionStates.map((state) => state.toLowerCase())),
     ).sort();
   }, [transactionStates]);
+
+  const twoHourCheckByTransactionId = useMemo(() => {
+    return new Map(
+      twoHourChecks.map((check) => [check.transaction_id, check] as const),
+    );
+  }, [twoHourChecks]);
 
   const currentPage = transactionPagination.page;
   const tableStartIndex =
@@ -1240,6 +1302,10 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 const renewal = renewalStatusMeta(transactionRenewalStatus(tx));
                 const renewalDate = transactionRenewalDate(tx);
                 const renewalProductId = transactionRenewalProductId(tx);
+                const twoHourCheck = isIosTransaction(tx)
+                  ? twoHourCheckByTransactionId.get(tx.transaction_id) ?? null
+                  : null;
+                const twoHourMeta = twoHourCheckMeta(twoHourCheck);
                 return (
                   <tr
                     key={tx.id}
@@ -1315,6 +1381,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             className={`inline-flex items-center border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${renewal.className}`}
                           >
                             {renewal.label}
+                          </span>
+                        ) : null}
+                        {twoHourMeta ? (
+                          <span
+                            className={`inline-flex items-center border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourMeta.className}`}
+                            title={twoHourMeta.title}
+                          >
+                            {twoHourMeta.label}
                           </span>
                         ) : null}
                         {renewalDate ? (

@@ -7,6 +7,7 @@ const DEFAULT_INTERVAL_MS = 3 * 60_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const INITIAL_CRON_DELAY_MS = 15_000;
 const DEFAULT_NOTIFICATION_QUEUE_INTERVAL_MS = 10_000;
+const DEFAULT_IOS_IAP_2HOUR_INTERVAL_MS = 60_000;
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(dirname, "..");
 const nextBin = path.join(
@@ -90,6 +91,15 @@ function resolveNotificationQueueCronUrl() {
   )}/api/cron/notification-batches`;
 }
 
+function resolveIosIapTwoHourCronUrl() {
+  const explicitUrl = process.env.IOS_IAP_2HOUR_CHECK_CRON_URL?.trim();
+  if (explicitUrl) return normalizeUrl(explicitUrl);
+
+  return `${normalizeUrl(
+    `http://127.0.0.1:${process.env.PORT || "3000"}`,
+  )}/api/cron/iap-ga4-two-hour`;
+}
+
 function sleep(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve) => {
     if (signal?.aborted) {
@@ -142,6 +152,20 @@ function summarizeNotificationQueueResult(payload: unknown) {
     claimed: result.claimed,
     processed: Array.isArray(result.processed) ? result.processed.length : 0,
     recovered: result.recovered,
+  });
+}
+
+function summarizeIosIapTwoHourResult(payload: unknown) {
+  const result = isRecord(payload) ? payload.result : null;
+
+  if (!isRecord(result)) {
+    return "no result payload";
+  }
+
+  return JSON.stringify({
+    checkedAt: result.checkedAt,
+    claimed: result.claimed,
+    processed: Array.isArray(result.processed) ? result.processed.length : 0,
   });
 }
 
@@ -240,6 +264,58 @@ async function runNotificationQueueCronOnce(url: string, signal: AbortSignal) {
   }
 }
 
+async function runIosIapTwoHourCronOnce(url: string, signal: AbortSignal) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const abortFromParent = () => controller.abort();
+  const cronSecret =
+    process.env.IOS_IAP_2HOUR_CHECK_SECRET ||
+    process.env.NOTIFICATION_QUEUE_SECRET ||
+    "";
+
+  if (signal.aborted) {
+    controller.abort();
+  } else {
+    signal.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        ...(cronSecret ? {
+          "x-cron-secret": cronSecret,
+          "x-iap-2hour-secret": cronSecret,
+        } : {}),
+        "user-agent": "limgrow-ios-iap-2hour-ga4/1.0",
+      },
+      method: "POST",
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const payload = text ? (JSON.parse(text) as unknown) : null;
+    const endpointFailed =
+      isRecord(payload) && (payload.success === false || payload.ok === false);
+
+    if (!response.ok || endpointFailed) {
+      throw new Error(text || `iOS IAP 2-hour endpoint returned HTTP ${response.status}`);
+    }
+
+    const claimed = isRecord(payload) && isRecord(payload.result) ? Number(payload.result.claimed ?? 0) : 0;
+    if (claimed > 0) {
+      console.log(
+        `[ios-iap-2hour-ga4] ${new Date().toISOString()} ok ${summarizeIosIapTwoHourResult(
+          payload,
+        )}`,
+      );
+    }
+  } finally {
+    signal.removeEventListener("abort", abortFromParent);
+    clearTimeout(timeout);
+  }
+}
+
 function startReviewFetchCronLoop(): CronLoop {
   const controller = new AbortController();
   const signal = controller.signal;
@@ -313,6 +389,45 @@ function startNotificationQueueCronLoop(): CronLoop {
   };
 }
 
+function startIosIapTwoHourCronLoop(): CronLoop {
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const url = resolveIosIapTwoHourCronUrl();
+  const intervalMs = intEnv(
+    "IOS_IAP_2HOUR_CHECK_INTERVAL_MS",
+    DEFAULT_IOS_IAP_2HOUR_INTERVAL_MS,
+    5000,
+  );
+
+  console.log(
+    `[ios-iap-2hour-ga4] running every ${intervalMs}ms against ${url}`,
+  );
+
+  void (async () => {
+    await sleep(20_000, signal);
+
+    while (!signal.aborted) {
+      try {
+        await runIosIapTwoHourCronOnce(url, signal);
+      } catch (error) {
+        console.error(
+          `[ios-iap-2hour-ga4] ${new Date().toISOString()} failed: ${errorMessage(
+            error,
+          )}`,
+        );
+      }
+
+      await sleep(intervalMs, signal);
+    }
+  })();
+
+  return {
+    stop() {
+      controller.abort();
+    },
+  };
+}
+
 const { command, forwardedArgs } = resolveRuntimeCommand(process.argv.slice(2));
 loadEnvConfig(projectRoot, command === "dev");
 const port = portFromArgs(forwardedArgs);
@@ -326,7 +441,11 @@ process.env.PORT = port;
 
 if (command === "cron") {
   console.log(`[cron] workers on port ${port}`);
-  const cronLoops = [startReviewFetchCronLoop(), startNotificationQueueCronLoop()];
+  const cronLoops = [
+    startReviewFetchCronLoop(),
+    startNotificationQueueCronLoop(),
+    startIosIapTwoHourCronLoop(),
+  ];
 
   function shutdownCron() {
     cronLoops.forEach((cronLoop) => cronLoop.stop());
@@ -344,7 +463,11 @@ if (command === "cron") {
     stdio: "inherit",
   });
 
-  let cronLoops: CronLoop[] = [startReviewFetchCronLoop(), startNotificationQueueCronLoop()];
+  let cronLoops: CronLoop[] = [
+    startReviewFetchCronLoop(),
+    startNotificationQueueCronLoop(),
+    startIosIapTwoHourCronLoop(),
+  ];
   let shuttingDown = false;
 
   function shutdown(signal: NodeJS.Signals) {
