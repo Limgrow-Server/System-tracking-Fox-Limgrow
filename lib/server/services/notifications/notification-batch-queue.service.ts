@@ -11,6 +11,7 @@ import {
   createBackgroundJob,
   updateBackgroundJobBySourceJob,
 } from "@/lib/server/services/background-jobs/background-job.service";
+import { sendNotificationPayloadLocal } from "@/lib/server/services/notifications/local-notification-sender.service";
 import { deviceTokenWhereForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
 
 const DEFAULT_DIRECT_DEVICE_LIMIT = 500;
@@ -147,16 +148,6 @@ function chunks<T>(items: T[], size: number) {
     groups.push(items.slice(index, index + size));
   }
   return groups;
-}
-
-function supabaseFunctionUrl(functionName: string) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, "");
-  if (!supabaseUrl) throw badRequest("NEXT_PUBLIC_SUPABASE_URL is not configured.");
-  return `${supabaseUrl}/functions/v1/${functionName}`;
-}
-
-function dispatchSecret() {
-  return clean(process.env.NOTIFICATION_DISPATCH_SECRET) || clean(process.env.NOTIFICATION_QUEUE_SECRET);
 }
 
 function notificationAppId(payload: Record<string, unknown>) {
@@ -635,32 +626,7 @@ function compactResultPayload(result: EdgeFunctionResult) {
 }
 
 async function callSendNotificationBatch(job: NotificationJob, batch: NotificationBatchRow) {
-  const secret = dispatchSecret();
-  if (!secret) {
-    throw new Error("NOTIFICATION_DISPATCH_SECRET or NOTIFICATION_QUEUE_SECRET is required for queued notification worker.");
-  }
-
-  const response = await fetch(supabaseFunctionUrl("send-notification"), {
-    method: "POST",
-    headers: {
-      apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "",
-      "content-type": "application/json",
-      "x-dispatch-secret": secret,
-      "x-notification-queue-secret": secret,
-    },
-    body: JSON.stringify(edgePayloadFromJob(job, batch)),
-  });
-  const payload = (await response.json().catch(() => ({}))) as {
-    ok?: boolean;
-    error?: string;
-    result?: EdgeFunctionResult;
-  };
-
-  if (!response.ok || !payload.ok || !payload.result) {
-    throw new Error(payload.error ?? `send-notification returned HTTP ${response.status}`);
-  }
-
-  return payload.result;
+  return sendNotificationPayloadLocal(edgePayloadFromJob(job, batch));
 }
 
 async function updateParentJobAggregate(jobId: string) {
