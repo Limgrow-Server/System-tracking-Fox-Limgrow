@@ -2,6 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { searchTextVariants } from "@/lib/search";
+import { convertCurrencyAmountToVnd } from "@/lib/server/currency-conversion";
 import type { IapAppMetrics, IapRevenueBucket } from "@/lib/tracking/page-data";
 
 const androidTransactionListSelect = {
@@ -247,14 +248,19 @@ type IapMetricsRow = {
   canceledCount: number | bigint | null;
   latestTimestamp: number | string | null;
   last7Orders: number | bigint | null;
-  last7Revenue: number | string | null;
   previous7Orders: number | bigint | null;
-  previous7Revenue: number | string | null;
   totalCount: number | bigint | null;
+};
+
+type IapCurrencyRevenueRow = {
+  currency: string | null;
+  last7Revenue: number | string | null;
+  previous7Revenue: number | string | null;
   totalRevenue: number | string | null;
 };
 
 type IapRevenueBucketRow = {
+  currency: string | null;
   label: string | null;
   prod: number | string | null;
   sand: number | string | null;
@@ -274,29 +280,75 @@ function joinSql(parts: Prisma.Sql[], separator: Prisma.Sql) {
   );
 }
 
-function iapMetricsFromRows(
+async function iapMetricsFromRows(
   rows: IapMetricsRow[],
+  revenueRows: IapCurrencyRevenueRow[],
   bucketRows: IapRevenueBucketRow[],
-): IapAppMetrics {
+): Promise<IapAppMetrics> {
   const row = rows[0];
-  const revenueBuckets: IapRevenueBucket[] = bucketRows.map((bucket) => ({
-    label: bucket.label ?? "",
-    prod: numberValue(bucket.prod),
-    sand: numberValue(bucket.sand),
-  }));
+  const [totalRevenue, last7Revenue, previous7Revenue] = await Promise.all([
+    convertRevenueRows(revenueRows, "totalRevenue"),
+    convertRevenueRows(revenueRows, "last7Revenue"),
+    convertRevenueRows(revenueRows, "previous7Revenue"),
+  ]);
+  const revenueBuckets = await convertBucketRows(bucketRows);
 
   return {
     activeCount: numberValue(row?.activeCount),
     canceledCount: numberValue(row?.canceledCount),
     latestTimestamp: numberValue(row?.latestTimestamp),
     last7Orders: numberValue(row?.last7Orders),
-    last7Revenue: numberValue(row?.last7Revenue),
+    last7Revenue,
     previous7Orders: numberValue(row?.previous7Orders),
-    previous7Revenue: numberValue(row?.previous7Revenue),
+    previous7Revenue,
     revenueBuckets,
     totalCount: numberValue(row?.totalCount),
-    totalRevenue: numberValue(row?.totalRevenue),
+    totalRevenue,
   };
+}
+
+async function convertRevenueRows(
+  rows: IapCurrencyRevenueRow[],
+  field: "last7Revenue" | "previous7Revenue" | "totalRevenue",
+) {
+  const convertedRows = await Promise.all(
+    rows.map((row) =>
+      convertCurrencyAmountToVnd(numberValue(row[field]), row.currency),
+    ),
+  );
+
+  return convertedRows.reduce((total, amount) => total + amount, 0);
+}
+
+async function convertBucketRows(rows: IapRevenueBucketRow[]) {
+  const convertedRows = await Promise.all(
+    rows.map(async (bucket) => ({
+      label: bucket.label ?? "",
+      prod: await convertCurrencyAmountToVnd(
+        numberValue(bucket.prod),
+        bucket.currency,
+      ),
+      sand: await convertCurrencyAmountToVnd(
+        numberValue(bucket.sand),
+        bucket.currency,
+      ),
+    })),
+  );
+  const bucketsByLabel = new Map<string, IapRevenueBucket>();
+
+  for (const bucket of convertedRows) {
+    const existing = bucketsByLabel.get(bucket.label) ?? {
+      label: bucket.label,
+      prod: 0,
+      sand: 0,
+    };
+
+    existing.prod += bucket.prod;
+    existing.sand += bucket.sand;
+    bucketsByLabel.set(bucket.label, existing);
+  }
+
+  return [...bucketsByLabel.values()];
 }
 
 async function getIapMetrics(
@@ -309,7 +361,7 @@ async function getIapMetrics(
     ? Prisma.sql`true`
     : Prisma.sql`not is_test`;
 
-  const [metricsRows, bucketRows] = await Promise.all([
+  const [metricsRows, revenueRows, bucketRows] = await Promise.all([
     prisma.$queryRaw<IapMetricsRow[]>(Prisma.sql`
       with filtered as (
         select
@@ -333,18 +385,6 @@ async function getIapMetrics(
         count(*) filter (where lower(state) in ('active', 'purchased'))::int as "activeCount",
         count(*) filter (where lower(state) in ('canceled', 'expired', 'refunded', 'revoked'))::int as "canceledCount",
         coalesce(extract(epoch from (select latest from anchor)) * 1000, 0)::float8 as "latestTimestamp",
-        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
-          where coalesce(revenue_micros, 0) > 0
-        ), 0)::float8 as "totalRevenue",
-        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
-          where coalesce(revenue_micros, 0) > 0
-            and purchase_date >= (select latest from anchor) - interval '7 days'
-        ), 0)::float8 as "last7Revenue",
-        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
-          where coalesce(revenue_micros, 0) > 0
-            and purchase_date >= (select latest from anchor) - interval '14 days'
-            and purchase_date < (select latest from anchor) - interval '7 days'
-        ), 0)::float8 as "previous7Revenue",
         count(*) filter (
           where coalesce(revenue_micros, 0) > 0
             and purchase_date >= (select latest from anchor) - interval '7 days'
@@ -356,11 +396,47 @@ async function getIapMetrics(
         )::int as "previous7Orders"
       from metric_source
     `),
+    prisma.$queryRaw<IapCurrencyRevenueRow[]>(Prisma.sql`
+      with filtered as (
+        select
+          purchase_date,
+          revenue_micros,
+          currency,
+          ${testExpression} as is_test
+        from ${sourceSql}
+        ${whereSql}
+      ),
+      metric_source as (
+        select *
+        from filtered
+        where ${metricScopeSql}
+      ),
+      anchor as (
+        select max(purchase_date) as latest from metric_source
+      )
+      select
+        upper(coalesce(nullif(trim(currency), ''), 'VND')) as currency,
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where coalesce(revenue_micros, 0) > 0
+        ), 0)::float8 as "totalRevenue",
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '7 days'
+        ), 0)::float8 as "last7Revenue",
+        coalesce(sum((revenue_micros::numeric / 1000000.0)) filter (
+          where coalesce(revenue_micros, 0) > 0
+            and purchase_date >= (select latest from anchor) - interval '14 days'
+            and purchase_date < (select latest from anchor) - interval '7 days'
+        ), 0)::float8 as "previous7Revenue"
+      from metric_source
+      group by upper(coalesce(nullif(trim(currency), ''), 'VND'))
+    `),
     prisma.$queryRaw<IapRevenueBucketRow[]>(Prisma.sql`
       with filtered as (
         select
           purchase_date,
           revenue_micros,
+          currency,
           ${testExpression} as is_test
         from ${sourceSql}
         ${whereSql}
@@ -383,6 +459,7 @@ async function getIapMetrics(
       )
       select
         to_char(months.month_start, 'Mon') as label,
+        upper(coalesce(nullif(trim(metric_source.currency), ''), 'VND')) as currency,
         coalesce(sum((metric_source.revenue_micros::numeric / 1000000.0)) filter (
           where not metric_source.is_test
             and coalesce(metric_source.revenue_micros, 0) > 0
@@ -394,12 +471,12 @@ async function getIapMetrics(
       from months
       left join metric_source
         on date_trunc('month', metric_source.purchase_date) = months.month_start
-      group by months.month_start
+      group by months.month_start, upper(coalesce(nullif(trim(metric_source.currency), ''), 'VND'))
       order by months.month_start
     `),
   ]);
 
-  return iapMetricsFromRows(metricsRows, bucketRows);
+  return iapMetricsFromRows(metricsRows, revenueRows, bucketRows);
 }
 
 function androidTransactionWhere(
