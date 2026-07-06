@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import dynamic from "next/dynamic";
-import { ArrowLeft, BarChart3, ChevronRight, Eye, History, MessageSquareText, RefreshCw } from "lucide-react";
+import { ArrowLeft, BarChart3, ChevronRight, Eye, History, MessageSquareText, Pause, Play, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { showToast } from "@/lib/client/toast";
 
@@ -92,6 +92,12 @@ type HistoryEventsResponse = {
   success?: boolean;
   total?: number;
   totalPages?: number;
+};
+
+type HistoryJobActionResponse = {
+  error?: string;
+  job?: NotificationJob;
+  ok?: boolean;
 };
 
 function metadataRecord(metadata: unknown) {
@@ -223,6 +229,15 @@ function deliveryRowKey(row: DeliveryRow) {
     row.event.provider_message_id,
     row.event.id,
   ].find((value) => value && value.trim())!;
+}
+
+function notificationJobControlAction(job: NotificationJob): "pause" | "resume" | null {
+  const status = notificationJobBadgeStatus(job);
+  if (status === "paused" || job.status === "paused") return "resume";
+  if (status === "processing" || ["queued", "retrying", "materializing", "processing"].includes(job.status)) {
+    return "pause";
+  }
+  return null;
 }
 
 function mergeDeliveryRows(left: DeliveryRow, right: DeliveryRow): DeliveryRow {
@@ -401,7 +416,9 @@ export function NotificationHistoryPage({
   const [recordStoreFilter, setRecordStoreFilter] = useState(ALL_FILTER_VALUE);
   const [selectedDeliveryEventId, setSelectedDeliveryEventId] = useState<string | null>(null);
   const [pendingHistoryJobId, setPendingHistoryJobId] = useState<string | null>(null);
+  const [pendingHistoryJobActionId, setPendingHistoryJobActionId] = useState<string | null>(null);
 
+  const canManageNotifications = data.canManageNotifications;
   const historyListJobs = notificationJobs;
 
   const historyDetailJob = historyJobId ? notificationJobs.find((job) => job.id === historyJobId) ?? null : null;
@@ -414,6 +431,10 @@ export function NotificationHistoryPage({
   const historyDetailSent = historyDetailJob ? Math.max(0, historyDetailJob.sent_count) : 0;
   const historyDetailOpened = notificationUniqueOpenCount(historyDetailEvents);
   const historyDetailOpenEvents = notificationOpenEventCount(historyDetailEvents);
+  const historyDetailBadgeStatus = historyDetailJob ? notificationJobBadgeStatus(historyDetailJob) : null;
+  const historyDetailControlAction = historyDetailJob && canManageNotifications
+    ? notificationJobControlAction(historyDetailJob)
+    : null;
   const deviceTokensById = useMemo(() => new Map(data.deviceTokens.map((token) => [token.id, token])), [data.deviceTokens]);
   const deviceTokensByDeviceId = useMemo(() => {
     const byDeviceId = new Map<string, DeviceToken[]>();
@@ -555,6 +576,42 @@ export function NotificationHistoryPage({
     }
   }
 
+  function updateHistoryJob(job: NotificationJob) {
+    setNotificationJobs((current) => current.map((item) => item.id === job.id ? job : item));
+  }
+
+  async function updateHistoryJobProcessing(job: NotificationJob, action: "pause" | "resume") {
+    setPendingHistoryJobActionId(job.id);
+
+    try {
+      const response = await fetch("/api/admin/notifications/history-jobs", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, id: job.id }),
+      });
+      const payload = (await response.json()) as HistoryJobActionResponse;
+
+      if (!response.ok || !payload.ok || !payload.job) {
+        throw new Error(payload.error ?? "Notification job could not be updated.");
+      }
+
+      updateHistoryJob(payload.job);
+      void showToast(
+        "success",
+        action === "pause"
+          ? "Notification job paused."
+          : "Notification job resumed.",
+      );
+    } catch (error) {
+      void showToast(
+        "error",
+        error instanceof Error ? error.message : "Notification job could not be updated.",
+      );
+    } finally {
+      setPendingHistoryJobActionId(null);
+    }
+  }
+
   useEffect(() => {
     if (!deferInitialLoad || historyJobId || initialLoadStarted.current) return;
     initialLoadStarted.current = true;
@@ -627,6 +684,7 @@ export function NotificationHistoryPage({
                   <TableHead className="w-28">Sent</TableHead>
                   <TableHead className="w-28">Failed</TableHead>
                   <TableHead className="w-32">Status</TableHead>
+                  <TableHead className="w-32">Action</TableHead>
                   <TableHead className="w-40">Sent date</TableHead>
                   <TableHead className="w-10" />
                 </TableRow>
@@ -638,8 +696,10 @@ export function NotificationHistoryPage({
                     const failed = jobFailedCount(job);
                     const sent = Math.max(0, job.sent_count);
                     const isPending = pendingHistoryJobId === job.id;
+                    const isActionPending = pendingHistoryJobActionId === job.id;
                     const badgeStatus = notificationJobBadgeStatus(job);
                     const completionPercent = notificationJobCompletionPercent(job);
+                    const controlAction = canManageNotifications ? notificationJobControlAction(job) : null;
 
                     return (
                       <TableRow
@@ -677,12 +737,41 @@ export function NotificationHistoryPage({
                           <div className="text-xs text-muted-foreground">{rateLabel(jobSuccessRate(job))} success</div>
                         </TableCell>
                         <TableCell>
-                          <StatusBadge status={badgeStatus} />
-                          {badgeStatus === "processing" ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <StatusBadge status={badgeStatus} />
+                          </div>
+                          {badgeStatus === "processing" || badgeStatus === "paused" ? (
                             <div className="mt-1 text-xs text-muted-foreground">
                               {completionPercent}% complete
                             </div>
                           ) : null}
+                        </TableCell>
+                        <TableCell>
+                          {controlAction ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={isActionPending}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                void updateHistoryJobProcessing(job, controlAction);
+                              }}
+                              className="h-8 gap-1.5 rounded-md px-2.5 text-xs"
+                            >
+                              {isActionPending ? (
+                                <Spinner className="size-3.5" />
+                              ) : controlAction === "pause" ? (
+                                <Pause size={13} />
+                              ) : (
+                                <Play size={13} />
+                              )}
+                              {controlAction === "pause" ? "Pause" : "Resume"}
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">-</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{dateTime(job.sent_at ?? job.created_at)}</TableCell>
                         <TableCell>
@@ -734,8 +823,8 @@ export function NotificationHistoryPage({
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="font-heading text-lg font-semibold">{historyDetailJob.app_name}</h2>
-                      <StatusBadge status={notificationJobBadgeStatus(historyDetailJob)} />
-                      {notificationJobBadgeStatus(historyDetailJob) === "processing" ? (
+                      <StatusBadge status={historyDetailBadgeStatus ?? historyDetailJob.status} />
+                      {historyDetailBadgeStatus === "processing" || historyDetailBadgeStatus === "paused" ? (
                         <span className="text-xs text-muted-foreground">
                           {notificationJobCompletionPercent(historyDetailJob)}% complete
                         </span>
@@ -746,6 +835,25 @@ export function NotificationHistoryPage({
                       {historyDetailJob.package_name ?? historyDetailJob.bundle_id ?? historyDetailJob.topic_base}
                     </div>
                     <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">Job {historyDetailJob.id}</div>
+                    {historyDetailControlAction ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={pendingHistoryJobActionId === historyDetailJob.id}
+                        onClick={() => void updateHistoryJobProcessing(historyDetailJob, historyDetailControlAction)}
+                        className="mt-3 h-8 gap-1.5 rounded-md px-3 text-xs"
+                      >
+                        {pendingHistoryJobActionId === historyDetailJob.id ? (
+                          <Spinner className="size-3.5" />
+                        ) : historyDetailControlAction === "pause" ? (
+                          <Pause size={14} />
+                        ) : (
+                          <Play size={14} />
+                        )}
+                        {historyDetailControlAction === "pause" ? "Pause sending" : "Resume sending"}
+                      </Button>
+                    ) : null}
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4 xl:grid-cols-5">
                     <div className="rounded-md bg-muted/35 p-3">

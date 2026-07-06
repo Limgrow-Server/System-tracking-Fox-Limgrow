@@ -3,7 +3,10 @@ import "server-only";
 import { canAccessIapApp } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import { getIapAppDetail } from "@/lib/server/services/iap/iap-app.service";
-import type { IapAppDetailPageData } from "@/lib/tracking/page-data";
+import type {
+  IapAppDetailPageData,
+  IapRevenueGranularity,
+} from "@/lib/tracking/page-data";
 
 const IAP_TRANSACTION_PAGE_SIZE = 10;
 
@@ -11,6 +14,10 @@ type IapAppDetailOptions = {
   environment?: string;
   kind?: string;
   page?: number;
+  purchaseDateFrom?: string;
+  purchaseDateTo?: string;
+  revenueGranularity?: string;
+  revenueSort?: string;
   state?: string;
   trial?: string;
 };
@@ -23,6 +30,13 @@ function pageNumber(value: number | undefined) {
   return Number.isFinite(value) && value && value > 0 ? value : 1;
 }
 
+function revenueGranularity(value: string | undefined): IapRevenueGranularity {
+  const cleaned = clean(value);
+  return cleaned === "day" || cleaned === "week" || cleaned === "month"
+    ? cleaned
+    : "month";
+}
+
 export async function getIapAppDetailPageData(
   mappingId: string,
   platform: string,
@@ -33,7 +47,16 @@ export async function getIapAppDetailPageData(
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
   const environment =
-    platform === "android" ? clean(options?.environment) || "all" : "production";
+    platform === "android" ? clean(options?.environment) || "production" : "production";
+  const purchaseDateFrom = clean(options?.purchaseDateFrom);
+  const purchaseDateTo = clean(options?.purchaseDateTo);
+  const selectedRevenueGranularity = revenueGranularity(
+    options?.revenueGranularity,
+  );
+  const revenueSort =
+    clean(options?.revenueSort) === "asc" || clean(options?.revenueSort) === "desc"
+      ? clean(options?.revenueSort)
+      : "none";
   const trial = clean(options?.trial) || "all";
   const {
     appCard,
@@ -50,6 +73,10 @@ export async function getIapAppDetailPageData(
       kind,
       page,
       pageSize: IAP_TRANSACTION_PAGE_SIZE,
+      purchaseDateFrom,
+      purchaseDateTo,
+      revenueGranularity: selectedRevenueGranularity,
+      revenueSort,
       skip: (page - 1) * IAP_TRANSACTION_PAGE_SIZE,
       state,
       take: IAP_TRANSACTION_PAGE_SIZE,
@@ -62,6 +89,10 @@ export async function getIapAppDetailPageData(
     filters: {
       environment,
       kind,
+      purchaseDateFrom,
+      purchaseDateTo,
+      revenueGranularity: selectedRevenueGranularity,
+      revenueSort,
       state,
       trial,
     },

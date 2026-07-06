@@ -473,14 +473,25 @@ async function persistHydratedJob(
 
 export async function listBackgroundJobsForSession(session: ConsoleSession) {
   const recentCutoff = new Date(Date.now() - RECENT_JOB_AGE_MS);
+  const where: Prisma.BackgroundJobWhereInput = session.role === "Admin"
+    ? {
+        OR: [
+          { status: { in: ACTIVE_JOB_STATUSES } },
+          {
+            memberId: session.memberId,
+            updatedAt: { gte: recentCutoff },
+          },
+        ],
+      }
+    : {
+        memberId: session.memberId,
+        OR: [
+          { status: { in: ACTIVE_JOB_STATUSES } },
+          { updatedAt: { gte: recentCutoff } },
+        ],
+      };
   const jobs = await prisma.backgroundJob.findMany({
-    where: {
-      memberId: session.memberId,
-      OR: [
-        { status: { in: ACTIVE_JOB_STATUSES } },
-        { updatedAt: { gte: recentCutoff } },
-      ],
-    },
+    where,
     orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
     take: 30,
   });

@@ -750,9 +750,12 @@ export async function pauseNotificationQueueJob(jobId: string) {
     prisma.notificationJobBatch.updateMany({
       where: {
         jobId,
-        status: { in: ["queued", "retrying"] },
+        status: { in: ["queued", "retrying", "processing"] },
       },
       data: {
+        lockedAt: null,
+        lockedBy: null,
+        nextAttemptAt: now,
         status: "paused",
         updatedAt: now,
       },
@@ -798,7 +801,7 @@ export async function resumeNotificationQueueJob(jobId: string) {
     prisma.notificationJobBatch.updateMany({
       where: {
         jobId,
-        status: "paused",
+        status: { in: ["paused", "retrying"] },
       },
       data: {
         nextAttemptAt: now,
@@ -882,6 +885,25 @@ async function processNotificationBatch(batch: NotificationBatchRow) {
   const job = await prisma.notificationJob.findUnique({ where: { id: batch.job_id } });
   if (!job) {
     return finishBatchFailure(batch, new Error("Parent notification job was not found."));
+  }
+  if (job.status === "paused") {
+    const now = new Date();
+    await prisma.notificationJobBatch.update({
+      where: { id: batch.id },
+      data: {
+        lockedAt: null,
+        lockedBy: null,
+        nextAttemptAt: now,
+        status: "paused",
+        updatedAt: now,
+      },
+    });
+    await updateParentJobAggregate(batch.job_id);
+
+    return {
+      batchId: batch.id,
+      status: "paused",
+    };
   }
 
   try {

@@ -831,6 +831,7 @@ async function writeEvents(
     error_detail: result.error,
     event_type: result.ok ? "fcm_sent" : "fcm_failed",
     job_id: input.jobId,
+    device_token_id: result.deviceTokenId,
     metadata: {
       credentialProjectId: result.credentialProjectId,
       deviceAppId: result.deviceAppId,
@@ -875,12 +876,13 @@ async function markInvalidDeviceTokens(
 
   if (!invalidDeviceTokenIds.length) return;
 
+  const updatedAt = new Date().toISOString();
   for (const tokenIdBatch of chunks(invalidDeviceTokenIds, DB_WRITE_BATCH_SIZE)) {
     const { error } = await supabase
       .from("device_tokens")
       .update({
-        last_seen_at: new Date().toISOString(),
         status: "invalid",
+        updated_at: updatedAt,
       })
       .eq("platform", input.platform)
       .in("id", tokenIdBatch);

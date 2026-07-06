@@ -44,7 +44,7 @@ export async function handleBackgroundJobsPatch(request: Request) {
     const backgroundJob = await prisma.backgroundJob.findFirst({
       where: {
         id,
-        memberId: session.memberId,
+        ...(session.role === "Admin" ? {} : { memberId: session.memberId }),
       },
       select: {
         id: true,

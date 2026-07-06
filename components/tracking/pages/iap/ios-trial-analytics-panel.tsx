@@ -190,6 +190,7 @@ function TrialConversionAreaChart({ data }: { data: TrialConversionDatum[] }) {
           <YAxis
             allowDecimals={false}
             axisLine={false}
+            domain={[0, "dataMax"]}
             tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
             tickFormatter={(value) => compactNumber(Number(value))}
             tickLine={false}
@@ -211,7 +212,7 @@ function TrialConversionAreaChart({ data }: { data: TrialConversionDatum[] }) {
             name="Free trials"
             stroke="#2563eb"
             strokeWidth={3}
-            type="natural"
+            type="monotone"
           />
           <Area
             activeDot={{ r: 4 }}
@@ -221,7 +222,7 @@ function TrialConversionAreaChart({ data }: { data: TrialConversionDatum[] }) {
             name="Continued"
             stroke="#10b981"
             strokeWidth={3}
-            type="natural"
+            type="monotone"
           />
         </AreaChart>
       </ResponsiveContainer>

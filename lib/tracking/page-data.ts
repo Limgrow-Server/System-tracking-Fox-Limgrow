@@ -43,6 +43,7 @@ export type ConfigsPageData = {
 };
 
 export type NotificationsPageData = {
+  canManageNotifications: boolean;
   credentialSecrets: CredentialSecretMetadata[];
   notificationDeviceCounts: Record<string, number>;
   notificationScheduleStats: Record<string, NotificationCountStat>;
@@ -170,6 +171,8 @@ export type IapRevenueBucket = {
   sand: number;
 };
 
+export type IapRevenueGranularity = "day" | "week" | "month";
+
 export type IapAppMetrics = {
   activeCount: number;
   canceledCount: number;
@@ -188,6 +191,10 @@ export type IapAppDetailPageData = {
   filters: {
     environment: string;
     kind: string;
+    purchaseDateFrom: string;
+    purchaseDateTo: string;
+    revenueGranularity: IapRevenueGranularity;
+    revenueSort: string;
     state: string;
     trial: string;
   };
@@ -459,6 +466,7 @@ export type NotificationOverviewSummary = {
 
 export type NotificationCountStat = {
   active: number;
+  lastSentAt: string | null;
   lastSeenAt: string | null;
   total: number;
 };

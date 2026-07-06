@@ -63,6 +63,7 @@ export type LocaleRow = {
 
 export type SendResult = {
   deviceId: string | null;
+  deviceTokenId?: string | null;
   error: string | null;
   fcmErrorCode?: string | null;
   fcmToken?: string | null;
@@ -640,7 +641,7 @@ export function jobFailedCount(job: NotificationJob) {
   const batchDone = Math.max(0, job.batch_done_count ?? 0);
   if (
     (batchTotal > 0 && batchDone < batchTotal) ||
-    ["queued", "retrying", "processing", "materializing"].includes(job.status)
+    ["queued", "retrying", "processing", "materializing", "paused"].includes(job.status)
   ) {
     return Math.min(requested, explicitErrors);
   }
@@ -657,6 +658,8 @@ export function jobSuccessRate(job: NotificationJob) {
 }
 
 export function notificationJobBadgeStatus(job: NotificationJob) {
+  if (job.status === "paused") return "paused";
+
   const batchTotal = Math.max(0, job.batch_total_count ?? 0);
   const batchDone = Math.max(0, job.batch_done_count ?? 0);
   if (batchTotal > 0 && batchDone < batchTotal) return "processing";

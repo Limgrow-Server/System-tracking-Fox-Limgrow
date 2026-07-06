@@ -1,6 +1,6 @@
 import "server-only";
 
-import { Prisma } from "@prisma/client";
+import { Prisma, type DeviceToken as DeviceTokenModel } from "@prisma/client";
 import { unstable_cache } from "next/cache";
 
 import { prisma } from "@/lib/prisma";
@@ -83,6 +83,8 @@ type NotificationStatsScopeApp = Pick<
   | "store_account_name"
 >;
 
+type DateLike = Date | string | null | undefined;
+
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -97,7 +99,15 @@ function uniqueSearchValues(values: unknown[]) {
   return unique(values.flatMap((value) => searchTextVariants(value)));
 }
 
-function deviceTokenSummaryToTracking(device: DeviceTokenSummaryRecord): DeviceToken {
+function dateLikeToIso(value: DateLike) {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function deviceTokenSummaryToTracking(
+  device: DeviceTokenSummaryRecord,
+  lastSentAt: DateLike = null,
+): DeviceToken {
   return {
     id: device.id,
     user_id: device.userId,
@@ -113,6 +123,7 @@ function deviceTokenSummaryToTracking(device: DeviceTokenSummaryRecord): DeviceT
     locale: device.locale,
     status: device.status,
     last_seen_at: device.lastSeenAt.toISOString(),
+    last_sent_at: dateLikeToIso(lastSentAt),
     store_platform: device.storePlatform,
     store_account_name: device.storeAccountName,
     product_app_id: device.productAppId,
@@ -124,6 +135,55 @@ function deviceTokenSummaryToTracking(device: DeviceTokenSummaryRecord): DeviceT
     created_at: device.createdAt.toISOString(),
     updated_at: device.updatedAt.toISOString(),
   };
+}
+
+async function getLastSentAtForDeviceTokenIds(tokenIds: string[]) {
+  const ids = unique(tokenIds);
+  if (!ids.length) return new Map<string, Date | null>();
+
+  const rows = await prisma.notificationEvent.groupBy({
+    by: ["deviceTokenId"],
+    where: {
+      deviceTokenId: { in: ids },
+      eventType: "fcm_sent",
+      status: "sent",
+    },
+    _max: {
+      createdAt: true,
+    },
+  });
+
+  return new Map(
+    rows.flatMap((row) =>
+      row.deviceTokenId
+        ? [[row.deviceTokenId, row._max.createdAt]]
+        : [],
+    ),
+  );
+}
+
+async function mapDeviceTokenSummariesWithLastSent(
+  devices: DeviceTokenSummaryRecord[],
+) {
+  const lastSentByTokenId = await getLastSentAtForDeviceTokenIds(
+    devices.map((device) => device.id),
+  );
+
+  return devices.map((device) =>
+    deviceTokenSummaryToTracking(device, lastSentByTokenId.get(device.id) ?? null),
+  );
+}
+
+async function mapDeviceTokensWithLastSent(
+  devices: DeviceTokenModel[],
+) {
+  const lastSentByTokenId = await getLastSentAtForDeviceTokenIds(
+    devices.map((device) => device.id),
+  );
+
+  return devices.map((device) =>
+    deviceTokenToTracking(device, lastSentByTokenId.get(device.id) ?? null),
+  );
 }
 
 function deviceTokenClausesForApp(app: StoreMapping): Prisma.DeviceTokenWhereInput[] {
@@ -383,11 +443,11 @@ async function getNotificationJobBatchProgress(jobIds: string[]) {
       job_id::text,
       count(*)::int as batch_total_count,
       count(*) filter (
-        where status not in ('queued', 'retrying', 'processing')
+        where status not in ('queued', 'retrying', 'processing', 'paused')
       )::int as batch_done_count,
       coalesce(sum(cardinality(target_values)), 0)::int as batch_target_count,
       coalesce(sum(cardinality(target_values)) filter (
-        where status not in ('queued', 'retrying', 'processing')
+        where status not in ('queued', 'retrying', 'processing', 'paused')
       ), 0)::int as batch_processed_target_count
     from notification_job_batches
     where job_id::text in (${Prisma.join(jobIds)})
@@ -580,7 +640,7 @@ export async function getDeviceTokens(take = 120) {
     take,
   });
 
-  return devices.map(deviceTokenToTracking);
+  return mapDeviceTokensWithLastSent(devices);
 }
 
 export async function getDeviceTokenSummariesForDeviceIds(
@@ -597,7 +657,7 @@ export async function getDeviceTokenSummariesForDeviceIds(
     where: { deviceId: { in: ids } },
   });
 
-  return devices.map(deviceTokenSummaryToTracking);
+  return mapDeviceTokenSummariesWithLastSent(devices);
 }
 
 export async function getDeviceTokenSummaries(
@@ -611,7 +671,7 @@ export async function getDeviceTokenSummaries(
     where: options?.activeOnly ? { status: "active" } : undefined,
   });
 
-  return devices.map(deviceTokenSummaryToTracking);
+  return mapDeviceTokenSummariesWithLastSent(devices);
 }
 
 export async function getDeviceTokenSummariesForApps(
@@ -628,7 +688,7 @@ export async function getDeviceTokenSummariesForApps(
     where: deviceTokenWhereForApps(apps, options),
   });
 
-  return devices.map(deviceTokenSummaryToTracking);
+  return mapDeviceTokenSummariesWithLastSent(devices);
 }
 
 function textArraySql(values: string[]) {
@@ -678,6 +738,7 @@ function emptyCountStats(apps: NotificationStatsScopeApp[]) {
       app.id,
       {
         active: 0,
+        lastSentAt: null,
         lastSeenAt: null,
         total: 0,
       } satisfies NotificationCountStat,
@@ -739,6 +800,7 @@ async function getDeviceTokenStatsForScopeApps(apps: NotificationStatsScopeApp[]
   rows.forEach((row) => {
     stats[row.mappingId] = {
       active: Number(row.active),
+      lastSentAt: null,
       lastSeenAt: row.lastSeenAt
         ? row.lastSeenAt instanceof Date
           ? row.lastSeenAt.toISOString()
@@ -751,15 +813,74 @@ async function getDeviceTokenStatsForScopeApps(apps: NotificationStatsScopeApp[]
   return stats;
 }
 
+async function getLastSentAtForScopeApps(apps: NotificationStatsScopeApp[]) {
+  if (!apps.length) return new Map<string, string | null>();
+
+  const appRows = scheduleScopeRows(apps);
+  const rows = await prisma.$queryRaw<Array<{
+    lastSentAt: Date | string | null;
+    mappingId: string;
+  }>>(Prisma.sql`
+    with app_scope(
+      mapping_id,
+      platform,
+      app_ids,
+      package_names,
+      bundle_ids,
+      app_name,
+      store_account_name
+    ) as (
+      values ${Prisma.join(appRows)}
+    )
+    select
+      app_scope.mapping_id as "mappingId",
+      max(notification_jobs.sent_at) as "lastSentAt"
+    from app_scope
+    left join public.notification_jobs
+      on notification_jobs.platform = app_scope.platform
+      and notification_jobs.sent_at is not null
+      and (
+        notification_jobs.app_mapping_id::text = app_scope.mapping_id
+        or notification_jobs.app_id = any(app_scope.app_ids)
+        or notification_jobs.package_name = any(app_scope.package_names)
+        or notification_jobs.bundle_id = any(app_scope.bundle_ids)
+        or (
+          notification_jobs.app_name = app_scope.app_name
+          and notification_jobs.store_account_name = app_scope.store_account_name
+        )
+      )
+    group by app_scope.mapping_id
+  `);
+
+  return new Map(
+    rows.map((row) => [
+      row.mappingId,
+      dateLikeToIso(row.lastSentAt),
+    ]),
+  );
+}
+
 const getCachedDeviceTokenStatsForScopeApps = unstable_cache(
-  getDeviceTokenStatsForScopeApps,
-  ["notification-device-token-stats-v2"],
+  async (apps: NotificationStatsScopeApp[]) => {
+    const [stats, lastSentByMappingId] = await Promise.all([
+      getDeviceTokenStatsForScopeApps(apps),
+      getLastSentAtForScopeApps(apps),
+    ]);
+
+    Object.entries(stats).forEach(([mappingId, stat]) => {
+      stat.lastSentAt = lastSentByMappingId.get(mappingId) ?? null;
+    });
+
+    return stats;
+  },
+  ["notification-device-token-stats-v3"],
   {
     revalidate: 30,
     tags: [
       CACHE_TAGS.androidStoreMappings,
       CACHE_TAGS.deviceTokens,
       CACHE_TAGS.iosStoreMappings,
+      CACHE_TAGS.notificationJobs,
     ],
   },
 );
@@ -840,6 +961,7 @@ async function getNotificationScheduleStatsForScopeApps(
   rows.forEach((row) => {
     stats[row.mappingId] = {
       active: Number(row.active),
+      lastSentAt: null,
       lastSeenAt: null,
       total: Number(row.total),
     };
@@ -933,7 +1055,7 @@ export async function getDeviceTokenSummaryPageForApps(
 
   return {
     activeTotal,
-    data: devices.map(deviceTokenSummaryToTracking),
+    data: await mapDeviceTokenSummariesWithLastSent(devices),
     total,
   };
 }
@@ -970,7 +1092,7 @@ export async function getDeviceTokenPageForApps(
 
   return {
     activeTotal,
-    data: devices.map(deviceTokenToTracking),
+    data: await mapDeviceTokensWithLastSent(devices),
     total,
   };
 }

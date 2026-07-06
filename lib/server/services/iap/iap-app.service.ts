@@ -27,6 +27,7 @@ import type {
   IapAppCard,
   IapAppMetrics,
   IapAppTransaction,
+  IapRevenueGranularity,
 } from "@/lib/tracking/page-data";
 import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
 import { getIosTrialConversionAnalytics } from "@/lib/server/services/iap/ios-iap-analytics.service";
@@ -164,6 +165,10 @@ type IapTransactionPageOptions = PaginationQuery & {
   includeContext?: boolean;
   knownTotal?: number;
   kind?: string;
+  purchaseDateFrom?: string;
+  purchaseDateTo?: string;
+  revenueGranularity?: string;
+  revenueSort?: string;
   state?: string;
   trial?: string;
 };
@@ -406,6 +411,10 @@ export async function getIapAppDetail(
     includeContext?: boolean;
     includeTrialAnalytics?: boolean;
     kind?: string;
+    purchaseDateFrom?: string;
+    purchaseDateTo?: string;
+    revenueGranularity?: IapRevenueGranularity;
+    revenueSort?: string;
     state?: string;
     trial?: string;
   },
@@ -567,6 +576,7 @@ export async function getIapAppContext(
   options: {
     environment?: string;
     kind?: string;
+    revenueGranularity?: string;
     state?: string;
     trial?: string;
   },
