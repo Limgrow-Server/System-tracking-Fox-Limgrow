@@ -93,6 +93,7 @@ function metaFromResult<T>(result: ReturnType<typeof paginatedResult<T>>): Pagin
 
 function emptyNotificationsData(): NotificationsPageData {
   return {
+    canManageNotifications: false,
     credentialSecrets: [],
     deviceTokens: [],
     notificationDeviceCounts: {},
@@ -163,6 +164,7 @@ function scopedNotificationsData(
   );
 
   return {
+    canManageNotifications: session.role === "Admin",
     credentialSecrets: scopedCredentialSecrets(
       session,
       data.credentialSecrets,

@@ -8,6 +8,11 @@ import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagi
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import {
+  pauseNotificationQueueJob,
+  resumeNotificationQueueJob,
+} from "@/lib/server/services/notifications/notification-batch-queue.service";
+import { getNotificationJobById } from "@/lib/server/services/notifications/notification.service";
+import {
   getNotificationHistoryDetailPageData,
   getNotificationHistoryPageData,
   getNotificationOverviewPageData,
@@ -20,8 +25,8 @@ import { normalizeAppId } from "@/lib/tracking/identity";
 const notificationRoles = ["Admin", "Dev", "Marketing"] as const;
 const notificationManageRoles = ["Admin"] as const;
 
-function clean(value: string | null) {
-  return value?.trim() ?? "";
+function clean(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function stringArray(value: unknown) {
@@ -197,6 +202,37 @@ export async function handleAdminNotificationHistoryJobsGet(request: Request) {
     );
   } catch (error) {
     return errorJson(error, "List notification history failed.");
+  }
+}
+
+export async function handleAdminNotificationHistoryJobsPatch(request: Request) {
+  try {
+    await requireConsoleApiSession([...notificationManageRoles]);
+    const payload = await parseJsonBody<Record<string, unknown>>(request);
+    const id = clean(payload.id);
+    const action = clean(payload.action);
+
+    if (!id) throw badRequest("Notification job id is required.");
+    if (action !== "pause" && action !== "resume") {
+      throw badRequest("Notification job action must be pause or resume.");
+    }
+
+    const result = action === "pause"
+      ? await pauseNotificationQueueJob(id)
+      : await resumeNotificationQueueJob(id);
+    const job = await getNotificationJobById(id);
+    if (!job) throw notFound("Notification job was not found.");
+
+    revalidateCacheTags([
+      CACHE_TAGS.notificationJobs,
+    ]);
+
+    return okJson({
+      job,
+      result,
+    });
+  } catch (error) {
+    return errorJson(error, "Update notification history job failed.");
   }
 }
 

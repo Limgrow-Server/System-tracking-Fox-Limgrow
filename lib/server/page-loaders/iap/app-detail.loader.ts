@@ -47,7 +47,7 @@ export async function getIapAppDetailPageData(
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
   const environment =
-    platform === "android" ? clean(options?.environment) || "all" : "production";
+    platform === "android" ? clean(options?.environment) || "production" : "production";
   const purchaseDateFrom = clean(options?.purchaseDateFrom);
   const purchaseDateTo = clean(options?.purchaseDateTo);
   const selectedRevenueGranularity = revenueGranularity(

@@ -43,6 +43,7 @@ export type ConfigsPageData = {
 };
 
 export type NotificationsPageData = {
+  canManageNotifications: boolean;
   credentialSecrets: CredentialSecretMetadata[];
   notificationDeviceCounts: Record<string, number>;
   notificationScheduleStats: Record<string, NotificationCountStat>;

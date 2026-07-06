@@ -2,6 +2,7 @@ import type { NotificationsPageData } from "@/lib/tracking/page-data";
 
 export function emptyNotificationsPageData(): NotificationsPageData {
   return {
+    canManageNotifications: false,
     credentialSecrets: [],
     deviceTokens: [],
     notificationDeviceCounts: {},

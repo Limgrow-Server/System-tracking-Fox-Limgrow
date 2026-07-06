@@ -805,7 +805,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       platform: app.platform,
     });
 
-    if (!isIos && nextFilterEnvironment !== "all") {
+    if (!isIos) {
       params.set("environment", nextFilterEnvironment);
     }
     if (nextFilterState !== "all") params.set("state", nextFilterState);
@@ -935,7 +935,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       platform: app.platform,
     });
 
-    if (!isIos && filterEnvironment !== "all") {
+    if (!isIos) {
       params.set("environment", filterEnvironment);
     }
     if (filterState !== "all") params.set("state", filterState);

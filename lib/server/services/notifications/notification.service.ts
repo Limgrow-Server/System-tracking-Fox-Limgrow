@@ -443,11 +443,11 @@ async function getNotificationJobBatchProgress(jobIds: string[]) {
       job_id::text,
       count(*)::int as batch_total_count,
       count(*) filter (
-        where status not in ('queued', 'retrying', 'processing')
+        where status not in ('queued', 'retrying', 'processing', 'paused')
       )::int as batch_done_count,
       coalesce(sum(cardinality(target_values)), 0)::int as batch_target_count,
       coalesce(sum(cardinality(target_values)) filter (
-        where status not in ('queued', 'retrying', 'processing')
+        where status not in ('queued', 'retrying', 'processing', 'paused')
       ), 0)::int as batch_processed_target_count
     from notification_job_batches
     where job_id::text in (${Prisma.join(jobIds)})
