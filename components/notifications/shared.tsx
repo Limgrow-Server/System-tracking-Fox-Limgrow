@@ -63,6 +63,7 @@ export type LocaleRow = {
 
 export type SendResult = {
   deviceId: string | null;
+  deviceTokenId?: string | null;
   error: string | null;
   fcmErrorCode?: string | null;
   fcmToken?: string | null;

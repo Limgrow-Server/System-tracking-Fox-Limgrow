@@ -65,6 +65,15 @@ function tokenDetailValue(value: string | null | undefined) {
   return value?.trim() || "No data";
 }
 
+function lastSentLabel(token: DeviceToken) {
+  return token.last_sent_at ? dateTime(token.last_sent_at) : "No sends";
+}
+
+function tokenSortTimestamp(token: DeviceToken) {
+  const timestamp = new Date(token.last_sent_at ?? token.last_seen_at).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function TokenDetailItem({
   label,
   mono = false,
@@ -148,7 +157,7 @@ export function NotificationTokenDetailPage({
   const selectedTokens = useMemo(() => {
     if (!selectedApp) return [];
     return tokensForApp(selectedApp, deviceTokens)
-      .sort((first, second) => new Date(second.last_seen_at).getTime() - new Date(first.last_seen_at).getTime());
+      .sort((first, second) => tokenSortTimestamp(second) - tokenSortTimestamp(first));
   }, [deviceTokens, selectedApp]);
   const selectedTokenIdSet = useMemo(
     () => new Set(selectedTokenIds),
@@ -446,7 +455,7 @@ export function NotificationTokenDetailPage({
                     <TableHead className="w-24">Locale</TableHead>
                     <TableHead className="w-40">App version</TableHead>
                     <TableHead className="w-40">OS</TableHead>
-                    <TableHead className="w-44">Last seen</TableHead>
+                    <TableHead className="w-44">Last sent</TableHead>
                     {canManage ? <TableHead className="w-20 text-right">Action</TableHead> : null}
                   </TableRow>
                 </TableHeader>
@@ -527,7 +536,7 @@ export function NotificationTokenDetailPage({
                         <TableCell className="text-sm text-muted-foreground">
                           <div className="flex items-center gap-1.5">
                             <Clock3 size={13} />
-                            {dateTime(token.last_seen_at)}
+                            {lastSentLabel(token)}
                           </div>
                         </TableCell>
                         {canManage ? (
@@ -604,7 +613,8 @@ export function NotificationTokenDetailPage({
                     <TokenDetailItem label="Device model" value={selectedToken.device_model} />
                     <TokenDetailItem label="Manufacturer" value={selectedToken.device_manufacturer} />
                     <TokenDetailItem label="Firebase project" value={selectedToken.firebase_project_id} mono />
-                    <TokenDetailItem label="Last seen" value={dateTime(selectedToken.last_seen_at)} />
+                    <TokenDetailItem label="Last sent" value={lastSentLabel(selectedToken)} />
+                    <TokenDetailItem label="Token activity" value={dateTime(selectedToken.last_seen_at)} />
                     <TokenDetailItem label="Created" value={dateTime(selectedToken.created_at)} />
                     <TokenDetailItem label="Updated" value={dateTime(selectedToken.updated_at)} />
                   </div>

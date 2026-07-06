@@ -46,8 +46,9 @@ type NotificationEventRequest = {
 };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const LAST_SEEN_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const tokenColumns =
-  "id,device_id,platform,app_id,product_app_id,app_identifier,package_name,bundle_id,device_type,locale,status,fcm_token,token_hash";
+  "id,device_id,platform,app_id,product_app_id,app_identifier,package_name,bundle_id,device_type,locale,status,last_seen_at,fcm_token,token_hash";
 
 function requestAppId(payload: NotificationEventRequest) {
   return normalizeAppId(payload.appId) || normalizeAppId(payload.app_id);
@@ -97,6 +98,12 @@ function objectMetadata(value: unknown) {
 function uuidOrNull(value: unknown) {
   const cleaned = clean(value);
   return uuidPattern.test(cleaned) ? cleaned : null;
+}
+
+function isLastSeenStale(value: unknown, nowMs: number) {
+  const timestamp = Date.parse(clean(value));
+  return !Number.isFinite(timestamp)
+    || nowMs - timestamp >= LAST_SEEN_REFRESH_INTERVAL_MS;
 }
 
 async function findDeviceToken(
@@ -158,10 +165,21 @@ async function touchDeviceToken(
   const id = clean(device?.id);
   if (!id) return;
 
-  const updatePayload: Record<string, unknown> = {
-    last_seen_at: new Date().toISOString(),
-  };
-  if (locale) updatePayload.locale = locale;
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const updatePayload: Record<string, unknown> = {};
+
+  if (isLastSeenStale(device?.last_seen_at, nowMs)) {
+    updatePayload.last_seen_at = now;
+  }
+
+  if (locale && locale !== clean(device?.locale)) {
+    updatePayload.locale = locale;
+  }
+
+  if (!Object.keys(updatePayload).length) return;
+
+  updatePayload.updated_at = now;
 
   const { error } = await supabase.from("device_tokens").update(updatePayload).eq("id", id);
   if (error) throw error;
@@ -245,6 +263,7 @@ Deno.serve(async (request) => {
         notification_id: notificationId,
         job_id: uuidOrNull(payload.notificationJobId) || uuidOrNull(payload.notificationId),
         event_type: eventType,
+        device_token_id: clean(device?.id) || null,
         device_id: deviceId,
         platform,
         target_type: "device",
