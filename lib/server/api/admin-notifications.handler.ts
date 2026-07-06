@@ -12,14 +12,15 @@ import {
 } from "@/lib/auth/app-scope";
 import { prisma } from "@/lib/prisma";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
-import { badRequest, ApiError, forbidden } from "@/lib/server/api/errors";
+import { badRequest, forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import { enqueueNotificationDeviceJob } from "@/lib/server/services/notifications/notification-batch-queue.service";
+import { dispatchDueNotificationsOnServer } from "@/lib/server/services/notifications/notification-dispatcher.service";
+import { sendNotificationPayloadLocal } from "@/lib/server/services/notifications/local-notification-sender.service";
 import { getActiveDeviceIdsForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
-import { createClient } from "@/lib/supabase/server";
 import {
   deviceTokenToTracking,
   notificationJobToTracking,
@@ -51,12 +52,6 @@ const MESSAGE_MAX_LENGTH = 90;
 const HCM_OFFSET_MINUTES = 7 * 60;
 const SCHEDULE_DEVICE_TARGET_LIMIT = 5000;
 const notificationManageRoles = ["Admin"] as const;
-
-function supabaseFunctionUrl(functionName: string) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, "");
-  if (!supabaseUrl) throw badRequest("NEXT_PUBLIC_SUPABASE_URL is not configured.");
-  return `${supabaseUrl}/functions/v1/${functionName}`;
-}
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -363,102 +358,6 @@ async function persistFailedSendAttempt(
   return job;
 }
 
-async function currentAccessToken() {
-  const supabase = await createClient();
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.getSession();
-
-  if (error || !session?.access_token) {
-    throw badRequest("A valid Supabase Auth session is required to call Edge Functions.");
-  }
-
-  return session.access_token;
-}
-
-async function callEdgeFunction(functionName: string, body: Record<string, unknown>) {
-  const context = notificationRequestContext(body);
-  const accessToken = await currentAccessToken();
-  const response = await fetch(supabaseFunctionUrl(functionName), {
-    method: "POST",
-    headers: {
-      apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "",
-      authorization: `Bearer ${accessToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json().catch(() => ({}))) as {
-    ok?: boolean;
-    error?: string;
-    result?: unknown;
-  };
-
-  if (!response.ok || !payload.ok) {
-    logNotificationFailure("Edge Function request failed", {
-      context,
-      error: payload.error ?? null,
-      functionName,
-      responseOk: response.ok,
-      status: response.status,
-    });
-    throw new ApiError(payload.error ?? `${functionName} failed.`, response.status);
-  }
-
-  const result = payload.result as Record<string, unknown>;
-  const errorCount = Number(result?.errorCount ?? 0);
-  if (errorCount > 0) {
-    const results = Array.isArray(result?.results) ? result.results as Array<Record<string, unknown>> : [];
-    logNotificationFailure("Edge Function completed with failed notification targets", {
-      context,
-      credentialProjectId: clean(result?.projectId) || null,
-      credentialRef: clean(result?.credentialRef) || null,
-      errorCount,
-      failedTargets: results
-        .filter((item) => item && item.ok === false)
-        .slice(0, 20)
-        .map((item) => ({
-          credentialProjectId: clean(item.credentialProjectId) || null,
-          deviceAppId: clean(item.deviceAppId) || null,
-          deviceAppIdentifier: clean(item.deviceAppIdentifier) || null,
-          deviceBundleId: clean(item.deviceBundleId) || null,
-          deviceFirebaseProjectId: clean(item.deviceFirebaseProjectId) || null,
-          deviceId: clean(item.deviceId) || null,
-          devicePackageName: clean(item.devicePackageName) || null,
-          deviceProductAppId: clean(item.deviceProductAppId) || null,
-          error: clean(item.error) || null,
-          fcmErrorCode: clean(item.fcmErrorCode) || null,
-          status: Number(item.status ?? 0) || null,
-          targetType: clean(item.targetType) || null,
-          targetValue: clean(item.targetType) === "device" ? clean(item.deviceId) || "device-token-redacted" : clean(item.targetValue),
-          topicCode: clean(item.topicCode) || null,
-        })),
-      functionName,
-      sentCount: Number(result?.sentCount ?? 0),
-      targetType: clean(result?.targetType) || null,
-    });
-  }
-
-  const dispatched = Array.isArray(result?.dispatched) ? result.dispatched as Array<Record<string, unknown>> : [];
-  const failedDispatches = dispatched.filter((item) => Number(item?.errorCount ?? 0) > 0);
-  if (failedDispatches.length) {
-    logNotificationFailure("Dispatcher completed with failed schedules", {
-      context,
-      failedSchedules: failedDispatches.slice(0, 20).map((item) => ({
-        errorCount: Number(item.errorCount ?? 0),
-        scheduleId: clean(item.scheduleId) || null,
-        sentCount: Number(item.sentCount ?? 0),
-        status: clean(item.status) || null,
-      })),
-      functionName,
-      totalFailedSchedules: failedDispatches.length,
-    });
-  }
-
-  return payload.result as Record<string, unknown>;
-}
-
 export async function handleAdminNotificationSendPost(request: Request) {
   let requestPayload: Record<string, unknown> | null = null;
   let canPersistFailedAttempt = false;
@@ -503,7 +402,7 @@ export async function handleAdminNotificationSendPost(request: Request) {
       });
     }
 
-    const result = await callEdgeFunction("send-notification", payload);
+    const result = await sendNotificationPayloadLocal(payload, session.email);
     revalidateCacheTags([
       CACHE_TAGS.notificationEvents,
       CACHE_TAGS.notificationJobs,
@@ -957,7 +856,12 @@ export async function handleAdminNotificationDispatchPost(request: Request) {
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     requestPayload = payload;
     await assertNotificationAccess(session, payload);
-    const result = await callEdgeFunction("dispatch-notifications", payload);
+    const result = await dispatchDueNotificationsOnServer({
+      actorEmail: session.email,
+      limit: Number(payload.limit) || undefined,
+      now: clean(payload.now) || undefined,
+      scheduleId: clean(payload.scheduleId) || undefined,
+    });
     revalidateCacheTags([
       CACHE_TAGS.notificationEvents,
       CACHE_TAGS.notificationJobs,
