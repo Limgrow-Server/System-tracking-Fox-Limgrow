@@ -326,6 +326,7 @@ export function NotificationSendPage({
                 event_type: result.ok ? "fcm_sent" : "fcm_failed",
                 id: `local-${resultJob.id}-${index}`,
                 job_id: resultJob.id,
+                device_token_id: result.deviceTokenId ?? null,
                 metadata: {
                   fcmErrorCode: result.fcmErrorCode ?? null,
                   fcmToken: result.fcmToken ?? null,

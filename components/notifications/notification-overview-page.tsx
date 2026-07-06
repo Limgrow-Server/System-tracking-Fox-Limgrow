@@ -89,12 +89,12 @@ export function NotificationOverviewPage({
   const appRows = useMemo(() => {
     return storeMappings
       .map((app) => {
-        const tokenStat = tokenStats[app.id] ?? { active: 0, lastSeenAt: null, total: 0 };
-        const scheduleStat = scheduleStats[app.id] ?? { active: 0, lastSeenAt: null, total: 0 };
+        const tokenStat = tokenStats[app.id] ?? { active: 0, lastSentAt: null, lastSeenAt: null, total: 0 };
+        const scheduleStat = scheduleStats[app.id] ?? { active: 0, lastSentAt: null, lastSeenAt: null, total: 0 };
 
         return {
           app,
-          latestSeenAt: tokenStat.lastSeenAt,
+          latestSentAt: tokenStat.lastSentAt,
           scheduleActive: scheduleStat.active,
           scheduleTotal: scheduleStat.total,
           tokenActive: tokenStat.active,
@@ -278,7 +278,7 @@ export function NotificationOverviewPage({
                 <TableHead className="w-72">Identifier</TableHead>
                 <TableHead className="w-36">Tokens</TableHead>
                 <TableHead className="w-36">Schedules</TableHead>
-                <TableHead className="w-36">Last seen</TableHead>
+                <TableHead className="w-36">Last sent</TableHead>
                 <TableHead className="w-28">Status</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
@@ -363,7 +363,7 @@ export function NotificationOverviewPage({
                         <div className="text-xs text-muted-foreground">{numberLabel(row.scheduleActive)} active</div>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {row.latestSeenAt ? dateTime(row.latestSeenAt) : "No token"}
+                        {row.latestSentAt ? dateTime(row.latestSentAt) : "No sends"}
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={statusValue(row.app.status)} />

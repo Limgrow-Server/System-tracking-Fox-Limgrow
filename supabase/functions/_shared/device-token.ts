@@ -50,7 +50,28 @@ type DeviceTokenRequest = {
 const safeColumns =
   "id,user_id,app_id,device_id,platform,firebase_app_id,firebase_project_id,app_identifier,app_version,os_version,locale,status,last_seen_at,store_platform,store_account_name,product_app_id,package_name,bundle_id,device_type,device_model,device_manufacturer,created_at,updated_at";
 
+const LAST_SEEN_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_REGISTER_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const trackedColumns = [
+  "app_id",
+  "app_identifier",
+  "app_version",
+  "bundle_id",
+  "device_id",
+  "device_manufacturer",
+  "device_model",
+  "device_type",
+  "firebase_app_id",
+  "firebase_project_id",
+  "locale",
+  "os_version",
+  "package_name",
+  "platform",
+  "product_app_id",
+  "store_account_name",
+  "store_platform",
+  "user_id",
+];
 
 function requestAppId(payload: DeviceTokenRequest) {
   return normalizeAppId(payload.appId) || normalizeAppId(payload.app_id);
@@ -199,6 +220,55 @@ function deviceTokenError(error: unknown, expectedPlatform: MobilePlatform) {
   };
 }
 
+function comparable(value: unknown) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function isLastSeenStale(value: unknown, nowMs: number) {
+  const timestamp = Date.parse(comparable(value));
+  return !Number.isFinite(timestamp)
+    || nowMs - timestamp >= LAST_SEEN_REFRESH_INTERVAL_MS;
+}
+
+function changedColumns(
+  existing: Record<string, unknown>,
+  row: Record<string, unknown>,
+) {
+  return trackedColumns.filter((column) => comparable(existing[column]) !== comparable(row[column]));
+}
+
+function deviceTokenUpdatePayload(
+  existing: Record<string, unknown>,
+  row: Record<string, unknown>,
+  now: string,
+  nowMs: number,
+) {
+  const updatePayload: Record<string, unknown> = {};
+
+  changedColumns(existing, row).forEach((column) => {
+    updatePayload[column] = row[column];
+  });
+
+  if (comparable(existing.status) !== "active") {
+    updatePayload.status = "active";
+  }
+
+  if (isLastSeenStale(existing.last_seen_at, nowMs)) {
+    updatePayload.last_seen_at = now;
+  }
+
+  if (Object.keys(updatePayload).length) {
+    updatePayload.updated_at = now;
+  }
+
+  return updatePayload;
+}
+
+function isUniqueViolation(error: unknown) {
+  return errorString(error, "code") === "23505";
+}
+
 async function markReplacedDeviceTokens(
   supabase: SupabaseAdminClient,
   row: {
@@ -284,8 +354,8 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
 
       const tokenHash = fcmToken ? await sha256Hex(fcmToken) : null;
       const deviceId = requestedDeviceId || (tokenHash ? tokenHash.slice(0, 24) : "");
-      const now = new Date().toISOString();
-      const nowMs = Date.parse(now);
+      const nowMs = Date.now();
+      const now = new Date(nowMs).toISOString();
       const supabase = createAdminClient();
 
       if ((action === "register" || action === "heartbeat") && tokenHash) {
@@ -398,26 +468,87 @@ export function serveDeviceToken(expectedPlatform: MobilePlatform) {
         updated_at: now,
       };
 
-      const { data, error } = await supabase
+      const { data: existing, error: existingError } = await supabase
         .from("device_tokens")
-        .upsert(row, { onConflict: "token_hash" })
         .select(safeColumns)
-        .single();
+        .eq("token_hash", tokenHash)
+        .maybeSingle();
 
-      if (error) throw error;
-      const replacedTokenCount = await markReplacedDeviceTokens(
-        supabase,
-        row,
-        tokenHash,
-        expectedPlatform,
-        now
-      );
+      if (existingError) throw existingError;
+
+      let data = existing;
+      let skipped = false;
+
+      if (existing) {
+        const updatePayload = deviceTokenUpdatePayload(existing, row, now, nowMs);
+
+        if (Object.keys(updatePayload).length) {
+          const { data: updated, error } = await supabase
+            .from("device_tokens")
+            .update(updatePayload)
+            .eq("id", comparable(existing.id))
+            .select(safeColumns)
+            .single();
+
+          if (error) throw error;
+          data = updated;
+        } else {
+          skipped = true;
+        }
+      } else {
+        const { data: insertedData, error } = await supabase
+          .from("device_tokens")
+          .insert(row)
+          .select(safeColumns)
+          .single();
+
+        if (error) {
+          if (!isUniqueViolation(error)) throw error;
+
+          const { data: racedExisting, error: racedSelectError } = await supabase
+            .from("device_tokens")
+            .select(safeColumns)
+            .eq("token_hash", tokenHash)
+            .single();
+
+          if (racedSelectError) throw racedSelectError;
+
+          const updatePayload = deviceTokenUpdatePayload(racedExisting, row, now, nowMs);
+          if (Object.keys(updatePayload).length) {
+            const { data: updated, error: updateError } = await supabase
+              .from("device_tokens")
+              .update(updatePayload)
+              .eq("id", comparable(racedExisting.id))
+              .select(safeColumns)
+              .single();
+
+            if (updateError) throw updateError;
+            data = updated;
+          } else {
+            data = racedExisting;
+            skipped = true;
+          }
+        } else {
+          data = insertedData;
+        }
+      }
+
+      const replacedTokenCount = data
+        ? await markReplacedDeviceTokens(
+            supabase,
+            row,
+            tokenHash,
+            expectedPlatform,
+            now
+          )
+        : 0;
 
       return json({
         ok: true,
         action,
         platform: expectedPlatform,
         device: data,
+        skipped,
         replacedTokenCount,
         app: {
           appId,

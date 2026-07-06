@@ -13,7 +13,11 @@ import {
 } from "recharts";
 
 import { Badge } from "@/components/ui/badge";
-import type { IapRevenueBucket } from "@/lib/tracking/page-data";
+import { Button } from "@/components/ui/button";
+import type {
+  IapRevenueBucket,
+  IapRevenueGranularity,
+} from "@/lib/tracking/page-data";
 
 type RevenueBucket = {
   fullLabel: string;
@@ -24,9 +28,20 @@ type RevenueBucket = {
 
 export type IapRevenueChartProps = {
   buckets: IapRevenueBucket[];
-  revenue: number;
-  trendPct: number;
+  granularity: IapRevenueGranularity;
+  loading?: boolean;
+  onGranularityChange: (granularity: IapRevenueGranularity) => void;
 };
+
+const REVENUE_GRANULARITIES: Array<{
+  label: string;
+  rangeLabel: string;
+  value: IapRevenueGranularity;
+}> = [
+  { label: "Day", rangeLabel: "Last 14 days", value: "day" },
+  { label: "Week", rangeLabel: "Last 12 weeks", value: "week" },
+  { label: "Month", rangeLabel: "Last 12 months", value: "month" },
+];
 
 function currencyLabel(value: number) {
   return new Intl.NumberFormat("vi-VN", {
@@ -51,16 +66,25 @@ function compactCurrencyLabel(value: number) {
 function toChartBuckets(buckets: IapRevenueBucket[]) {
   return buckets.map((bucket, index): RevenueBucket => {
     const prod = Number.isFinite(bucket.prod) ? bucket.prod : 0;
-    const sand = Number.isFinite(bucket.sand) ? bucket.sand : 0;
-    const production = prod + sand;
 
     return {
       fullLabel: bucket.label,
       key: `${bucket.label}-${index}`,
       label: bucket.label,
-      production,
+      production: prod,
     };
   });
+}
+
+function trendPercentage(current: number, previous: number) {
+  if (previous > 0) return ((current - previous) / previous) * 100;
+  return current > 0 ? 100 : 0;
+}
+
+function trendPeriodLabel(granularity: IapRevenueGranularity) {
+  if (granularity === "day") return "vs previous day";
+  if (granularity === "week") return "vs previous week";
+  return "vs previous month";
 }
 
 function RevenueTooltip({
@@ -97,16 +121,35 @@ function RevenueTooltip({
 
 export function IapRevenueChart({
   buckets,
-  revenue,
-  trendPct,
+  granularity,
+  loading = false,
+  onGranularityChange,
 }: IapRevenueChartProps) {
   const chartBuckets = useMemo(() => toChartBuckets(buckets), [buckets]);
-  const displayRevenue = revenue;
-  const displayTrendPct = trendPct;
+  const selectedGranularity = REVENUE_GRANULARITIES.find(
+    (item) => item.value === granularity,
+  );
+  const displayRevenue = useMemo(
+    () => chartBuckets.reduce((total, bucket) => total + bucket.production, 0),
+    [chartBuckets],
+  );
+  const displayTrendPct = useMemo(() => {
+    const current =
+      chartBuckets.length > 0
+        ? chartBuckets[chartBuckets.length - 1].production
+        : 0;
+    const previous =
+      chartBuckets.length > 1
+        ? chartBuckets[chartBuckets.length - 2].production
+        : 0;
+
+    return trendPercentage(current, previous);
+  }, [chartBuckets]);
   const trendLabel =
     displayTrendPct >= 0
       ? `+${displayTrendPct.toFixed(0)}%`
       : `${displayTrendPct.toFixed(0)}%`;
+  const trendPeriod = trendPeriodLabel(granularity);
 
   return (
     <div className="lg:col-span-7 flex flex-col rounded-lg border bg-card text-card-foreground">
@@ -123,12 +166,27 @@ export function IapRevenueChart({
                   : "border-red-200 bg-red-50 text-red-700"
               }
             >
-              {trendLabel} last week
+              {trendLabel} {trendPeriod}
             </Badge>
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
-            Last 12 months
+            {selectedGranularity?.rangeLabel ?? "Revenue timeline"}
           </div>
+        </div>
+        <div className="inline-flex w-fit rounded-lg border bg-muted/30 p-1">
+          {REVENUE_GRANULARITIES.map((item) => (
+            <Button
+              className="h-8 px-3 text-xs"
+              disabled={loading}
+              key={item.value}
+              onClick={() => onGranularityChange(item.value)}
+              size="sm"
+              type="button"
+              variant={granularity === item.value ? "default" : "ghost"}
+            >
+              {item.label}
+            </Button>
+          ))}
         </div>
       </div>
 

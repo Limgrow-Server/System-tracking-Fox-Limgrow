@@ -25,18 +25,14 @@ model DeviceToken {
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  @@index([platform, status, lastSeenAt], map: "device_tokens_platform_status_seen_idx")
   @@index([deviceId, platform], map: "device_tokens_device_platform_idx")
   @@index([platform, appIdentifier, status], map: "device_tokens_identifier_platform_status_idx")
   @@index([platform, appIdentifier, status, lastSeenAt], map: "device_tokens_platform_identifier_status_seen_idx")
   @@index([appId, platform, status], map: "device_tokens_app_id_platform_status_idx")
-  @@index([platform, appId, status, lastSeenAt], map: "device_tokens_platform_app_id_status_seen_idx")
   @@index([productAppId, platform, status], map: "device_tokens_app_platform_status_idx")
-  @@index([platform, productAppId, status, lastSeenAt], map: "device_tokens_platform_product_app_status_seen_idx")
   @@index([packageName, status], map: "device_tokens_package_status_idx")
   @@index([platform, packageName, status, lastSeenAt], map: "device_tokens_platform_package_status_seen_idx")
   @@index([bundleId, status], map: "device_tokens_bundle_status_idx")
-  @@index([platform, bundleId, status, lastSeenAt], map: "device_tokens_platform_bundle_status_seen_idx")
   @@index([platform, storeAccountName, status], map: "device_tokens_platform_store_status_idx")
   @@map("device_tokens")
 }
@@ -166,6 +162,7 @@ model NotificationEvent {
   notificationId    String           @map("notification_id")
   jobId             String?          @map("job_id") @db.Uuid
   eventType         String           @map("event_type")
+  deviceTokenId     String?          @map("device_token_id") @db.Uuid
   deviceId          String?          @map("device_id")
   platform          String?
   targetType        String?          @map("target_type")

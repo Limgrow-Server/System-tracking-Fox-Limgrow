@@ -22,6 +22,10 @@ export default async function IapAppDetailRoutePage({
     kind?: string | string[];
     page?: string | string[];
     platform?: string | string[];
+    purchaseDateFrom?: string | string[];
+    purchaseDateTo?: string | string[];
+    revenueGranularity?: string | string[];
+    revenueSort?: string | string[];
     state?: string | string[];
     trial?: string | string[];
   }>;
@@ -40,6 +44,10 @@ export default async function IapAppDetailRoutePage({
     environment: single(query.environment),
     kind: single(query.kind),
     page: pageNumber(query.page),
+    purchaseDateFrom: single(query.purchaseDateFrom),
+    purchaseDateTo: single(query.purchaseDateTo),
+    revenueGranularity: single(query.revenueGranularity),
+    revenueSort: single(query.revenueSort),
     state: single(query.state),
     trial: single(query.trial),
   });

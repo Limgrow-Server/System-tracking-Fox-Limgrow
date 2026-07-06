@@ -225,6 +225,7 @@ export type NotificationEvent = {
   notification_id: string;
   job_id: string | null;
   event_type: string;
+  device_token_id: string | null;
   device_id: string | null;
   platform: "android" | "ios" | string | null;
   target_type: string | null;
@@ -252,6 +253,7 @@ export type DeviceToken = {
   locale: string | null;
   status: string;
   last_seen_at: string;
+  last_sent_at: string | null;
   store_platform: Platform | string | null;
   store_account_name: string | null;
   product_app_id: string | null;
