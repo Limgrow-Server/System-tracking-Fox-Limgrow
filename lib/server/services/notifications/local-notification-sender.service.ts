@@ -116,13 +116,35 @@ type FirebaseRuntimeConfig = {
 
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
-const DEVICE_TOKEN_QUERY_BATCH_SIZE = 50;
-const DB_WRITE_BATCH_SIZE = 100;
+const DEVICE_TOKEN_QUERY_BATCH_SIZE = 500;
+const DB_WRITE_BATCH_SIZE = 500;
 const DEFAULT_FCM_SEND_CONCURRENCY = 10;
 const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
+const FIREBASE_CONFIG_CACHE_TTL_MS = 5 * 60_000;
 const GOOGLE_TOKEN_CACHE_SKEW_MS = 5 * 60_000;
 
 const googleTokenCache = new Map<string, { expiresAt: number; token: string }>();
+const firebaseConfigCache = new Map<string, {
+  config: FirebaseRuntimeConfig;
+  expiresAt: number;
+}>();
+
+const deviceTargetSelect = {
+  appIdentifier: true,
+  appId: true,
+  bundleId: true,
+  deviceId: true,
+  firebaseProjectId: true,
+  fcmToken: true,
+  id: true,
+  locale: true,
+  packageName: true,
+  productAppId: true,
+} satisfies Prisma.DeviceTokenSelect;
+
+type DeviceTargetRow = Prisma.DeviceTokenGetPayload<{
+  select: typeof deviceTargetSelect;
+}>;
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -451,6 +473,39 @@ async function resolveFirebaseConfig(payload: SendNotificationRequest): Promise<
       serviceAccount,
     },
   };
+}
+
+function firebaseConfigCacheKey(payload: SendNotificationRequest) {
+  const platform = inferPlatform(payload);
+
+  return JSON.stringify([
+    platform,
+    clean(payload.credentialRef),
+    clean(payload.storeProfileId),
+    clean(payload.storeAccountName),
+    normalizeAppId(payload.appId),
+    normalizeAppId(payload.productAppId),
+    normalizePackageName(payload.packageName),
+    normalizeBundleId(payload.bundleId),
+    clean(payload.appName),
+  ]);
+}
+
+async function resolveCachedFirebaseConfig(payload: SendNotificationRequest) {
+  const cacheKey = firebaseConfigCacheKey(payload);
+  const cached = firebaseConfigCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.config;
+  }
+
+  const config = await resolveFirebaseConfig(payload);
+  firebaseConfigCache.set(cacheKey, {
+    config,
+    expiresAt: Date.now() + FIREBASE_CONFIG_CACHE_TTL_MS,
+  });
+
+  return config;
 }
 
 function base64Url(input: string | Buffer) {
@@ -794,10 +849,11 @@ async function getDeviceTargets(input: {
 }) {
   if (!input.deviceIds.length && !input.deviceTokenIds.length) return [];
 
-  const rows = [];
+  const rows: DeviceTargetRow[] = [];
   if (input.deviceTokenIds.length) {
     for (const tokenIdBatch of chunks(input.deviceTokenIds, DEVICE_TOKEN_QUERY_BATCH_SIZE)) {
       rows.push(...await prisma.deviceToken.findMany({
+        select: deviceTargetSelect,
         where: {
           id: { in: tokenIdBatch },
           platform: input.platform,
@@ -808,6 +864,7 @@ async function getDeviceTargets(input: {
   } else {
     for (const deviceIdBatch of chunks(input.deviceIds, DEVICE_TOKEN_QUERY_BATCH_SIZE)) {
       rows.push(...await prisma.deviceToken.findMany({
+        select: deviceTargetSelect,
         where: {
           deviceId: { in: deviceIdBatch },
           platform: input.platform,
@@ -928,7 +985,6 @@ async function writeEvents(input: {
       deviceProductAppId: result.deviceProductAppId,
       deviceTokenId: result.deviceTokenId,
       fcmErrorCode: result.fcmErrorCode,
-      fcmToken: result.fcmToken,
       invalidToken: result.invalidToken,
       topicCode: result.topicCode,
     } as Prisma.InputJsonValue,
@@ -1103,7 +1159,7 @@ export async function sendNotificationPayloadLocal(
   const jobId = queuedJobId || createdJob?.id || "";
 
   try {
-    const config = await resolveFirebaseConfig(payload);
+    const config = await resolveCachedFirebaseConfig(payload);
     const serviceAccount = config.credential.serviceAccount;
     const projectId = stringValue(serviceAccount.project_id) ?? config.credential.projectId;
     const clientEmail = stringValue(serviceAccount.client_email) ?? config.credential.clientEmail;
