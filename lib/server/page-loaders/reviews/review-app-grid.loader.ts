@@ -1,8 +1,9 @@
 import "server-only";
 
-import { canAccessScopedRecord } from "@/lib/auth/app-scope";
+import { canAccessScopedRecord, hasAllAppAccess } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import {
+  getPaginatedReviewAppCards,
   getReviewAppCardsPage,
 } from "@/lib/server/services/reviews/review.service";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
@@ -26,13 +27,20 @@ export async function getReviewAppGridPageData(
     skip: options?.skip ?? 0,
     take: options?.take ?? 12,
   };
-  const page = await getReviewAppCardsPage({
-    ...pagination,
-    canAccess: (app) => canAccessScopedRecord(session, app),
-    platform,
-    search: options?.search,
-    storeProfileId: options?.storeProfileId,
-  });
+  const page = hasAllAppAccess(session)
+    ? await getPaginatedReviewAppCards({
+        ...pagination,
+        platform,
+        search: options?.search,
+        storeProfileId: options?.storeProfileId,
+      })
+    : await getReviewAppCardsPage({
+        ...pagination,
+        canAccess: (app) => canAccessScopedRecord(session, app),
+        platform,
+        search: options?.search,
+        storeProfileId: options?.storeProfileId,
+      });
 
   return {
     appPagination: page.appPagination,

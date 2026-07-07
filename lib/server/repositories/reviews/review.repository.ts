@@ -1,16 +1,67 @@
 import "server-only";
 
-import type {
+import {
   Prisma,
-  ReviewFetchRunStatus,
-  ReviewFetchScheduleStatus,
-  ReviewReplyTemplate,
+  type ReviewFetchRunStatus,
+  type ReviewFetchScheduleStatus,
+  type ReviewReplyTemplate,
 } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 import { firstAppleAppStoreId } from "@/lib/tracking/identity";
 
 const REVIEW_FETCH_GLOBAL_SCOPE = "global";
+
+export type ReviewAppScopeRecord = {
+  appName: string;
+  identifier: string;
+  mappingId: string;
+  platform: "android" | "ios";
+  storeAvatarUrl: string | null;
+  storeContactEmail: string | null;
+  storeLink: string | null;
+  storeAccountName: string;
+  storeProfileId: string;
+  storeSupportPhone: string | null;
+  storeWebsiteUrl: string | null;
+};
+
+export type ReviewAppScopePageOptions = {
+  platform?: string;
+  search?: string;
+  skip: number;
+  storeProfileId?: string;
+  take: number;
+};
+
+type CountRow = {
+  total: number | bigint | null;
+};
+
+type ReviewStoreOptionRow = {
+  id: string | null;
+  name: string | null;
+};
+
+export type ReviewStoreScopeRecord = {
+  appCount: number | bigint | null;
+  contactEmail: string | null;
+  platform: "android" | "ios";
+  storeAccountName: string;
+  storeAvatarUrl: string | null;
+  storeLink: string | null;
+  storeProfileId: string;
+  supportPhone: string | null;
+  websiteUrl: string | null;
+};
+
+export type ReviewStoreScopePageOptions = {
+  platform?: string;
+  search?: string;
+  skip: number;
+  take: number;
+};
 
 type ReviewFetchScheduleUpsertInput = {
   createdBy: string;
@@ -39,6 +90,227 @@ export type ReviewReplyTemplateTargetInput =
       platform: "android" | "ios";
       storeMappingId: string;
     };
+
+function activeStatusSql() {
+  return Prisma.sql`'active'::mapping_status`;
+}
+
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
+}
+
+function searchSql(search: string | undefined, columns: Prisma.Sql[]) {
+  const variants = searchTextVariants(search?.trim() ?? "");
+  if (!variants.length) return Prisma.empty;
+
+  const conditions = variants.flatMap((variant) => {
+    const pattern = `%${variant}%`;
+    return columns.map((column) => Prisma.sql`${column} ILIKE ${pattern}`);
+  });
+
+  return Prisma.sql`AND (${Prisma.join(conditions, " OR ")})`;
+}
+
+function storeProfileSql(storeProfileId: string | undefined) {
+  const normalized = storeProfileId?.trim();
+  if (!normalized || normalized === "all") return Prisma.empty;
+  if (!isUuid(normalized)) return Prisma.sql`AND false`;
+
+  return Prisma.sql`AND mapping."store_profile_id" = ${normalized}::uuid`;
+}
+
+function androidReviewAppScopeSql(options?: Pick<ReviewAppScopePageOptions, "search" | "storeProfileId">) {
+  return Prisma.sql`
+    SELECT
+      mapping."app_name" AS "appName",
+      mapping."package_name" AS "identifier",
+      mapping."id"::text AS "mappingId",
+      'android' AS "platform",
+      profile."avatar_url" AS "storeAvatarUrl",
+      profile."contact_email" AS "storeContactEmail",
+      profile."link_store" AS "storeLink",
+      coalesce(profile."store_account_name", mapping."store_account_name") AS "storeAccountName",
+      mapping."store_profile_id"::text AS "storeProfileId",
+      profile."support_phone" AS "storeSupportPhone",
+      profile."website_url" AS "storeWebsiteUrl"
+    FROM "android_store_mappings" mapping
+    LEFT JOIN "android_store_profiles" profile
+      ON profile."id" = mapping."store_profile_id"
+    WHERE mapping."status" = ${activeStatusSql()}
+      ${storeProfileSql(options?.storeProfileId)}
+      ${searchSql(options?.search, [
+        Prisma.sql`mapping."app_name"`,
+        Prisma.sql`mapping."app_id"`,
+        Prisma.sql`mapping."package_name"`,
+        Prisma.sql`mapping."store_account_name"`,
+        Prisma.sql`profile."store_account_name"`,
+      ])}
+  `;
+}
+
+function iosReviewAppScopeSql(options?: Pick<ReviewAppScopePageOptions, "search" | "storeProfileId">) {
+  return Prisma.sql`
+    SELECT
+      mapping."app_name" AS "appName",
+      mapping."bundle_id" AS "identifier",
+      mapping."id"::text AS "mappingId",
+      'ios' AS "platform",
+      profile."avatar_url" AS "storeAvatarUrl",
+      store_target."contact_email" AS "storeContactEmail",
+      profile."link_store" AS "storeLink",
+      coalesce(profile."store_account_name", mapping."store_account_name") AS "storeAccountName",
+      mapping."store_profile_id"::text AS "storeProfileId",
+      store_target."support_phone" AS "storeSupportPhone",
+      store_target."website_url" AS "storeWebsiteUrl"
+    FROM "ios_store_mappings" mapping
+    LEFT JOIN "ios_store_profiles" profile
+      ON profile."id" = mapping."store_profile_id"
+    LEFT JOIN "review_store_targets" store_target
+      ON store_target."ios_store_profile_id" = mapping."store_profile_id"
+    WHERE mapping."status" = ${activeStatusSql()}
+      ${storeProfileSql(options?.storeProfileId)}
+      ${searchSql(options?.search, [
+        Prisma.sql`mapping."app_name"`,
+        Prisma.sql`mapping."app_id"`,
+        Prisma.sql`mapping."apple_app_id"`,
+        Prisma.sql`mapping."bundle_id"`,
+        Prisma.sql`mapping."store_account_name"`,
+        Prisma.sql`profile."store_account_name"`,
+      ])}
+  `;
+}
+
+function reviewAppScopeBaseSql(options?: ReviewAppScopePageOptions) {
+  if (options?.platform === "android") {
+    return androidReviewAppScopeSql(options);
+  }
+
+  if (options?.platform === "ios") {
+    return iosReviewAppScopeSql(options);
+  }
+
+  return Prisma.sql`
+    ${androidReviewAppScopeSql(options)}
+    UNION ALL
+    ${iosReviewAppScopeSql(options)}
+  `;
+}
+
+export async function getActiveReviewAppScopesPage(
+  options: ReviewAppScopePageOptions,
+) {
+  const baseSql = reviewAppScopeBaseSql(options);
+  const [rows, countRows] = await Promise.all([
+    prisma.$queryRaw<ReviewAppScopeRecord[]>(Prisma.sql`
+      SELECT *
+      FROM (${baseSql}) apps
+      ORDER BY "appName" ASC, "identifier" ASC, "mappingId" ASC
+      LIMIT ${options.take}
+      OFFSET ${options.skip}
+    `),
+    prisma.$queryRaw<CountRow[]>(Prisma.sql`
+      SELECT COUNT(*)::int AS total
+      FROM (${baseSql}) apps
+    `),
+  ]);
+
+  return {
+    scopes: rows,
+    total: Number(countRows[0]?.total ?? 0),
+  };
+}
+
+export async function getActiveReviewStoreOptions(options?: {
+  platform?: string;
+}) {
+  const baseSql = reviewAppScopeBaseSql({ platform: options?.platform, skip: 0, take: 1 });
+  const rows = await prisma.$queryRaw<ReviewStoreOptionRow[]>(Prisma.sql`
+    SELECT DISTINCT "storeProfileId" AS id, "storeAccountName" AS name
+    FROM (${baseSql}) apps
+    WHERE "storeProfileId" IS NOT NULL
+      AND "storeAccountName" IS NOT NULL
+      AND "storeAccountName" <> ''
+    ORDER BY "storeAccountName" ASC
+  `);
+
+  return rows
+    .map((row) => ({
+      id: row.id?.trim() ?? "",
+      name: row.name?.trim() ?? "",
+    }))
+    .filter((row) => row.id && row.name);
+}
+
+export async function getActiveReviewStoreScopesPage(
+  options: ReviewStoreScopePageOptions,
+) {
+  const baseSql = reviewAppScopeBaseSql({
+    platform: options.platform,
+    skip: 0,
+    take: 1,
+  });
+  const storeSearchSql = searchSql(options.search, [
+    Prisma.sql`"storeAccountName"`,
+  ]);
+  const [rows, countRows] = await Promise.all([
+    prisma.$queryRaw<ReviewStoreScopeRecord[]>(Prisma.sql`
+      SELECT
+        COUNT(*)::int AS "appCount",
+        max("storeContactEmail") AS "contactEmail",
+        min("platform") AS "platform",
+        "storeAccountName",
+        max("storeAvatarUrl") AS "storeAvatarUrl",
+        max("storeLink") AS "storeLink",
+        "storeProfileId",
+        max("storeSupportPhone") AS "supportPhone",
+        max("storeWebsiteUrl") AS "websiteUrl"
+      FROM (${baseSql}) apps
+      WHERE "storeProfileId" IS NOT NULL
+        AND "storeAccountName" IS NOT NULL
+        AND "storeAccountName" <> ''
+        ${storeSearchSql}
+      GROUP BY "storeProfileId", "storeAccountName"
+      ORDER BY "storeAccountName" ASC, "storeProfileId" ASC
+      LIMIT ${options.take}
+      OFFSET ${options.skip}
+    `),
+    prisma.$queryRaw<CountRow[]>(Prisma.sql`
+      SELECT COUNT(*)::int AS total
+      FROM (
+        SELECT 1
+        FROM (${baseSql}) apps
+        WHERE "storeProfileId" IS NOT NULL
+          AND "storeAccountName" IS NOT NULL
+          AND "storeAccountName" <> ''
+          ${storeSearchSql}
+        GROUP BY "storeProfileId", "storeAccountName"
+      ) stores
+    `),
+  ]);
+
+  return {
+    stores: rows,
+    total: Number(countRows[0]?.total ?? 0),
+  };
+}
+
+export async function getActiveReviewAppScopesForStoreProfiles(
+  storeProfileIds: string[],
+) {
+  const uniqueStoreIds = Array.from(new Set(storeProfileIds)).filter(isUuid);
+  if (!uniqueStoreIds.length) return Promise.resolve([]);
+
+  const baseSql = reviewAppScopeBaseSql({ skip: 0, take: 1 });
+
+  return prisma.$queryRaw<ReviewAppScopeRecord[]>(Prisma.sql`
+    SELECT *
+    FROM (${baseSql}) apps
+    WHERE "storeProfileId" IN (${Prisma.join(uniqueStoreIds)})
+    ORDER BY "appName" ASC, "identifier" ASC, "mappingId" ASC
+  `);
+}
 
 async function ensureReviewSyncState(
   tx: Prisma.TransactionClient,

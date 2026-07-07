@@ -164,7 +164,7 @@ export function ReviewFetchSchedulePage({
   const [storeOptions, setStoreOptions] = useState(data.storeOptions);
   const [searchQuery, setSearchQuery] = useState(data.filters.search);
   const [selectedStore, setSelectedStore] = useState(
-    data.filters.storeProfileId,
+    data.filters.storeProfileId || "all",
   );
   const [openStoreCombobox, setOpenStoreCombobox] = useState(false);
   const [pendingAction, setPendingAction] = useState<ScheduleAction | null>(null);
@@ -174,6 +174,7 @@ export function ReviewFetchSchedulePage({
   );
   const [fullScanPending, setFullScanPending] = useState(false);
   const [loadingApps, setLoadingApps] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [intervalHours, setIntervalHours] = useState(
     normalizedIntervalHours(data.schedule?.intervalHours),
   );
@@ -206,9 +207,12 @@ export function ReviewFetchSchedulePage({
     });
 
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
-    if (nextStore !== "all") params.set("storeProfileId", nextStore);
+    if (nextStore && nextStore !== "all") {
+      params.set("storeProfileId", nextStore);
+    }
 
     setLoadingApps(true);
+    setLoadingPage(page);
 
     try {
       const response = await fetch(
@@ -238,6 +242,7 @@ export function ReviewFetchSchedulePage({
       );
     } finally {
       setLoadingApps(false);
+      setLoadingPage(null);
     }
   }
 
@@ -733,6 +738,7 @@ export function ReviewFetchSchedulePage({
             </Table>
           </div>
           <TablePaginationFooter
+            loadingPage={loadingPage}
             onPageChange={(page) => void loadScheduleAppsPage(page)}
             page={appPagination.page}
             shown={apps.length}

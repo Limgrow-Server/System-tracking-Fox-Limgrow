@@ -3,12 +3,18 @@ import "server-only";
 import {
   canAccessReviewApp,
   canAccessScopedRecord,
+  hasAllAppAccess,
 } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import { valuesMatchSearch } from "@/lib/search";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import {
-  getReplyConfigPageData,
+  getActiveReviewAppScopesForStoreProfiles,
+  getActiveReviewStoreScopesPage,
+  getReviewReplyTemplates,
+  type ReviewStoreScopeRecord,
+} from "@/lib/server/repositories/reviews/review.repository";
+import {
   getReviewAppCardScopes,
   hydrateReviewAppCards,
   type ReviewAppCardScope,
@@ -25,6 +31,8 @@ type ReplyConfigRows = {
   apps: ReviewAppCard[];
   templatesByMappingId: Record<string, ReviewReplyTemplateDto[]>;
 };
+
+const RATINGS = [5, 4, 3, 2, 1] as const;
 
 type ReplyStoreScopeSummary = {
   apps: ReviewAppCardScope[];
@@ -108,13 +116,17 @@ function buildStoreScopeSummaries(scopes: ReviewAppCardScope[]) {
 
 function filterReplyStoreScopes(
   stores: ReplyStoreScopeSummary[],
+  platform?: string,
   search?: string,
 ) {
-  return stores.filter((store) =>
-    valuesMatchSearch([
-      store.storeAccountName,
-      ...store.apps.flatMap((app) => [app.appName, app.identifier]),
-    ], search),
+  const normalizedPlatform =
+    platform === "android" || platform === "ios" ? platform : "all";
+
+  return stores.filter(
+    (store) =>
+      (normalizedPlatform === "all" ||
+        store.platform === normalizedPlatform) &&
+      valuesMatchSearch([store.storeAccountName], search),
   );
 }
 
@@ -124,26 +136,77 @@ function filterReplyApps(apps: ReviewAppCard[], search?: string) {
   );
 }
 
-function scopedReplyConfigData(
-  data: Awaited<ReturnType<typeof getReplyConfigPageData>>,
-  session: ConsoleSession,
-): ReplyConfigRows {
-  const apps = data.apps.filter((app) => canAccessReviewApp(session, app));
-  const appIds = new Set(apps.map((app) => app.mappingId));
-
+function fallbackStoreSummary(store: ReviewStoreScopeRecord): ReplyStoreSummary {
   return {
-    apps,
-    templatesByMappingId: Object.fromEntries(
-      Object.entries(data.templatesByMappingId).filter(([mappingId]) =>
-        appIds.has(mappingId),
-      ),
-    ),
+    activeTemplateCount: 0,
+    appCount: Number(store.appCount ?? 0),
+    apps: [],
+    contactEmail: store.contactEmail,
+    lastFetchedAt: null,
+    pendingReplyCount: 0,
+    platform: store.platform === "ios" ? "ios" : "android",
+    reviewCount: 0,
+    storeAccountName: store.storeAccountName,
+    storeAvatarUrl: store.storeAvatarUrl,
+    storeLink: store.storeLink,
+    storeProfileId: store.storeProfileId,
+    supportPhone: store.supportPhone,
+    websiteUrl: store.websiteUrl,
   };
+}
+
+function defaultTemplates(storeMappingId: string): ReviewReplyTemplateDto[] {
+  return RATINGS.map((rating) => ({
+    id: null,
+    isActive: false,
+    rating,
+    replyText: "",
+    storeMappingId,
+    updatedAt: null,
+    updatedBy: null,
+  }));
+}
+
+async function getTemplatesByMappingId(apps: ReviewAppCard[]) {
+  const templates = await getReviewReplyTemplates(
+    apps.map((app) => ({
+      platform: app.platform,
+      storeMappingId: app.mappingId,
+    })),
+  );
+  const templatesByMappingId: Record<string, ReviewReplyTemplateDto[]> = {};
+
+  for (const app of apps) {
+    templatesByMappingId[app.mappingId] = defaultTemplates(app.mappingId).map(
+      (fallback) => {
+        const template = templates.find(
+          (item) =>
+            item.storeMappingId === app.mappingId &&
+            item.rating === fallback.rating,
+        );
+
+        return template
+          ? {
+              id: template.id,
+              isActive: template.isActive,
+              rating: template.rating,
+              replyText: template.replyText,
+              storeMappingId: app.mappingId,
+              updatedAt: template.updatedAt.toISOString(),
+              updatedBy: template.updatedBy,
+            }
+          : fallback;
+      },
+    );
+  }
+
+  return templatesByMappingId;
 }
 
 export async function getReplyStoreListPageDataLoader(
   session: ConsoleSession,
   options?: Partial<PaginationQuery> & {
+    platform?: string;
     search?: string;
   },
 ): Promise<ReplyStoreListPageData> {
@@ -153,11 +216,56 @@ export async function getReplyStoreListPageDataLoader(
     skip: options?.skip ?? 0,
     take: options?.take ?? 10,
   };
+
+  if (hasAllAppAccess(session)) {
+    const storePage = await getActiveReviewStoreScopesPage({
+      platform: options?.platform,
+      search: options?.search,
+      skip: pagination.skip,
+      take: pagination.take,
+    });
+    const pageStoreIds = storePage.stores.map((store) => store.storeProfileId);
+    const pageApps = await hydrateReviewAppCards(
+      await getActiveReviewAppScopesForStoreProfiles(pageStoreIds),
+    );
+    const summaries = buildStoreSummaries({
+      apps: pageApps,
+      templatesByMappingId: {},
+    });
+    const summaryByStoreId = new Map(
+      summaries.map((store) => [store.storeProfileId, store]),
+    );
+    const stores = storePage.stores.map(
+      (store) =>
+        summaryByStoreId.get(store.storeProfileId) ??
+        fallbackStoreSummary(store),
+    );
+
+    return {
+      filters: {
+        platform:
+          options?.platform === "android" || options?.platform === "ios"
+            ? options.platform
+            : "all",
+        search: options?.search ?? "",
+      },
+      storePagination: {
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+        total: storePage.total,
+        totalPages: Math.max(1, Math.ceil(storePage.total / pagination.pageSize)),
+      },
+      stores,
+    };
+  }
+
   const scopes = await getReviewAppCardScopes({
     canAccess: (app) => canAccessScopedRecord(session, app),
+    platform: options?.platform,
   });
   const storeScopes = filterReplyStoreScopes(
     buildStoreScopeSummaries(scopes),
+    options?.platform,
     options?.search,
   );
   const storePage = paginatedResult(
@@ -185,6 +293,10 @@ export async function getReplyStoreListPageDataLoader(
 
   return {
     filters: {
+      platform:
+        options?.platform === "android" || options?.platform === "ios"
+          ? options.platform
+          : "all",
       search: options?.search ?? "",
     },
     storePagination: {
@@ -210,21 +322,32 @@ export async function getReplyConfigPageDataLoader(
     skip: options?.skip ?? 0,
     take: options?.take ?? 10,
   };
-  const data = await getReplyConfigPageData();
-  const scopedData = scopedReplyConfigData(data, session);
-  const stores = buildStoreSummaries(scopedData);
-  const store = stores.find((item) => item.storeProfileId === storeProfileId);
+  const scopes = await getReviewAppCardScopes({
+    canAccess: (app) => canAccessScopedRecord(session, app),
+  });
+  const storeScopes = scopes.filter(
+    (app) => app.storeProfileId === storeProfileId,
+  );
+
+  if (!storeScopes.length) return null;
+
+  const storeApps = (await hydrateReviewAppCards(storeScopes)).filter((app) =>
+    canAccessReviewApp(session, app),
+  );
+  const store = buildStoreSummaries({
+    apps: storeApps,
+    templatesByMappingId: {},
+  }).find((item) => item.storeProfileId === storeProfileId);
+
   if (!store) return null;
 
-  const appIds = new Set(store.apps.map((app) => app.mappingId));
-  const storeApps = scopedData.apps.filter((app) => appIds.has(app.mappingId));
   const filteredApps = filterReplyApps(storeApps, options?.search);
   const appPage = paginatedResult(
     filteredApps.slice(pagination.skip, pagination.skip + pagination.take),
     filteredApps.length,
     pagination,
   );
-  const pageAppIds = new Set(appPage.data.map((app) => app.mappingId));
+  const templatesByMappingId = await getTemplatesByMappingId(appPage.data);
 
   return {
     appPagination: {
@@ -238,10 +361,6 @@ export async function getReplyConfigPageDataLoader(
       search: options?.search ?? "",
     },
     store,
-    templatesByMappingId: Object.fromEntries(
-      Object.entries(scopedData.templatesByMappingId).filter(([mappingId]) =>
-        pageAppIds.has(mappingId),
-      ),
-    ),
+    templatesByMappingId,
   };
 }

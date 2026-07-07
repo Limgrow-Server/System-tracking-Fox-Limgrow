@@ -43,7 +43,10 @@ model AndroidStoreMapping {
   @@unique([packageName], map: "android_store_mappings_package_key")
   @@index([appId, status], map: "android_store_mappings_app_id_status_idx")
   @@index([packageName, status], map: "android_store_mappings_package_status_idx")
+  @@index([status, appName, packageName, id], map: "android_store_mappings_status_app_name_package_idx")
+  @@index([storeProfileId, updatedAt(sort: Desc)], map: "android_store_mappings_profile_updated_idx")
   @@index([storeAccountName], map: "android_store_mappings_store_name_idx")
+  @@index([updatedAt(sort: Desc)], map: "android_store_mappings_updated_idx")
   @@map("android_store_mappings")
 }
 
@@ -76,7 +79,7 @@ model AndroidStoreReview {
 
   @@unique([storeMappingId, reviewId], map: "android_store_reviews_mapping_review_key")
   @@index([reviewAppTargetId], map: "android_store_reviews_app_target_idx")
-  @@index([storeMappingId, userCommentUpdatedAt], map: "android_store_reviews_mapping_user_updated_idx")
+  @@index([storeMappingId, userCommentUpdatedAt(sort: Desc), fetchedAt(sort: Desc)], map: "android_store_reviews_mapping_user_updated_idx")
   @@index([storeMappingId, rating], map: "android_store_reviews_mapping_rating_idx")
   @@index([developerReplyUpdatedAt], map: "android_store_reviews_reply_updated_idx")
   @@map("android_store_reviews")
@@ -210,6 +213,7 @@ model AndroidCredential {
   @@unique([storeProfileId], map: "android_credentials_profile_key")
   @@index([credentialRef, status], map: "android_credentials_lookup_idx")
   @@index([storeAccountName, status], map: "android_credentials_store_status_idx")
+  @@index([updatedAt(sort: Desc)], map: "android_credentials_updated_idx")
   @@index([vaultSecretId], map: "android_credentials_vault_secret_id_idx")
   @@index([vaultSecretName], map: "android_credentials_vault_secret_name_idx")
   @@map("android_credentials")

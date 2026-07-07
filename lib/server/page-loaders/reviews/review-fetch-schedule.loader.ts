@@ -1,10 +1,11 @@
 import "server-only";
 
-import { canAccessScopedRecord } from "@/lib/auth/app-scope";
+import { canAccessScopedRecord, hasAllAppAccess } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import type { PaginationQuery } from "@/lib/server/api/pagination";
 import { getGlobalReviewFetchSchedule } from "@/lib/server/repositories/reviews/review.repository";
 import {
+  getPaginatedReviewAppCards,
   getReviewAppCardsPage,
 } from "@/lib/server/services/reviews/review.service";
 import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/review-fetch-schedule.service";
@@ -49,12 +50,18 @@ export async function getReviewFetchSchedulePageData(
     take: options?.take ?? 10,
   };
   const [page, schedule] = await Promise.all([
-    getReviewAppCardsPage({
-      ...pagination,
-      canAccess: (app) => canAccessScopedRecord(session, app),
-      search: options?.search,
-      storeProfileId: options?.storeProfileId,
-    }),
+    hasAllAppAccess(session)
+      ? getPaginatedReviewAppCards({
+          ...pagination,
+          search: options?.search,
+          storeProfileId: options?.storeProfileId,
+        })
+      : getReviewAppCardsPage({
+          ...pagination,
+          canAccess: (app) => canAccessScopedRecord(session, app),
+          search: options?.search,
+          storeProfileId: options?.storeProfileId,
+        }),
     getGlobalReviewFetchSchedule().then(reviewFetchScheduleDto),
   ]);
   return {
