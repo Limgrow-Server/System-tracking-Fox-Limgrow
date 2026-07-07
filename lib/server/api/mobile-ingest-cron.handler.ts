@@ -33,15 +33,23 @@ function limitFromRequest(request: Request) {
   return Number.isFinite(limit) && limit >= 0 ? limit : undefined;
 }
 
+function includeStatsFromRequest(request: Request) {
+  const url = new URL(request.url);
+  const value = clean(url.searchParams.get("stats")).toLowerCase();
+  return ["1", "true", "yes"].includes(value);
+}
+
 export async function handleMobileIngestCronGet(request: Request) {
   try {
     assertCronSecret(request);
+
+    const includeStats = includeStatsFromRequest(request);
 
     return okJson({
       result: await runMobileIngestQueue({
         limit: limitFromRequest(request),
       }),
-      stats: await getMobileIngestQueueStats(),
+      ...(includeStats ? { stats: await getMobileIngestQueueStats() } : {}),
     });
   } catch (error) {
     return errorJson(error, "Mobile ingest worker failed.");
