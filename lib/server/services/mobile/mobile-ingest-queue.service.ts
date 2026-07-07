@@ -42,9 +42,11 @@ const DEFAULT_MOBILE_INGEST_CONCURRENCY = 1;
 const DEFAULT_MOBILE_INGEST_LOCK_TTL_MS = 10 * 60_000;
 const DEFAULT_MOBILE_INGEST_MAX_ATTEMPTS = 5;
 const DEFAULT_MOBILE_INGEST_SPOOL_DRAIN_LIMIT = 50;
+const DEFAULT_MOBILE_INGEST_DEDUPE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 type EnqueuedMobileIngestEvent = {
   id: string;
+  status?: string;
   spooled?: boolean;
 };
 
@@ -77,6 +79,15 @@ function mobileIngestConcurrency() {
 
 function mobileIngestMaxAttempts() {
   return intEnv("MOBILE_INGEST_MAX_ATTEMPTS", DEFAULT_MOBILE_INGEST_MAX_ATTEMPTS, 1, 20);
+}
+
+function mobileIngestDedupeCooldownMs() {
+  return intEnv(
+    "MOBILE_INGEST_DEDUPE_COOLDOWN_MS",
+    DEFAULT_MOBILE_INGEST_DEDUPE_COOLDOWN_MS,
+    60_000,
+    24 * 60 * 60_000,
+  );
 }
 
 function mobileIngestLockTtlMs() {
@@ -219,36 +230,102 @@ async function enqueueMobileIngestEvent(
   input: MobileIngestQueueInput,
   options: { allowSpool?: boolean } = {},
 ): Promise<EnqueuedMobileIngestEvent> {
-  const now = new Date();
+  const payloadJson = JSON.stringify(input.payload);
+  const dedupeCooldownMs = mobileIngestDedupeCooldownMs();
+  const maxAttempts = mobileIngestMaxAttempts();
 
   try {
-    return await mobileIngestPrisma.mobileIngestEvent.upsert({
-      create: {
-        action: input.action || null,
-        dedupeKey: input.dedupeKey,
-        endpoint: input.endpoint,
-        maxAttempts: mobileIngestMaxAttempts(),
-        payload: input.payload,
-        platform: input.platform || null,
-        status: "queued",
-      },
-      update: {
-        action: input.action || null,
-        attemptCount: 0,
-        lastError: null,
-        lockedAt: null,
-        lockedBy: null,
-        maxAttempts: mobileIngestMaxAttempts(),
-        nextAttemptAt: now,
-        payload: input.payload,
-        platform: input.platform || null,
-        processedAt: null,
-        resultPayload: {},
-        status: "queued",
-        updatedAt: now,
-      },
-      where: { dedupeKey: input.dedupeKey },
-    });
+    const [event] = await mobileIngestPrisma.$queryRaw<Array<{ id: string; status: string }>>`
+      INSERT INTO public.mobile_ingest_events AS events (
+        endpoint,
+        platform,
+        action,
+        dedupe_key,
+        payload,
+        status,
+        attempt_count,
+        max_attempts,
+        next_attempt_at,
+        result_payload,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${input.endpoint},
+        ${input.platform || null},
+        ${input.action || null},
+        ${input.dedupeKey},
+        ${payloadJson}::jsonb,
+        'queued',
+        0,
+        ${maxAttempts},
+        now(),
+        '{}'::jsonb,
+        now(),
+        now()
+      )
+      ON CONFLICT (dedupe_key) DO UPDATE
+      SET
+        action = EXCLUDED.action,
+        attempt_count = CASE
+          WHEN events.status = 'processing' THEN events.attempt_count
+          WHEN events.status = 'processed'
+            AND events.processed_at > now() - (${dedupeCooldownMs} * interval '1 millisecond')
+            THEN events.attempt_count
+          ELSE 0
+        END,
+        last_error = CASE
+          WHEN events.status = 'processing' THEN events.last_error
+          WHEN events.status = 'processed'
+            AND events.processed_at > now() - (${dedupeCooldownMs} * interval '1 millisecond')
+            THEN events.last_error
+          ELSE NULL
+        END,
+        locked_at = CASE
+          WHEN events.status = 'processing' THEN events.locked_at
+          ELSE NULL
+        END,
+        locked_by = CASE
+          WHEN events.status = 'processing' THEN events.locked_by
+          ELSE NULL
+        END,
+        max_attempts = EXCLUDED.max_attempts,
+        next_attempt_at = CASE
+          WHEN events.status = 'processing' THEN events.next_attempt_at
+          WHEN events.status = 'processed'
+            AND events.processed_at > now() - (${dedupeCooldownMs} * interval '1 millisecond')
+            THEN events.next_attempt_at
+          ELSE now()
+        END,
+        payload = EXCLUDED.payload,
+        platform = EXCLUDED.platform,
+        processed_at = CASE
+          WHEN events.status = 'processed'
+            AND events.processed_at > now() - (${dedupeCooldownMs} * interval '1 millisecond')
+            THEN events.processed_at
+          ELSE NULL
+        END,
+        result_payload = CASE
+          WHEN events.status = 'processed'
+            AND events.processed_at > now() - (${dedupeCooldownMs} * interval '1 millisecond')
+            THEN events.result_payload
+          ELSE '{}'::jsonb
+        END,
+        status = CASE
+          WHEN events.status = 'processing' THEN events.status
+          WHEN events.status = 'processed'
+            AND events.processed_at > now() - (${dedupeCooldownMs} * interval '1 millisecond')
+            THEN events.status
+          ELSE 'queued'
+        END,
+        updated_at = now()
+      RETURNING events.id, events.status
+    `;
+
+    return {
+      id: event?.id || input.dedupeKey,
+      status: event?.status || "queued",
+    };
   } catch (error) {
     if (options.allowSpool !== false && isConnectionPoolError(error)) {
       return spoolMobileIngestEvent(input);
@@ -278,8 +355,10 @@ export async function enqueueDeviceTokenIngest(
     accepted: true,
     action,
     platform,
-    queued: true,
+    queued: event.status !== "processed",
     requestId: event.id,
+    skippedQueue: event.status === "processed",
+    status: event.status || "queued",
     spooled: event.spooled === true,
   };
 }
@@ -300,8 +379,10 @@ export async function enqueueNotificationEventIngest(payload: NotificationEventR
     accepted: true,
     action,
     platform,
-    queued: true,
+    queued: event.status !== "processed",
     requestId: event.id,
+    skippedQueue: event.status === "processed",
+    status: event.status || "queued",
     spooled: event.spooled === true,
   };
 }
