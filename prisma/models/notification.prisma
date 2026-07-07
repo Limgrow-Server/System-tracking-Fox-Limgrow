@@ -27,13 +27,9 @@ model DeviceToken {
 
   @@index([deviceId, platform], map: "device_tokens_device_platform_idx")
   @@index([platform, appIdentifier, status], map: "device_tokens_identifier_platform_status_idx")
-  @@index([platform, appIdentifier, status, lastSeenAt], map: "device_tokens_platform_identifier_status_seen_idx")
   @@index([appId, platform, status], map: "device_tokens_app_id_platform_status_idx")
   @@index([productAppId, platform, status], map: "device_tokens_app_platform_status_idx")
-  @@index([packageName, status], map: "device_tokens_package_status_idx")
-  @@index([platform, packageName, status, lastSeenAt], map: "device_tokens_platform_package_status_seen_idx")
   @@index([bundleId, status], map: "device_tokens_bundle_status_idx")
-  @@index([platform, storeAccountName, status], map: "device_tokens_platform_store_status_idx")
   @@map("device_tokens")
 }
 

@@ -426,6 +426,7 @@ export type ReplyStoreSummary = {
 
 export type ReplyStoreListPageData = {
   filters: {
+    platform: "all" | "android" | "ios";
     search: string;
   };
   storePagination: PaginationMeta;

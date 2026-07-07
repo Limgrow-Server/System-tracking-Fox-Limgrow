@@ -13,6 +13,13 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -99,6 +106,7 @@ function ContactBadges({ store }: { store: ReplyStoreSummary }) {
 type ReplyStoresResponse = {
   data?: ReplyStoreSummary[];
   error?: string;
+  filters?: ReplyStoreListPageData["filters"];
   page?: number;
   pageSize?: number;
   success?: boolean;
@@ -113,6 +121,7 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
   const [storePagination, setStorePagination] =
     useState<PaginationMeta>(data.storePagination);
   const [search, setSearch] = useState(data.filters.search);
+  const [platform, setPlatform] = useState(data.filters.platform);
   const [loadingStores, setLoadingStores] = useState(false);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [pendingStoreProfileId, setPendingStoreProfileId] = useState<
@@ -120,16 +129,25 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
   >(null);
 
   const debouncedSearch = useDebouncedCallback((value: string) => {
-    void loadStoresPage(1, value);
+    void loadStoresPage(1, { search: value });
   }, 500);
 
-  async function loadStoresPage(page: number, nextSearch = search) {
+  async function loadStoresPage(
+    page: number,
+    overrides?: {
+      platform?: ReplyStoreListPageData["filters"]["platform"];
+      search?: string;
+    },
+  ) {
+    const nextSearch = overrides?.search ?? search;
+    const nextPlatform = overrides?.platform ?? platform;
     const params = new URLSearchParams({
       page: String(page),
       pageSize: "10",
     });
 
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
+    if (nextPlatform !== "all") params.set("platform", nextPlatform);
 
     setLoadingStores(true);
     setLoadingPage(page);
@@ -149,6 +167,7 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
         total: payload.total ?? payload.data.length,
         totalPages: payload.totalPages ?? 1,
       });
+      if (payload.filters?.platform) setPlatform(payload.filters.platform);
     } catch (error) {
       void showToast("error",
         error instanceof Error ? error.message : "Reply stores could not be loaded.",
@@ -182,19 +201,39 @@ export function ReplyStoreListPage({ data }: { data: ReplyStoreListPageData }) {
 
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <h2 className="font-heading text-lg font-semibold">Stores</h2>
-        <div className="relative w-full md:max-w-sm">
-          <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-          <Input
-            type="search"
-            value={search}
-            className="pl-8"
-            placeholder="Search stores or apps..."
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              setSearch(nextValue);
-              debouncedSearch(nextValue);
+        <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row">
+          <div className="relative w-full md:w-[22rem]">
+            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+            <Input
+              type="search"
+              value={search}
+              className="pl-8"
+              placeholder="Search store..."
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setSearch(nextValue);
+                debouncedSearch(nextValue);
+              }}
+            />
+          </div>
+          <Select
+            value={platform}
+            onValueChange={(value) => {
+              const nextPlatform =
+                value === "android" || value === "ios" ? value : "all";
+              setPlatform(nextPlatform);
+              void loadStoresPage(1, { platform: nextPlatform });
             }}
-          />
+          >
+            <SelectTrigger className="w-full md:w-[170px]">
+              <SelectValue placeholder="All platforms" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Platforms</SelectItem>
+              <SelectItem value="android">Android</SelectItem>
+              <SelectItem value="ios">iOS</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
