@@ -37,8 +37,8 @@ type ClaimRow = {
 
 const DEFAULT_MOBILE_INGEST_BATCH_SIZE = 200;
 const DEFAULT_MOBILE_INGEST_CONCURRENCY = 4;
+const DEFAULT_MOBILE_INGEST_LOCK_TTL_MS = 10 * 60_000;
 const DEFAULT_MOBILE_INGEST_MAX_ATTEMPTS = 5;
-const LOCK_TTL_MS = 2 * 60_000;
 
 function intEnv(name: string, fallback: number, min: number, max: number) {
   const parsed = Number(process.env[name]);
@@ -56,6 +56,10 @@ function mobileIngestConcurrency() {
 
 function mobileIngestMaxAttempts() {
   return intEnv("MOBILE_INGEST_MAX_ATTEMPTS", DEFAULT_MOBILE_INGEST_MAX_ATTEMPTS, 1, 20);
+}
+
+function mobileIngestLockTtlMs() {
+  return intEnv("MOBILE_INGEST_LOCK_TTL_MS", DEFAULT_MOBILE_INGEST_LOCK_TTL_MS, 60_000, 60 * 60_000);
 }
 
 function sha256Hex(value: string) {
@@ -251,7 +255,7 @@ async function mapWithConcurrency<T, R>(
 }
 
 async function recoverStaleMobileIngestEvents(now: Date) {
-  const staleBefore = new Date(now.getTime() - LOCK_TTL_MS);
+  const staleBefore = new Date(now.getTime() - mobileIngestLockTtlMs());
   const result = await prisma.mobileIngestEvent.updateMany({
     data: {
       lastError: "Mobile ingest worker lock expired before the event finished.",

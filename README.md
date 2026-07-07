@@ -299,7 +299,7 @@ supabase functions deploy verify-ios --project-ref <project-ref>
 
 `device-token-android`, `device-token-ios`, và `notification-event` chỉ proxy request mobile về `TRACKING_SERVER_URL` để Next.js/PM2 xử lý bằng Prisma. `send-notification` và `dispatch-notifications` không xử lý gửi ở Supabase Edge nữa; notification queue chạy ở server.
 
-Mobile token/event request được ghi nhanh vào `mobile_ingest_events`; server worker `/api/cron/mobile-ingest` sẽ claim theo batch và xử lý sau. Khi chạy bằng `npm start`, script PM2 hiện tại tự chạy worker này. Có thể chỉnh tốc độ bằng `MOBILE_INGEST_INTERVAL_MS`, `MOBILE_INGEST_BATCH_SIZE`, và `MOBILE_INGEST_CONCURRENCY`.
+Mobile token/event request được ghi nhanh vào `mobile_ingest_events`; server worker `/api/cron/mobile-ingest` sẽ claim theo batch và xử lý sau. Khi chạy bằng `npm start`, script PM2 hiện tại tự chạy worker này. Có thể chỉnh tốc độ bằng `MOBILE_INGEST_INTERVAL_MS`, `MOBILE_INGEST_BATCH_SIZE`, và `MOBILE_INGEST_CONCURRENCY`. Nếu batch lớn, đặt `MOBILE_INGEST_LOCK_TTL_MS` lớn hơn thời gian xử lý một batch để row chưa tới lượt không bị recover thành `retrying` quá sớm.
 
 `supabase/config.toml` đang bật `verify_jwt = true`, nên caller phải gửi Supabase JWT hợp lệ. Nếu mobile app không dùng Supabase Auth, deploy các endpoint mobile bằng `--no-verify-jwt` và giữ app-level key qua `apikey`, `x-api-key`, hoặc Bearer token.
 
