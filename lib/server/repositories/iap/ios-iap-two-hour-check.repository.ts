@@ -33,6 +33,9 @@ const iosIapRenewalEvidenceTransactionSelect = {
   transactionId: true,
   originalTransactionId: true,
   state: true,
+  revenueMicros: true,
+  priceMilliunits: true,
+  currency: true,
   rawReceipt: true,
   verifiedAt: true,
 } satisfies Prisma.IosIapTransactionSelect;
