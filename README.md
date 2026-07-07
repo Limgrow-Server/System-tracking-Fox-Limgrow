@@ -285,6 +285,7 @@ supabase projects list
 Deploy:
 
 ```bash
+supabase secrets set TRACKING_SERVER_URL="https://tracking-platform.example.com" --project-ref <project-ref>
 supabase functions deploy device-token-android --project-ref <project-ref>
 supabase functions deploy device-token-ios --project-ref <project-ref>
 supabase functions deploy dispatch-notifications --project-ref <project-ref>
@@ -296,9 +297,13 @@ supabase functions deploy verify-android --project-ref <project-ref>
 supabase functions deploy verify-ios --project-ref <project-ref>
 ```
 
-`supabase/config.toml` đang bật `verify_jwt = true`, nên caller phải gửi Supabase JWT hợp lệ. Nếu mobile app không dùng Supabase Auth, cần thiết kế thêm app-level/server-to-server auth trước khi mở public.
+`device-token-android`, `device-token-ios`, và `notification-event` chỉ proxy request mobile về `TRACKING_SERVER_URL` để Next.js/PM2 xử lý bằng Prisma. `send-notification` và `dispatch-notifications` không xử lý gửi ở Supabase Edge nữa; notification queue chạy ở server.
 
-Chi tiết cách Edge Functions lấy Firebase/Google/Apple config nằm ở [docs/edge-functions-config-guide.md](docs/edge-functions-config-guide.md).
+Mobile token/event request được ghi nhanh vào `mobile_ingest_events`; server worker `/api/cron/mobile-ingest` sẽ claim theo batch và xử lý sau. Khi chạy bằng `npm start`, script PM2 hiện tại tự chạy worker này. Có thể chỉnh tốc độ bằng `MOBILE_INGEST_INTERVAL_MS`, `MOBILE_INGEST_BATCH_SIZE`, và `MOBILE_INGEST_CONCURRENCY`.
+
+`supabase/config.toml` đang bật `verify_jwt = true`, nên caller phải gửi Supabase JWT hợp lệ. Nếu mobile app không dùng Supabase Auth, deploy các endpoint mobile bằng `--no-verify-jwt` và giữ app-level key qua `apikey`, `x-api-key`, hoặc Bearer token.
+
+Chi tiết cách Edge Functions lấy Firebase/Google/Apple config cho các verify endpoint nằm ở [docs/edge-functions-config-guide.md](docs/edge-functions-config-guide.md).
 
 ## 8. Bootstrap tài khoản Admin đầu tiên
 
