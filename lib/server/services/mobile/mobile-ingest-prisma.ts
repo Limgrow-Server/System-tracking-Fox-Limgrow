@@ -2,7 +2,7 @@ import "server-only";
 
 import { PrismaClient } from "@prisma/client";
 
-const DEFAULT_CONNECTION_LIMIT = 2;
+const DEFAULT_CONNECTION_LIMIT = 4;
 const DEFAULT_POOL_TIMEOUT_SECONDS = 2;
 
 const globalForMobileIngestPrisma = globalThis as unknown as {
@@ -16,20 +16,20 @@ function intEnv(name: string, fallback: number, min: number, max: number) {
 }
 
 function mobileIngestDatabaseUrl() {
-  const rawUrl =
-    process.env.MOBILE_INGEST_DATABASE_URL?.trim() ||
-    process.env.DATABASE_URL?.trim();
+  const explicitUrl = process.env.MOBILE_INGEST_DATABASE_URL?.trim();
+  const rawUrl = explicitUrl || process.env.DATABASE_URL?.trim();
 
   if (!rawUrl) return rawUrl;
 
   const url = new URL(rawUrl);
-  if (!url.searchParams.has("connection_limit")) {
+
+  if (!explicitUrl || !url.searchParams.has("connection_limit")) {
     url.searchParams.set(
       "connection_limit",
       String(intEnv("MOBILE_INGEST_DATABASE_CONNECTION_LIMIT", DEFAULT_CONNECTION_LIMIT, 1, 5)),
     );
   }
-  if (!url.searchParams.has("pool_timeout")) {
+  if (!explicitUrl || !url.searchParams.has("pool_timeout")) {
     url.searchParams.set(
       "pool_timeout",
       String(intEnv("MOBILE_INGEST_DATABASE_POOL_TIMEOUT", DEFAULT_POOL_TIMEOUT_SECONDS, 1, 30)),

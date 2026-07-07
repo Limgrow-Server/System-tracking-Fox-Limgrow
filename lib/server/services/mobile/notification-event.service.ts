@@ -67,6 +67,11 @@ const deviceEventSelect = {
   tokenHash: true,
 } satisfies Prisma.DeviceTokenSelect;
 
+type NotificationEventPrisma = Pick<
+  typeof prisma,
+  "androidStoreMapping" | "deviceToken" | "iosStoreMapping" | "notificationEvent"
+>;
+
 function sha256Hex(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -128,12 +133,13 @@ function isLastSeenStale(value: unknown, nowMs: number) {
 }
 
 async function findDeviceToken(
+  db: NotificationEventPrisma,
   payload: NotificationEventRequest,
   platform: MobilePlatform,
   tokenHash: string | null,
 ) {
   if (tokenHash) {
-    const device = await prisma.deviceToken.findUnique({
+    const device = await db.deviceToken.findUnique({
       select: deviceEventSelect,
       where: { tokenHash },
     });
@@ -166,7 +172,7 @@ async function findDeviceToken(
     where.bundleId = bundleId;
   }
 
-  return prisma.deviceToken.findFirst({
+  return db.deviceToken.findFirst({
     orderBy: { lastSeenAt: "desc" },
     select: deviceEventSelect,
     where,
@@ -174,6 +180,7 @@ async function findDeviceToken(
 }
 
 async function touchDeviceToken(
+  db: NotificationEventPrisma,
   device: Prisma.DeviceTokenGetPayload<{ select: typeof deviceEventSelect }> | null,
   locale: string,
 ) {
@@ -194,13 +201,16 @@ async function touchDeviceToken(
 
   data.updatedAt = new Date(nowMs);
 
-  await prisma.deviceToken.update({
+  await db.deviceToken.update({
     data,
     where: { id: device.id },
   });
 }
 
-export async function handleNotificationEventRequest(payload: NotificationEventRequest) {
+export async function handleNotificationEventRequest(
+  payload: NotificationEventRequest,
+  db: NotificationEventPrisma = prisma,
+) {
   const platform = inferPlatform(payload);
   const appId = requestAppId(payload);
   const productAppId = normalizeAppId(payload.productAppId) || appId;
@@ -223,22 +233,25 @@ export async function handleNotificationEventRequest(payload: NotificationEventR
     throw badRequest("notification_id_or_app_identifier_required");
   }
 
-  const app = await resolveMobileAppConfig({
-    appId,
-    appName: productAppId,
-    bundleId,
-    packageName,
-    platform,
-    productAppId,
-    storeAccountName: clean(payload.storeAccountName),
-    storeProfileId: clean(payload.storeProfileId),
-  });
+  const app = await resolveMobileAppConfig(
+    {
+      appId,
+      appName: productAppId,
+      bundleId,
+      packageName,
+      platform,
+      productAppId,
+      storeAccountName: clean(payload.storeAccountName),
+      storeProfileId: clean(payload.storeProfileId),
+    },
+    db,
+  );
   const fcmToken = clean(payload.fcmToken);
   const tokenHash = fcmToken ? sha256Hex(fcmToken) : null;
-  const device = await findDeviceToken(payload, platform, tokenHash);
+  const device = await findDeviceToken(db, payload, platform, tokenHash);
   const deviceId = clean(device?.deviceId) || normalizeDeviceId(payload.deviceId) || null;
 
-  await touchDeviceToken(device, locale);
+  await touchDeviceToken(db, device, locale);
 
   const metadata = {
     ...objectMetadata(payload.metadata),
@@ -259,7 +272,7 @@ export async function handleNotificationEventRequest(payload: NotificationEventR
     tokenHash,
   } satisfies Prisma.InputJsonObject;
 
-  const event = await prisma.notificationEvent.create({
+  const event = await db.notificationEvent.create({
     data: {
       deviceId,
       deviceTokenId: clean(device?.id) || null,

@@ -37,8 +37,8 @@ type ClaimRow = {
   platform: string | null;
 };
 
-const DEFAULT_MOBILE_INGEST_BATCH_SIZE = 20;
-const DEFAULT_MOBILE_INGEST_CONCURRENCY = 1;
+const DEFAULT_MOBILE_INGEST_BATCH_SIZE = 100;
+const DEFAULT_MOBILE_INGEST_CONCURRENCY = 3;
 const DEFAULT_MOBILE_INGEST_LOCK_TTL_MS = 10 * 60_000;
 const DEFAULT_MOBILE_INGEST_MAX_ATTEMPTS = 5;
 const DEFAULT_MOBILE_INGEST_SPOOL_DRAIN_LIMIT = 50;
@@ -74,7 +74,7 @@ function mobileIngestBatchSize() {
 }
 
 function mobileIngestConcurrency() {
-  return intEnv("MOBILE_INGEST_CONCURRENCY", DEFAULT_MOBILE_INGEST_CONCURRENCY, 1, 4);
+  return intEnv("MOBILE_INGEST_CONCURRENCY", DEFAULT_MOBILE_INGEST_CONCURRENCY, 1, 5);
 }
 
 function mobileIngestMaxAttempts() {
@@ -592,8 +592,9 @@ async function processMobileIngestEvent(row: ClaimRow) {
       ? await handleDeviceTokenRequest(
           payload as DeviceTokenRequest,
           row.platform === "ios" ? "ios" : "android",
+          mobileIngestPrisma,
         )
-      : await handleNotificationEventRequest(payload as NotificationEventRequest);
+      : await handleNotificationEventRequest(payload as NotificationEventRequest, mobileIngestPrisma);
 
     await markProcessed(row, result);
 

@@ -83,6 +83,10 @@ const deviceTokenSelect = {
 } satisfies Prisma.DeviceTokenSelect;
 
 type DeviceTokenRow = Prisma.DeviceTokenGetPayload<{ select: typeof deviceTokenSelect }>;
+type DeviceTokenPrisma = Pick<
+  typeof prisma,
+  "androidStoreMapping" | "deviceToken" | "iosStoreMapping" | "notificationEvent"
+>;
 
 type DeviceTokenRowInput = {
   appId: string | null;
@@ -260,11 +264,12 @@ function deviceToResponse(device: DeviceToken | DeviceTokenRow) {
 }
 
 async function writeInvalidEvent(
+  db: DeviceTokenPrisma,
   payload: DeviceTokenRequest,
   platform: MobilePlatform,
   deviceId: string | null,
 ) {
-  await prisma.notificationEvent.create({
+  await db.notificationEvent.create({
     data: {
       deviceId,
       errorCode: clean(payload.errorCode) || "client_mark_invalid",
@@ -287,6 +292,7 @@ async function writeInvalidEvent(
 }
 
 async function markReplacedDeviceTokens(
+  db: DeviceTokenPrisma,
   row: Pick<DeviceTokenRowInput, "appId" | "appIdentifier" | "bundleId" | "deviceId" | "packageName" | "productAppId">,
   tokenHash: string,
   expectedPlatform: MobilePlatform,
@@ -300,7 +306,7 @@ async function markReplacedDeviceTokens(
   if (row.bundleId) orClauses.push({ bundleId: row.bundleId });
   if (!orClauses.length) return 0;
 
-  const result = await prisma.deviceToken.updateMany({
+  const result = await db.deviceToken.updateMany({
     data: {
       status: "replaced",
       updatedAt: now,
@@ -320,6 +326,7 @@ async function markReplacedDeviceTokens(
 export async function handleDeviceTokenRequest(
   payload: DeviceTokenRequest,
   expectedPlatform: MobilePlatform,
+  db: DeviceTokenPrisma = prisma,
 ) {
   const action = payload.action ?? "register";
   const appId = requestAppId(payload);
@@ -348,7 +355,7 @@ export async function handleDeviceTokenRequest(
 
   if ((action === "register" || action === "heartbeat") && tokenHash) {
     const cooldownMs = positiveIntEnv("DEVICE_TOKEN_REGISTER_COOLDOWN_MS", DEFAULT_REGISTER_COOLDOWN_MS);
-    const existing = await prisma.deviceToken.findUnique({
+    const existing = await db.deviceToken.findUnique({
       select: deviceTokenSelect,
       where: { tokenHash },
     });
@@ -377,23 +384,26 @@ export async function handleDeviceTokenRequest(
     }
   }
 
-  const integration = await resolveMobileAppConfig({
-    appId,
-    appName: normalizeAppId(payload.productAppId) || appId,
-    bundleId: normalizeBundleId(payload.bundleId),
-    packageName: normalizePackageName(payload.packageName),
-    platform: expectedPlatform,
-    productAppId: normalizeAppId(payload.productAppId) || appId,
-    storeAccountName: clean(payload.storeAccountName),
-    storeProfileId: clean(payload.storeProfileId),
-  });
+  const integration = await resolveMobileAppConfig(
+    {
+      appId,
+      appName: normalizeAppId(payload.productAppId) || appId,
+      bundleId: normalizeBundleId(payload.bundleId),
+      packageName: normalizePackageName(payload.packageName),
+      platform: expectedPlatform,
+      productAppId: normalizeAppId(payload.productAppId) || appId,
+      storeAccountName: clean(payload.storeAccountName),
+      storeProfileId: clean(payload.storeProfileId),
+    },
+    db,
+  );
 
   if (action === "unregister" || action === "mark_invalid") {
     if (!tokenHash && !deviceId) {
       throw badRequest("token_or_device_required");
     }
 
-    const devices = await prisma.deviceToken.updateManyAndReturn({
+    const devices = await db.deviceToken.updateManyAndReturn({
       data: {
         lastSeenAt: now,
         status: action === "unregister" ? "unregistered" : "invalid",
@@ -408,7 +418,7 @@ export async function handleDeviceTokenRequest(
     });
 
     if (action === "mark_invalid") {
-      await writeInvalidEvent(payload, expectedPlatform, deviceId || null);
+      await writeInvalidEvent(db, payload, expectedPlatform, deviceId || null);
     }
 
     return {
@@ -469,7 +479,7 @@ export async function handleDeviceTokenRequest(
     userId,
   };
 
-  const existing = await prisma.deviceToken.findUnique({
+  const existing = await db.deviceToken.findUnique({
     select: deviceTokenSelect,
     where: { tokenHash },
   });
@@ -481,7 +491,7 @@ export async function handleDeviceTokenRequest(
     const updatePayload = changedUpdatePayload(existing, row, now, nowMs);
 
     if (Object.keys(updatePayload).length) {
-      device = await prisma.deviceToken.update({
+      device = await db.deviceToken.update({
         data: updatePayload,
         select: deviceTokenSelect,
         where: { id: existing.id },
@@ -491,13 +501,13 @@ export async function handleDeviceTokenRequest(
       skipped = true;
     }
   } else {
-    device = await prisma.deviceToken.create({
+    device = await db.deviceToken.create({
       data: row,
       select: deviceTokenSelect,
     });
   }
 
-  const replacedTokenCount = await markReplacedDeviceTokens(row, tokenHash, expectedPlatform, now);
+  const replacedTokenCount = await markReplacedDeviceTokens(db, row, tokenHash, expectedPlatform, now);
 
   return {
     ok: true,

@@ -301,9 +301,87 @@ function eventParams(params: Record<string, string | number | null>) {
   );
 }
 
+function scaledMoneyValue(value: bigint | number | string | null | undefined, scale: number) {
+  if (value === null || value === undefined) return null;
+  const numeric = typeof value === "bigint" ? Number(value) : Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return numeric / scale;
+}
+
+function revenueFromTransaction(transaction: IosIapRenewalEvidenceTransaction | null) {
+  if (!transaction) {
+    return {
+      currency: null,
+      source: "missing_transaction",
+      transactionId: null,
+      value: 0,
+    };
+  }
+
+  const revenueValue = scaledMoneyValue(transaction.revenueMicros, 1_000_000);
+  const priceValue = scaledMoneyValue(transaction.priceMilliunits, 1000);
+  const value = revenueValue ?? priceValue ?? 0;
+
+  return {
+    currency: clean(transaction.currency) || null,
+    source: revenueValue !== null
+      ? "revenue_micros"
+      : priceValue !== null
+        ? "price_milliunits"
+        : "missing_price",
+    transactionId: transaction.transactionId,
+    value,
+  };
+}
+
+function revenueTransactionForCheck(
+  check: IosIapTwoHourCheckRecord,
+  transactions: IosIapRenewalEvidenceTransaction[],
+) {
+  return (
+    transactions.find((transaction) => transaction.transactionId === check.transactionId) ||
+    transactions.find((transaction) =>
+      check.originalTransactionId &&
+      transaction.originalTransactionId === check.originalTransactionId &&
+      (transaction.revenueMicros !== null || transaction.priceMilliunits !== null)
+    ) ||
+    transactions.find((transaction) =>
+      transaction.revenueMicros !== null || transaction.priceMilliunits !== null
+    ) ||
+    transactions[0] ||
+    null
+  );
+}
+
+function ga4RevenueParams(
+  check: IosIapTwoHourCheckRecord,
+  decision: RenewalDecision,
+  transactions: IosIapRenewalEvidenceTransaction[],
+) {
+  const transaction = revenueTransactionForCheck(check, transactions);
+  const revenue = revenueFromTransaction(transaction);
+
+  if (!decision.renewed) {
+    return {
+      currency: revenue.currency,
+      revenue_source: "cancel_or_disabled",
+      revenue_transaction_id: revenue.transactionId,
+      value: 0,
+    };
+  }
+
+  return {
+    currency: revenue.currency,
+    revenue_source: revenue.source,
+    revenue_transaction_id: revenue.transactionId,
+    value: revenue.value,
+  };
+}
+
 async function sendGa4PurchaseTwoHourEvent(
   check: IosIapTwoHourCheckRecord,
   decision: RenewalDecision,
+  transactions: IosIapRenewalEvidenceTransaction[],
 ) {
   const config = await resolveGa4Config(check);
   const url = new URL(measurementEndpoint());
@@ -314,6 +392,7 @@ async function sendGa4PurchaseTwoHourEvent(
     clean(process.env.IOS_IAP_2HOUR_GA4_EVENT_NAME) ||
     check.ga4EventName ||
     "purchase_2hour";
+  const revenue = ga4RevenueParams(check, decision, transactions);
   const body = {
     app_instance_id: check.appInstanceId,
     events: [
@@ -325,10 +404,14 @@ async function sendGa4PurchaseTwoHourEvent(
           environment: check.environment,
           original_transaction_id: check.originalTransactionId,
           product_id: check.productId,
+          currency: revenue.currency,
+          revenue_source: revenue.revenue_source,
+          revenue_transaction_id: revenue.revenue_transaction_id,
           renewed: decision.renewed ? "true" : "false",
           renewed_int: decision.renewed ? 1 : 0,
           renewal_status: decision.renewalStatus,
           transaction_id: check.transactionId,
+          value: revenue.value,
         }),
       },
     ],
@@ -355,6 +438,7 @@ async function sendGa4PurchaseTwoHourEvent(
     firebaseAppId: config.firebaseAppId,
     responseBody: responseText || null,
     responseStatus: response.status,
+    revenue,
     validationOnly: boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY"),
   };
 }
@@ -418,7 +502,11 @@ export async function runIosIapTwoHourGa4Checks(options?: {
   for (const check of claimed) {
     try {
       const { decision, evidence } = await decideRenewal(check);
-      const ga4Result = await sendGa4PurchaseTwoHourEvent(check, decision);
+      const ga4Result = await sendGa4PurchaseTwoHourEvent(
+        check,
+        decision,
+        evidence.transactions,
+      );
       await markIosIapTwoHourCheckSent(check.id, {
         rawContext: jsonValue({
           decision,
