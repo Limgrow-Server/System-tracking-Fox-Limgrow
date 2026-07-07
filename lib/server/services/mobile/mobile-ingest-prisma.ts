@@ -2,8 +2,8 @@ import "server-only";
 
 import { PrismaClient } from "@prisma/client";
 
-const DEFAULT_CONNECTION_LIMIT = 4;
-const DEFAULT_POOL_TIMEOUT_SECONDS = 2;
+const DEFAULT_CONNECTION_LIMIT = 6;
+const DEFAULT_POOL_TIMEOUT_SECONDS = 10;
 
 const globalForMobileIngestPrisma = globalThis as unknown as {
   mobileIngestPrisma?: PrismaClient;
@@ -15,6 +15,37 @@ function intEnv(name: string, fallback: number, min: number, max: number) {
   return Math.min(Math.max(Math.floor(parsed), min), max);
 }
 
+function explicitMobileIngestUrlParamInt(name: string) {
+  const explicitUrl = process.env.MOBILE_INGEST_DATABASE_URL?.trim();
+  if (!explicitUrl) return null;
+
+  try {
+    const raw = new URL(explicitUrl).searchParams.get(name);
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.floor(parsed) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function mobileIngestConnectionLimit() {
+  return intEnv(
+    "MOBILE_INGEST_DATABASE_CONNECTION_LIMIT",
+    explicitMobileIngestUrlParamInt("connection_limit") ?? DEFAULT_CONNECTION_LIMIT,
+    1,
+    20,
+  );
+}
+
+export function mobileIngestPoolTimeoutSeconds() {
+  return intEnv(
+    "MOBILE_INGEST_DATABASE_POOL_TIMEOUT",
+    explicitMobileIngestUrlParamInt("pool_timeout") ?? DEFAULT_POOL_TIMEOUT_SECONDS,
+    1,
+    60,
+  );
+}
+
 function mobileIngestDatabaseUrl() {
   const explicitUrl = process.env.MOBILE_INGEST_DATABASE_URL?.trim();
   const rawUrl = explicitUrl || process.env.DATABASE_URL?.trim();
@@ -22,17 +53,19 @@ function mobileIngestDatabaseUrl() {
   if (!rawUrl) return rawUrl;
 
   const url = new URL(rawUrl);
+  const hasConnectionLimitEnv = Boolean(process.env.MOBILE_INGEST_DATABASE_CONNECTION_LIMIT?.trim());
+  const hasPoolTimeoutEnv = Boolean(process.env.MOBILE_INGEST_DATABASE_POOL_TIMEOUT?.trim());
 
-  if (!explicitUrl || !url.searchParams.has("connection_limit")) {
+  if (!explicitUrl || hasConnectionLimitEnv || !url.searchParams.has("connection_limit")) {
     url.searchParams.set(
       "connection_limit",
-      String(intEnv("MOBILE_INGEST_DATABASE_CONNECTION_LIMIT", DEFAULT_CONNECTION_LIMIT, 1, 5)),
+      String(mobileIngestConnectionLimit()),
     );
   }
-  if (!explicitUrl || !url.searchParams.has("pool_timeout")) {
+  if (!explicitUrl || hasPoolTimeoutEnv || !url.searchParams.has("pool_timeout")) {
     url.searchParams.set(
       "pool_timeout",
-      String(intEnv("MOBILE_INGEST_DATABASE_POOL_TIMEOUT", DEFAULT_POOL_TIMEOUT_SECONDS, 1, 30)),
+      String(mobileIngestPoolTimeoutSeconds()),
     );
   }
 

@@ -6,7 +6,10 @@ import path from "node:path";
 
 import type { Prisma } from "@prisma/client";
 
-import { mobileIngestPrisma } from "@/lib/server/services/mobile/mobile-ingest-prisma";
+import {
+  mobileIngestConnectionLimit,
+  mobileIngestPrisma,
+} from "@/lib/server/services/mobile/mobile-ingest-prisma";
 import { normalizeAppId } from "@/lib/tracking/identity";
 import { badRequest } from "@/lib/server/api/errors";
 import {
@@ -43,6 +46,7 @@ const DEFAULT_MOBILE_INGEST_LOCK_TTL_MS = 10 * 60_000;
 const DEFAULT_MOBILE_INGEST_MAX_ATTEMPTS = 5;
 const DEFAULT_MOBILE_INGEST_SPOOL_DRAIN_LIMIT = 50;
 const DEFAULT_MOBILE_INGEST_DEDUPE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_MOBILE_INGEST_WORKER_CONNECTION_RESERVE = 2;
 
 type EnqueuedMobileIngestEvent = {
   id: string;
@@ -63,6 +67,8 @@ type SpoolRow = MobileIngestQueueInput & {
   spooledAt: string;
 };
 
+let activeMobileIngestDbEnqueues = 0;
+
 function intEnv(name: string, fallback: number, min: number, max: number) {
   const parsed = Number(process.env[name]);
   if (!Number.isFinite(parsed)) return fallback;
@@ -75,6 +81,31 @@ function mobileIngestBatchSize() {
 
 function mobileIngestConcurrency() {
   return intEnv("MOBILE_INGEST_CONCURRENCY", DEFAULT_MOBILE_INGEST_CONCURRENCY, 1, 5);
+}
+
+function mobileIngestWorkerConnectionReserve() {
+  return intEnv(
+    "MOBILE_INGEST_WORKER_CONNECTION_RESERVE",
+    DEFAULT_MOBILE_INGEST_WORKER_CONNECTION_RESERVE,
+    1,
+    10,
+  );
+}
+
+function effectiveMobileIngestConcurrency() {
+  const availableConnections = mobileIngestConnectionLimit() - mobileIngestWorkerConnectionReserve();
+  return Math.max(1, Math.min(mobileIngestConcurrency(), availableConnections));
+}
+
+function mobileIngestEnqueueConcurrency() {
+  const maxEnqueueConnections = Math.max(1, mobileIngestConnectionLimit() - effectiveMobileIngestConcurrency());
+  const configuredLimit = intEnv(
+    "MOBILE_INGEST_ENQUEUE_CONCURRENCY",
+    maxEnqueueConnections,
+    1,
+    20,
+  );
+  return Math.min(configuredLimit, maxEnqueueConnections);
 }
 
 function mobileIngestMaxAttempts() {
@@ -230,9 +261,18 @@ async function enqueueMobileIngestEvent(
   input: MobileIngestQueueInput,
   options: { allowSpool?: boolean } = {},
 ): Promise<EnqueuedMobileIngestEvent> {
+  if (
+    options.allowSpool !== false &&
+    activeMobileIngestDbEnqueues >= mobileIngestEnqueueConcurrency()
+  ) {
+    return spoolMobileIngestEvent(input);
+  }
+
   const payloadJson = JSON.stringify(input.payload);
   const dedupeCooldownMs = mobileIngestDedupeCooldownMs();
   const maxAttempts = mobileIngestMaxAttempts();
+
+  activeMobileIngestDbEnqueues += 1;
 
   try {
     const [event] = await mobileIngestPrisma.$queryRaw<Array<{ id: string; status: string }>>`
@@ -332,6 +372,8 @@ async function enqueueMobileIngestEvent(
     }
 
     throw error;
+  } finally {
+    activeMobileIngestDbEnqueues = Math.max(0, activeMobileIngestDbEnqueues - 1);
   }
 }
 
@@ -608,7 +650,7 @@ async function processMobileIngestEvent(row: ClaimRow) {
   }
 }
 
-export async function runMobileIngestQueue(options: { limit?: number } = {}) {
+async function runMobileIngestQueueInternal(options: { limit?: number } = {}) {
   const checkedAt = new Date();
   const spool = await drainMobileIngestSpool();
   const recovered = await recoverStaleMobileIngestEvents(checkedAt);
@@ -617,7 +659,7 @@ export async function runMobileIngestQueue(options: { limit?: number } = {}) {
   const claimed = await claimMobileIngestEvents(limit, lockedBy);
   const processed = await mapWithConcurrency(
     claimed,
-    mobileIngestConcurrency(),
+    effectiveMobileIngestConcurrency(),
     processMobileIngestEvent,
   );
 
@@ -628,6 +670,27 @@ export async function runMobileIngestQueue(options: { limit?: number } = {}) {
     recovered,
     spool,
   };
+}
+
+let activeMobileIngestQueueRun: ReturnType<typeof runMobileIngestQueueInternal> | null = null;
+
+export async function runMobileIngestQueue(options: { limit?: number } = {}) {
+  if (activeMobileIngestQueueRun) {
+    return {
+      checkedAt: new Date(),
+      claimed: 0,
+      processed: [],
+      recovered: 0,
+      skipped: "already_running",
+      spool: { drained: 0, retained: 0 },
+    };
+  }
+
+  activeMobileIngestQueueRun = runMobileIngestQueueInternal(options).finally(() => {
+    activeMobileIngestQueueRun = null;
+  });
+
+  return activeMobileIngestQueueRun;
 }
 
 export async function getMobileIngestQueueStats() {
