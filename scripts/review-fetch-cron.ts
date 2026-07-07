@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnvConfig } from "@next/env";
 
-const DEFAULT_INTERVAL_MS = 3 * 60_000;
+const DEFAULT_REVIEW_FETCH_INTERVAL_MS = 3 * 60_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const INITIAL_CRON_DELAY_MS = 15_000;
 const DEFAULT_NOTIFICATION_QUEUE_INTERVAL_MS = 10_000;
@@ -68,6 +68,14 @@ function intEnv(name: string, fallback: number, min: number) {
   const parsed = Number(process.env[name]);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(Math.floor(parsed), min);
+}
+
+function boolEnv(name: string, fallback: boolean) {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) return fallback;
+  if (["0", "false", "no", "off", "disabled"].includes(value)) return false;
+  if (["1", "true", "yes", "on", "enabled"].includes(value)) return true;
+  return fallback;
 }
 
 function normalizeUrl(value: string) {
@@ -162,6 +170,7 @@ function summarizeNotificationQueueResult(payload: unknown) {
     claimed: result.claimed,
     processed: Array.isArray(result.processed) ? result.processed.length : 0,
     recovered: result.recovered,
+    spool: result.spool,
   });
 }
 
@@ -437,9 +446,14 @@ function startReviewFetchCronLoop(): CronLoop {
   const controller = new AbortController();
   const signal = controller.signal;
   const url = resolveReviewFetchCronUrl();
+  const intervalMs = intEnv(
+    "REVIEW_FETCH_INTERVAL_MS",
+    DEFAULT_REVIEW_FETCH_INTERVAL_MS,
+    30_000,
+  );
 
   console.log(
-    `[review-fetch-cron] running every ${DEFAULT_INTERVAL_MS}ms against ${url}`,
+    `[review-fetch-cron] running every ${intervalMs}ms against ${url}`,
   );
 
   void (async () => {
@@ -456,7 +470,7 @@ function startReviewFetchCronLoop(): CronLoop {
         );
       }
 
-      await sleep(DEFAULT_INTERVAL_MS, signal);
+      await sleep(intervalMs, signal);
     }
   })();
 
@@ -465,6 +479,19 @@ function startReviewFetchCronLoop(): CronLoop {
       controller.abort();
     },
   };
+}
+
+function maybeStartCronLoop(
+  label: string,
+  enabledEnvName: string,
+  start: () => CronLoop,
+) {
+  if (!boolEnv(enabledEnvName, true)) {
+    console.log(`[${label}] disabled by ${enabledEnvName}=false`);
+    return null;
+  }
+
+  return start();
 }
 
 function startNotificationQueueCronLoop(): CronLoop {
@@ -559,11 +586,11 @@ process.env.PORT = port;
 if (command === "cron") {
   console.log(`[cron] workers on port ${port}`);
   const cronLoops = [
-    startMobileIngestCronLoop(),
-    startReviewFetchCronLoop(),
-    startNotificationQueueCronLoop(),
-    startIosIapTwoHourCronLoop(),
-  ];
+    maybeStartCronLoop("mobile-ingest", "MOBILE_INGEST_ENABLED", startMobileIngestCronLoop),
+    maybeStartCronLoop("review-fetch-cron", "REVIEW_FETCH_CRON_ENABLED", startReviewFetchCronLoop),
+    maybeStartCronLoop("notification-queue", "NOTIFICATION_QUEUE_ENABLED", startNotificationQueueCronLoop),
+    maybeStartCronLoop("ios-iap-2hour-ga4", "IOS_IAP_2HOUR_ENABLED", startIosIapTwoHourCronLoop),
+  ].filter((cronLoop): cronLoop is CronLoop => Boolean(cronLoop));
 
   function shutdownCron() {
     cronLoops.forEach((cronLoop) => cronLoop.stop());
@@ -582,11 +609,11 @@ if (command === "cron") {
   });
 
   let cronLoops: CronLoop[] = [
-    startMobileIngestCronLoop(),
-    startReviewFetchCronLoop(),
-    startNotificationQueueCronLoop(),
-    startIosIapTwoHourCronLoop(),
-  ];
+    maybeStartCronLoop("mobile-ingest", "MOBILE_INGEST_ENABLED", startMobileIngestCronLoop),
+    maybeStartCronLoop("review-fetch-cron", "REVIEW_FETCH_CRON_ENABLED", startReviewFetchCronLoop),
+    maybeStartCronLoop("notification-queue", "NOTIFICATION_QUEUE_ENABLED", startNotificationQueueCronLoop),
+    maybeStartCronLoop("ios-iap-2hour-ga4", "IOS_IAP_2HOUR_ENABLED", startIosIapTwoHourCronLoop),
+  ].filter((cronLoop): cronLoop is CronLoop => Boolean(cronLoop));
   let shuttingDown = false;
 
   function shutdown(signal: NodeJS.Signals) {

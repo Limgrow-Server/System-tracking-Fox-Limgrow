@@ -1,6 +1,8 @@
 import "server-only";
 
 import { createHash, randomUUID } from "crypto";
+import { appendFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
+import path from "node:path";
 
 import type { Prisma } from "@prisma/client";
 
@@ -39,6 +41,25 @@ const DEFAULT_MOBILE_INGEST_BATCH_SIZE = 200;
 const DEFAULT_MOBILE_INGEST_CONCURRENCY = 4;
 const DEFAULT_MOBILE_INGEST_LOCK_TTL_MS = 10 * 60_000;
 const DEFAULT_MOBILE_INGEST_MAX_ATTEMPTS = 5;
+const DEFAULT_MOBILE_INGEST_SPOOL_DRAIN_LIMIT = 200;
+
+type EnqueuedMobileIngestEvent = {
+  id: string;
+  spooled?: boolean;
+};
+
+type MobileIngestQueueInput = {
+  action?: string | null;
+  dedupeKey: string;
+  endpoint: MobileIngestEndpoint;
+  payload: Prisma.InputJsonValue;
+  platform?: string | null;
+};
+
+type SpoolRow = MobileIngestQueueInput & {
+  id: string;
+  spooledAt: string;
+};
 
 function intEnv(name: string, fallback: number, min: number, max: number) {
   const parsed = Number(process.env[name]);
@@ -60,6 +81,22 @@ function mobileIngestMaxAttempts() {
 
 function mobileIngestLockTtlMs() {
   return intEnv("MOBILE_INGEST_LOCK_TTL_MS", DEFAULT_MOBILE_INGEST_LOCK_TTL_MS, 60_000, 60 * 60_000);
+}
+
+function mobileIngestSpoolDrainLimit() {
+  return intEnv(
+    "MOBILE_INGEST_SPOOL_DRAIN_LIMIT",
+    DEFAULT_MOBILE_INGEST_SPOOL_DRAIN_LIMIT,
+    1,
+    5000,
+  );
+}
+
+function mobileIngestSpoolPath() {
+  return path.resolve(
+    process.env.MOBILE_INGEST_SPOOL_PATH?.trim()
+      || path.join(process.cwd(), ".runtime", "mobile-ingest-events.jsonl"),
+  );
 }
 
 function sha256Hex(value: string) {
@@ -150,42 +187,75 @@ function notificationEventDedupeKey(payload: NotificationEventRequest) {
   return `notification-event:${platform}:${eventType}:${notificationId}:${target}`;
 }
 
-async function enqueueMobileIngestEvent(input: {
-  action?: string | null;
-  dedupeKey: string;
-  endpoint: MobileIngestEndpoint;
-  payload: Prisma.InputJsonValue;
-  platform?: string | null;
-}) {
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function isConnectionPoolError(error: unknown) {
+  const message = errorMessage(error);
+  return (
+    message.includes("Timed out fetching a new connection from the connection pool")
+    || message.includes("Unable to start a transaction in the given time")
+  );
+}
+
+async function spoolMobileIngestEvent(input: MobileIngestQueueInput): Promise<EnqueuedMobileIngestEvent> {
+  const filePath = mobileIngestSpoolPath();
+  const id = `spool-${randomUUID()}`;
+  const row: SpoolRow = {
+    ...input,
+    id,
+    spooledAt: new Date().toISOString(),
+  };
+
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await appendFile(filePath, `${JSON.stringify(row)}\n`, "utf8");
+
+  return { id, spooled: true };
+}
+
+async function enqueueMobileIngestEvent(
+  input: MobileIngestQueueInput,
+  options: { allowSpool?: boolean } = {},
+): Promise<EnqueuedMobileIngestEvent> {
   const now = new Date();
 
-  return prisma.mobileIngestEvent.upsert({
-    create: {
-      action: input.action || null,
-      dedupeKey: input.dedupeKey,
-      endpoint: input.endpoint,
-      maxAttempts: mobileIngestMaxAttempts(),
-      payload: input.payload,
-      platform: input.platform || null,
-      status: "queued",
-    },
-    update: {
-      action: input.action || null,
-      attemptCount: 0,
-      lastError: null,
-      lockedAt: null,
-      lockedBy: null,
-      maxAttempts: mobileIngestMaxAttempts(),
-      nextAttemptAt: now,
-      payload: input.payload,
-      platform: input.platform || null,
-      processedAt: null,
-      resultPayload: {},
-      status: "queued",
-      updatedAt: now,
-    },
-    where: { dedupeKey: input.dedupeKey },
-  });
+  try {
+    return await prisma.mobileIngestEvent.upsert({
+      create: {
+        action: input.action || null,
+        dedupeKey: input.dedupeKey,
+        endpoint: input.endpoint,
+        maxAttempts: mobileIngestMaxAttempts(),
+        payload: input.payload,
+        platform: input.platform || null,
+        status: "queued",
+      },
+      update: {
+        action: input.action || null,
+        attemptCount: 0,
+        lastError: null,
+        lockedAt: null,
+        lockedBy: null,
+        maxAttempts: mobileIngestMaxAttempts(),
+        nextAttemptAt: now,
+        payload: input.payload,
+        platform: input.platform || null,
+        processedAt: null,
+        resultPayload: {},
+        status: "queued",
+        updatedAt: now,
+      },
+      where: { dedupeKey: input.dedupeKey },
+    });
+  } catch (error) {
+    if (options.allowSpool !== false && isConnectionPoolError(error)) {
+      return spoolMobileIngestEvent(input);
+    }
+
+    throw error;
+  }
 }
 
 export async function enqueueDeviceTokenIngest(
@@ -210,6 +280,7 @@ export async function enqueueDeviceTokenIngest(
     platform,
     queued: true,
     requestId: event.id,
+    spooled: event.spooled === true,
   };
 }
 
@@ -231,7 +302,78 @@ export async function enqueueNotificationEventIngest(payload: NotificationEventR
     platform,
     queued: true,
     requestId: event.id,
+    spooled: event.spooled === true,
   };
+}
+
+function parseSpoolLine(line: string): SpoolRow | null {
+  try {
+    const row = JSON.parse(line) as Partial<SpoolRow>;
+    if (!row || typeof row !== "object") return null;
+    if (row.endpoint !== "device_token" && row.endpoint !== "notification_event") return null;
+    const dedupeKey = clean(row.dedupeKey);
+    if (!dedupeKey) return null;
+    if (!row.payload || typeof row.payload !== "object") return null;
+
+    return {
+      action: clean(row.action) || null,
+      dedupeKey,
+      endpoint: row.endpoint,
+      id: clean(row.id) || `spool-${randomUUID()}`,
+      payload: row.payload as Prisma.InputJsonValue,
+      platform: clean(row.platform) || null,
+      spooledAt: clean(row.spooledAt) || new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function drainMobileIngestSpool() {
+  const filePath = mobileIngestSpoolPath();
+  const processingPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.processing`;
+
+  try {
+    await rename(filePath, processingPath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { drained: 0, retained: 0 };
+    throw error;
+  }
+
+  let retainedLines: string[] = [];
+  let drained = 0;
+
+  try {
+    const content = await readFile(processingPath, "utf8");
+    const lines = content.split("\n").filter((line) => line.trim());
+    const drainLimit = mobileIngestSpoolDrainLimit();
+    const activeLines = lines.slice(0, drainLimit);
+    retainedLines = lines.slice(drainLimit);
+
+    for (const line of activeLines) {
+      const row = parseSpoolLine(line);
+      if (!row) {
+        continue;
+      }
+
+      try {
+        await enqueueMobileIngestEvent(row, { allowSpool: false });
+        drained += 1;
+      } catch {
+        retainedLines.push(line);
+      }
+    }
+  } finally {
+    await unlink(processingPath).catch(() => undefined);
+  }
+
+  if (retainedLines.length) {
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await appendFile(filePath, `${retainedLines.join("\n")}\n`, "utf8");
+  }
+
+  return { drained, retained: retainedLines.length };
 }
 
 async function mapWithConcurrency<T, R>(
@@ -386,6 +528,7 @@ async function processMobileIngestEvent(row: ClaimRow) {
 
 export async function runMobileIngestQueue(options: { limit?: number } = {}) {
   const checkedAt = new Date();
+  const spool = await drainMobileIngestSpool();
   const recovered = await recoverStaleMobileIngestEvents(checkedAt);
   const limit = Math.min(Math.max(options.limit ?? mobileIngestBatchSize(), 1), 1000);
   const lockedBy = `mobile-ingest-worker-${randomUUID()}`;
@@ -401,6 +544,7 @@ export async function runMobileIngestQueue(options: { limit?: number } = {}) {
     claimed: claimed.length,
     processed,
     recovered,
+    spool,
   };
 }
 
