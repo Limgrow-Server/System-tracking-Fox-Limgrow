@@ -34,6 +34,8 @@ export type MobileAppLookup = {
   storeProfileId?: string | null;
 };
 
+type MobileAppConfigPrisma = Pick<typeof prisma, "androidStoreMapping" | "iosStoreMapping">;
+
 export function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -222,10 +224,13 @@ function iosWhereCandidates(input: MobileAppLookup) {
   return candidates;
 }
 
-export async function resolveMobileAppConfig(input: MobileAppLookup) {
+export async function resolveMobileAppConfig(
+  input: MobileAppLookup,
+  db: MobileAppConfigPrisma = prisma,
+) {
   if (input.platform === "android") {
     for (const where of androidWhereCandidates(input)) {
-      const row = await prisma.androidStoreMapping.findFirst({
+      const row = await db.androidStoreMapping.findFirst({
         orderBy: { updatedAt: "desc" },
         select: {
           appIconUrl: true,
@@ -245,7 +250,7 @@ export async function resolveMobileAppConfig(input: MobileAppLookup) {
     }
   } else {
     for (const where of iosWhereCandidates(input)) {
-      const row = await prisma.iosStoreMapping.findFirst({
+      const row = await db.iosStoreMapping.findFirst({
         orderBy: { updatedAt: "desc" },
         select: {
           appIconUrl: true,
