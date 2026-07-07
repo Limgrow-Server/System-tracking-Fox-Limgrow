@@ -6,7 +6,7 @@ import path from "node:path";
 
 import type { Prisma } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
+import { mobileIngestPrisma } from "@/lib/server/services/mobile/mobile-ingest-prisma";
 import { normalizeAppId } from "@/lib/tracking/identity";
 import { badRequest } from "@/lib/server/api/errors";
 import {
@@ -37,11 +37,11 @@ type ClaimRow = {
   platform: string | null;
 };
 
-const DEFAULT_MOBILE_INGEST_BATCH_SIZE = 200;
-const DEFAULT_MOBILE_INGEST_CONCURRENCY = 4;
+const DEFAULT_MOBILE_INGEST_BATCH_SIZE = 20;
+const DEFAULT_MOBILE_INGEST_CONCURRENCY = 1;
 const DEFAULT_MOBILE_INGEST_LOCK_TTL_MS = 10 * 60_000;
 const DEFAULT_MOBILE_INGEST_MAX_ATTEMPTS = 5;
-const DEFAULT_MOBILE_INGEST_SPOOL_DRAIN_LIMIT = 200;
+const DEFAULT_MOBILE_INGEST_SPOOL_DRAIN_LIMIT = 50;
 
 type EnqueuedMobileIngestEvent = {
   id: string;
@@ -68,11 +68,11 @@ function intEnv(name: string, fallback: number, min: number, max: number) {
 }
 
 function mobileIngestBatchSize() {
-  return intEnv("MOBILE_INGEST_BATCH_SIZE", DEFAULT_MOBILE_INGEST_BATCH_SIZE, 10, 1000);
+  return intEnv("MOBILE_INGEST_BATCH_SIZE", DEFAULT_MOBILE_INGEST_BATCH_SIZE, 1, 200);
 }
 
 function mobileIngestConcurrency() {
-  return intEnv("MOBILE_INGEST_CONCURRENCY", DEFAULT_MOBILE_INGEST_CONCURRENCY, 1, 16);
+  return intEnv("MOBILE_INGEST_CONCURRENCY", DEFAULT_MOBILE_INGEST_CONCURRENCY, 1, 4);
 }
 
 function mobileIngestMaxAttempts() {
@@ -222,7 +222,7 @@ async function enqueueMobileIngestEvent(
   const now = new Date();
 
   try {
-    return await prisma.mobileIngestEvent.upsert({
+    return await mobileIngestPrisma.mobileIngestEvent.upsert({
       create: {
         action: input.action || null,
         dedupeKey: input.dedupeKey,
@@ -398,7 +398,7 @@ async function mapWithConcurrency<T, R>(
 
 async function recoverStaleMobileIngestEvents(now: Date) {
   const staleBefore = new Date(now.getTime() - mobileIngestLockTtlMs());
-  const result = await prisma.mobileIngestEvent.updateMany({
+  const result = await mobileIngestPrisma.mobileIngestEvent.updateMany({
     data: {
       lastError: "Mobile ingest worker lock expired before the event finished.",
       lockedAt: null,
@@ -417,7 +417,7 @@ async function recoverStaleMobileIngestEvents(now: Date) {
 }
 
 async function claimMobileIngestEvents(limit: number, lockedBy: string) {
-  return prisma.$queryRaw<ClaimRow[]>`
+  return mobileIngestPrisma.$queryRaw<ClaimRow[]>`
     UPDATE public.mobile_ingest_events AS events
     SET
       attempt_count = events.attempt_count + 1,
@@ -466,7 +466,7 @@ function resultSummary(result: unknown) {
 }
 
 async function markProcessed(row: ClaimRow, result: unknown) {
-  await prisma.mobileIngestEvent.update({
+  await mobileIngestPrisma.mobileIngestEvent.update({
     data: {
       lastError: null,
       lockedAt: null,
@@ -484,7 +484,7 @@ async function markFailed(row: ClaimRow, error: unknown) {
   const canRetry = row.attempt_count < row.max_attempts;
   const now = new Date();
 
-  await prisma.mobileIngestEvent.update({
+  await mobileIngestPrisma.mobileIngestEvent.update({
     data: {
       lastError: message.slice(0, 2000),
       lockedAt: null,
@@ -549,7 +549,7 @@ export async function runMobileIngestQueue(options: { limit?: number } = {}) {
 }
 
 export async function getMobileIngestQueueStats() {
-  const rows = await prisma.mobileIngestEvent.groupBy({
+  const rows = await mobileIngestPrisma.mobileIngestEvent.groupBy({
     by: ["endpoint", "status"],
     _count: { _all: true },
   });

@@ -9,6 +9,7 @@ const INITIAL_CRON_DELAY_MS = 15_000;
 const DEFAULT_NOTIFICATION_QUEUE_INTERVAL_MS = 10_000;
 const DEFAULT_IOS_IAP_2HOUR_INTERVAL_MS = 60_000;
 const DEFAULT_MOBILE_INGEST_INTERVAL_MS = 5_000;
+const DEFAULT_MOBILE_INGEST_ACTIVE_INTERVAL_MS = 250;
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(dirname, "..");
 const nextBin = path.join(
@@ -208,6 +209,11 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
+function numberValue(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 async function runReviewFetchCronOnce(url: string, signal: AbortSignal) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
@@ -397,6 +403,16 @@ async function runMobileIngestCronOnce(url: string, signal: AbortSignal) {
         )}`,
       );
     }
+
+    const result = isRecord(payload) && isRecord(payload.result) ? payload.result : {};
+    const spool = isRecord(result.spool) ? result.spool : {};
+
+    return {
+      claimed,
+      processed: Array.isArray(result.processed) ? result.processed.length : 0,
+      recovered: numberValue(result.recovered),
+      spoolRetained: numberValue(spool.retained),
+    };
   } finally {
     signal.removeEventListener("abort", abortFromParent);
     clearTimeout(timeout);
@@ -412,6 +428,11 @@ function startMobileIngestCronLoop(): CronLoop {
     DEFAULT_MOBILE_INGEST_INTERVAL_MS,
     1000,
   );
+  const activeIntervalMs = intEnv(
+    "MOBILE_INGEST_ACTIVE_INTERVAL_MS",
+    DEFAULT_MOBILE_INGEST_ACTIVE_INTERVAL_MS,
+    100,
+  );
 
   console.log(
     `[mobile-ingest] running every ${intervalMs}ms against ${url}`,
@@ -421,8 +442,13 @@ function startMobileIngestCronLoop(): CronLoop {
     await sleep(3_000, signal);
 
     while (!signal.aborted) {
+      let nextDelayMs = intervalMs;
+
       try {
-        await runMobileIngestCronOnce(url, signal);
+        const result = await runMobileIngestCronOnce(url, signal);
+        if (result.claimed > 0 || result.spoolRetained > 0) {
+          nextDelayMs = activeIntervalMs;
+        }
       } catch (error) {
         console.error(
           `[mobile-ingest] ${new Date().toISOString()} failed: ${errorMessage(
@@ -431,7 +457,7 @@ function startMobileIngestCronLoop(): CronLoop {
         );
       }
 
-      await sleep(intervalMs, signal);
+      await sleep(nextDelayMs, signal);
     }
   })();
 
