@@ -3,11 +3,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEnvConfig } from "@next/env";
 
-const DEFAULT_INTERVAL_MS = 3 * 60_000;
+const DEFAULT_REVIEW_FETCH_INTERVAL_MS = 3 * 60_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const INITIAL_CRON_DELAY_MS = 15_000;
 const DEFAULT_NOTIFICATION_QUEUE_INTERVAL_MS = 10_000;
 const DEFAULT_IOS_IAP_2HOUR_INTERVAL_MS = 60_000;
+const DEFAULT_MOBILE_INGEST_INTERVAL_MS = 5_000;
+const DEFAULT_MOBILE_INGEST_ACTIVE_INTERVAL_MS = 250;
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(dirname, "..");
 const nextBin = path.join(
@@ -69,6 +71,14 @@ function intEnv(name: string, fallback: number, min: number) {
   return Math.max(Math.floor(parsed), min);
 }
 
+function boolEnv(name: string, fallback: boolean) {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) return fallback;
+  if (["0", "false", "no", "off", "disabled"].includes(value)) return false;
+  if (["1", "true", "yes", "on", "enabled"].includes(value)) return true;
+  return fallback;
+}
+
 function normalizeUrl(value: string) {
   return value.replace(/\/+$/, "");
 }
@@ -98,6 +108,15 @@ function resolveIosIapTwoHourCronUrl() {
   return `${normalizeUrl(
     `http://127.0.0.1:${process.env.PORT || "3000"}`,
   )}/api/cron/iap-ga4-two-hour`;
+}
+
+function resolveMobileIngestCronUrl() {
+  const explicitUrl = process.env.MOBILE_INGEST_CRON_URL?.trim();
+  if (explicitUrl) return normalizeUrl(explicitUrl);
+
+  return `${normalizeUrl(
+    `http://127.0.0.1:${process.env.PORT || "3000"}`,
+  )}/api/cron/mobile-ingest`;
 }
 
 function sleep(ms: number, signal?: AbortSignal) {
@@ -152,6 +171,7 @@ function summarizeNotificationQueueResult(payload: unknown) {
     claimed: result.claimed,
     processed: Array.isArray(result.processed) ? result.processed.length : 0,
     recovered: result.recovered,
+    spool: result.spool,
   });
 }
 
@@ -169,9 +189,29 @@ function summarizeIosIapTwoHourResult(payload: unknown) {
   });
 }
 
+function summarizeMobileIngestResult(payload: unknown) {
+  const result = isRecord(payload) ? payload.result : null;
+
+  if (!isRecord(result)) {
+    return "no result payload";
+  }
+
+  return JSON.stringify({
+    checkedAt: result.checkedAt,
+    claimed: result.claimed,
+    processed: Array.isArray(result.processed) ? result.processed.length : 0,
+    recovered: result.recovered,
+  });
+}
+
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function numberValue(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function runReviewFetchCronOnce(url: string, signal: AbortSignal) {
@@ -316,13 +356,130 @@ async function runIosIapTwoHourCronOnce(url: string, signal: AbortSignal) {
   }
 }
 
+async function runMobileIngestCronOnce(url: string, signal: AbortSignal) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const abortFromParent = () => controller.abort();
+  const cronSecret =
+    process.env.MOBILE_INGEST_SECRET ||
+    process.env.NOTIFICATION_QUEUE_SECRET ||
+    "";
+
+  if (signal.aborted) {
+    controller.abort();
+  } else {
+    signal.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        ...(cronSecret ? {
+          "x-cron-secret": cronSecret,
+          "x-mobile-ingest-secret": cronSecret,
+          "x-notification-queue-secret": cronSecret,
+        } : {}),
+        "user-agent": "limgrow-mobile-ingest/1.0",
+      },
+      method: "POST",
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const payload = text ? (JSON.parse(text) as unknown) : null;
+    const endpointFailed =
+      isRecord(payload) && (payload.success === false || payload.ok === false);
+
+    if (!response.ok || endpointFailed) {
+      throw new Error(text || `Mobile ingest endpoint returned HTTP ${response.status}`);
+    }
+
+    const claimed = isRecord(payload) && isRecord(payload.result) ? Number(payload.result.claimed ?? 0) : 0;
+    if (claimed > 0) {
+      console.log(
+        `[mobile-ingest] ${new Date().toISOString()} ok ${summarizeMobileIngestResult(
+          payload,
+        )}`,
+      );
+    }
+
+    const result = isRecord(payload) && isRecord(payload.result) ? payload.result : {};
+    const spool = isRecord(result.spool) ? result.spool : {};
+
+    return {
+      claimed,
+      processed: Array.isArray(result.processed) ? result.processed.length : 0,
+      recovered: numberValue(result.recovered),
+      spoolRetained: numberValue(spool.retained),
+    };
+  } finally {
+    signal.removeEventListener("abort", abortFromParent);
+    clearTimeout(timeout);
+  }
+}
+
+function startMobileIngestCronLoop(): CronLoop {
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const url = resolveMobileIngestCronUrl();
+  const intervalMs = intEnv(
+    "MOBILE_INGEST_INTERVAL_MS",
+    DEFAULT_MOBILE_INGEST_INTERVAL_MS,
+    1000,
+  );
+  const activeIntervalMs = intEnv(
+    "MOBILE_INGEST_ACTIVE_INTERVAL_MS",
+    DEFAULT_MOBILE_INGEST_ACTIVE_INTERVAL_MS,
+    100,
+  );
+
+  console.log(
+    `[mobile-ingest] running every ${intervalMs}ms against ${url}`,
+  );
+
+  void (async () => {
+    await sleep(3_000, signal);
+
+    while (!signal.aborted) {
+      let nextDelayMs = intervalMs;
+
+      try {
+        const result = await runMobileIngestCronOnce(url, signal);
+        if (result.claimed > 0 || result.spoolRetained > 0) {
+          nextDelayMs = activeIntervalMs;
+        }
+      } catch (error) {
+        console.error(
+          `[mobile-ingest] ${new Date().toISOString()} failed: ${errorMessage(
+            error,
+          )}`,
+        );
+      }
+
+      await sleep(nextDelayMs, signal);
+    }
+  })();
+
+  return {
+    stop() {
+      controller.abort();
+    },
+  };
+}
+
 function startReviewFetchCronLoop(): CronLoop {
   const controller = new AbortController();
   const signal = controller.signal;
   const url = resolveReviewFetchCronUrl();
+  const intervalMs = intEnv(
+    "REVIEW_FETCH_INTERVAL_MS",
+    DEFAULT_REVIEW_FETCH_INTERVAL_MS,
+    30_000,
+  );
 
   console.log(
-    `[review-fetch-cron] running every ${DEFAULT_INTERVAL_MS}ms against ${url}`,
+    `[review-fetch-cron] running every ${intervalMs}ms against ${url}`,
   );
 
   void (async () => {
@@ -339,7 +496,7 @@ function startReviewFetchCronLoop(): CronLoop {
         );
       }
 
-      await sleep(DEFAULT_INTERVAL_MS, signal);
+      await sleep(intervalMs, signal);
     }
   })();
 
@@ -348,6 +505,19 @@ function startReviewFetchCronLoop(): CronLoop {
       controller.abort();
     },
   };
+}
+
+function maybeStartCronLoop(
+  label: string,
+  enabledEnvName: string,
+  start: () => CronLoop,
+) {
+  if (!boolEnv(enabledEnvName, true)) {
+    console.log(`[${label}] disabled by ${enabledEnvName}=false`);
+    return null;
+  }
+
+  return start();
 }
 
 function startNotificationQueueCronLoop(): CronLoop {
@@ -442,10 +612,11 @@ process.env.PORT = port;
 if (command === "cron") {
   console.log(`[cron] workers on port ${port}`);
   const cronLoops = [
-    startReviewFetchCronLoop(),
-    startNotificationQueueCronLoop(),
-    startIosIapTwoHourCronLoop(),
-  ];
+    maybeStartCronLoop("mobile-ingest", "MOBILE_INGEST_ENABLED", startMobileIngestCronLoop),
+    maybeStartCronLoop("review-fetch-cron", "REVIEW_FETCH_CRON_ENABLED", startReviewFetchCronLoop),
+    maybeStartCronLoop("notification-queue", "NOTIFICATION_QUEUE_ENABLED", startNotificationQueueCronLoop),
+    maybeStartCronLoop("ios-iap-2hour-ga4", "IOS_IAP_2HOUR_ENABLED", startIosIapTwoHourCronLoop),
+  ].filter((cronLoop): cronLoop is CronLoop => Boolean(cronLoop));
 
   function shutdownCron() {
     cronLoops.forEach((cronLoop) => cronLoop.stop());
@@ -464,10 +635,11 @@ if (command === "cron") {
   });
 
   let cronLoops: CronLoop[] = [
-    startReviewFetchCronLoop(),
-    startNotificationQueueCronLoop(),
-    startIosIapTwoHourCronLoop(),
-  ];
+    maybeStartCronLoop("mobile-ingest", "MOBILE_INGEST_ENABLED", startMobileIngestCronLoop),
+    maybeStartCronLoop("review-fetch-cron", "REVIEW_FETCH_CRON_ENABLED", startReviewFetchCronLoop),
+    maybeStartCronLoop("notification-queue", "NOTIFICATION_QUEUE_ENABLED", startNotificationQueueCronLoop),
+    maybeStartCronLoop("ios-iap-2hour-ga4", "IOS_IAP_2HOUR_ENABLED", startIosIapTwoHourCronLoop),
+  ].filter((cronLoop): cronLoop is CronLoop => Boolean(cronLoop));
   let shuttingDown = false;
 
   function shutdown(signal: NodeJS.Signals) {

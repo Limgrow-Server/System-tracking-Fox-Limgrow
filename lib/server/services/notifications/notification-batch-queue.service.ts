@@ -18,6 +18,7 @@ const DEFAULT_DIRECT_DEVICE_LIMIT = 500;
 const DEFAULT_QUEUE_BATCH_SIZE = 100;
 const DEFAULT_QUEUE_CLAIM_LIMIT = 4;
 const DEFAULT_QUEUE_MAX_ATTEMPTS = 3;
+const DEFAULT_WORKER_CONCURRENCY = 2;
 const DEVICE_SCAN_PAGE_SIZE = 5000;
 const BATCH_CREATE_PAGE_SIZE = 100;
 const LOCK_TTL_MS = 10 * 60_000;
@@ -84,6 +85,30 @@ function notificationQueueBatchSize() {
 
 function notificationQueueClaimLimit() {
   return intEnv("NOTIFICATION_QUEUE_CLAIM_LIMIT", DEFAULT_QUEUE_CLAIM_LIMIT, 1, 20);
+}
+
+function notificationWorkerConcurrency() {
+  return intEnv("NOTIFICATION_WORKER_CONCURRENCY", DEFAULT_WORKER_CONCURRENCY, 1, 8);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }));
+
+  return results;
 }
 
 function normalizeActor(actor: QueueActor) {
@@ -798,7 +823,11 @@ export async function resumeNotificationQueueJob(jobId: string) {
   };
 }
 
-async function finishBatchSuccess(batch: NotificationBatchRow, result: EdgeFunctionResult) {
+async function finishBatchSuccess(
+  batch: NotificationBatchRow,
+  result: EdgeFunctionResult,
+  options: { updateParent?: boolean } = {},
+) {
   const sentCount = Number(result.sentCount ?? 0);
   const errorCount = Number(result.errorCount ?? 0);
   const status = errorCount > 0
@@ -818,10 +847,16 @@ async function finishBatchSuccess(batch: NotificationBatchRow, result: EdgeFunct
       status,
     },
   });
-  await updateParentJobAggregate(batch.job_id);
+  if (options.updateParent !== false) {
+    await updateParentJobAggregate(batch.job_id);
+  }
 }
 
-async function finishBatchFailure(batch: NotificationBatchRow, error: unknown) {
+async function finishBatchFailure(
+  batch: NotificationBatchRow,
+  error: unknown,
+  options: { updateParent?: boolean } = {},
+) {
   const message = error instanceof Error ? error.message : String(error);
   const now = new Date();
   const canRetry = batch.attempt_count < batch.max_attempts;
@@ -838,7 +873,9 @@ async function finishBatchFailure(batch: NotificationBatchRow, error: unknown) {
       status: canRetry ? "retrying" : "failed",
     },
   });
-  await updateParentJobAggregate(batch.job_id);
+  if (options.updateParent !== false) {
+    await updateParentJobAggregate(batch.job_id);
+  }
 
   return {
     batchId: batch.id,
@@ -847,10 +884,17 @@ async function finishBatchFailure(batch: NotificationBatchRow, error: unknown) {
   };
 }
 
-async function processNotificationBatch(batch: NotificationBatchRow) {
+async function processNotificationBatch(
+  batch: NotificationBatchRow,
+  options: { updateParent?: boolean } = {},
+) {
   const job = await prisma.notificationJob.findUnique({ where: { id: batch.job_id } });
   if (!job) {
-    return finishBatchFailure(batch, new Error("Parent notification job was not found."));
+    return finishBatchFailure(
+      batch,
+      new Error("Parent notification job was not found."),
+      options,
+    );
   }
   if (job.status === "paused") {
     const now = new Date();
@@ -864,7 +908,9 @@ async function processNotificationBatch(batch: NotificationBatchRow) {
         updatedAt: now,
       },
     });
-    await updateParentJobAggregate(batch.job_id);
+    if (options.updateParent !== false) {
+      await updateParentJobAggregate(batch.job_id);
+    }
 
     return {
       batchId: batch.id,
@@ -874,7 +920,7 @@ async function processNotificationBatch(batch: NotificationBatchRow) {
 
   try {
     const result = await callSendNotificationBatch(job, batch);
-    await finishBatchSuccess(batch, result);
+    await finishBatchSuccess(batch, result, options);
     return {
       batchId: batch.id,
       errorCount: Number(result.errorCount ?? 0),
@@ -882,7 +928,7 @@ async function processNotificationBatch(batch: NotificationBatchRow) {
       status: "processed",
     };
   } catch (error) {
-    return finishBatchFailure(batch, error);
+    return finishBatchFailure(batch, error, options);
   }
 }
 
@@ -890,14 +936,19 @@ export async function runNotificationBatchQueue(options?: { limit?: number }) {
   const now = new Date();
   const recovered = await recoverStaleNotificationBatches(now);
   const limit = Math.min(Math.max(options?.limit ?? notificationQueueClaimLimit(), 1), 20);
-  await Promise.all(recovered.jobIds.map((jobId) => updateParentJobAggregate(jobId)));
   const materialized = await materializePendingNotificationJobs(limit);
   const batches = await claimNotificationBatches(limit);
-  const processed = [];
+  const processed = await mapWithConcurrency(
+    batches,
+    Math.min(notificationWorkerConcurrency(), limit),
+    (batch) => processNotificationBatch(batch, { updateParent: false }),
+  );
+  const affectedJobIds = Array.from(new Set([
+    ...recovered.jobIds,
+    ...batches.map((batch) => batch.job_id),
+  ].filter(Boolean)));
 
-  for (const batch of batches) {
-    processed.push(await processNotificationBatch(batch));
-  }
+  await Promise.all(affectedJobIds.map((jobId) => updateParentJobAggregate(jobId)));
 
   return {
     checkedAt: now.toISOString(),

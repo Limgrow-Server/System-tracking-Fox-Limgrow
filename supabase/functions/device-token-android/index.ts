@@ -1,3 +1,3 @@
-import { serveDeviceToken } from "../_shared/device-token.ts";
+import { forwardToServer } from "../_shared/server-proxy.ts";
 
-serveDeviceToken("android");
+Deno.serve((request) => forwardToServer(request, "/api/mobile/device-token-android"));

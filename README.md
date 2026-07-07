@@ -285,6 +285,7 @@ supabase projects list
 Deploy:
 
 ```bash
+supabase secrets set TRACKING_SERVER_URL="https://tracking-platform.example.com" --project-ref <project-ref>
 supabase functions deploy device-token-android --project-ref <project-ref>
 supabase functions deploy device-token-ios --project-ref <project-ref>
 supabase functions deploy dispatch-notifications --project-ref <project-ref>
@@ -296,9 +297,13 @@ supabase functions deploy verify-android --project-ref <project-ref>
 supabase functions deploy verify-ios --project-ref <project-ref>
 ```
 
-`supabase/config.toml` đang bật `verify_jwt = true`, nên caller phải gửi Supabase JWT hợp lệ. Nếu mobile app không dùng Supabase Auth, cần thiết kế thêm app-level/server-to-server auth trước khi mở public.
+`device-token-android`, `device-token-ios`, và `notification-event` chỉ proxy request mobile về `TRACKING_SERVER_URL` để Next.js/PM2 xử lý bằng Prisma. `send-notification` và `dispatch-notifications` không xử lý gửi ở Supabase Edge nữa; notification queue chạy ở server.
 
-Chi tiết cách Edge Functions lấy Firebase/Google/Apple config nằm ở [docs/edge-functions-config-guide.md](docs/edge-functions-config-guide.md).
+Mobile token/event request được ghi nhanh vào `mobile_ingest_events`; server worker `/api/cron/mobile-ingest` sẽ claim theo batch và xử lý song song bằng worker pool nhỏ. Khi chạy bằng `npm start`, script PM2 hiện tại tự chạy worker này. Mobile ingest dùng Prisma pool riêng, chỉnh bằng `MOBILE_INGEST_DATABASE_CONNECTION_LIMIT` và `MOBILE_INGEST_DATABASE_POOL_TIMEOUT` để không ăn hết pool chính của UI/IAP. Có thể chỉnh tốc độ bằng `MOBILE_INGEST_INTERVAL_MS`, `MOBILE_INGEST_ACTIVE_INTERVAL_MS`, `MOBILE_INGEST_BATCH_SIZE`, `MOBILE_INGEST_CONCURRENCY`, `MOBILE_INGEST_ENQUEUE_CONCURRENCY`, và `MOBILE_INGEST_WORKER_CONNECTION_RESERVE`; mặc định nên bắt đầu với `batch=100`, `concurrency=3`, `connection_limit=6`, `pool_timeout=10`. Duplicate token đã xử lý gần đây không bị queue lại trong khoảng `MOBILE_INGEST_DEDUPE_COOLDOWN_MS`. Nếu batch lớn, đặt `MOBILE_INGEST_LOCK_TTL_MS` lớn hơn thời gian xử lý một batch để row chưa tới lượt không bị recover thành `retrying` quá sớm. Khi database đang backlog có thể tắt tạm từng loop bằng `MOBILE_INGEST_ENABLED=false`, `REVIEW_FETCH_CRON_ENABLED=false`, `NOTIFICATION_QUEUE_ENABLED=false`, hoặc `IOS_IAP_2HOUR_ENABLED=false`; review fetch cũng có thể giãn bằng `REVIEW_FETCH_INTERVAL_MS`.
+
+`supabase/config.toml` đang bật `verify_jwt = true`, nên caller phải gửi Supabase JWT hợp lệ. Nếu mobile app không dùng Supabase Auth, deploy các endpoint mobile bằng `--no-verify-jwt` và giữ app-level key qua `apikey`, `x-api-key`, hoặc Bearer token.
+
+Chi tiết cách Edge Functions lấy Firebase/Google/Apple config cho các verify endpoint nằm ở [docs/edge-functions-config-guide.md](docs/edge-functions-config-guide.md).
 
 ## 8. Bootstrap tài khoản Admin đầu tiên
 
