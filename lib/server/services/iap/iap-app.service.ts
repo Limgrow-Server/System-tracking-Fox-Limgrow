@@ -5,6 +5,8 @@ import { unstable_cache } from "next/cache";
 import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { valuesMatchSearch } from "@/lib/search";
 import {
+  getActiveIapAppMappingsPage,
+  getActiveIapStoreNames,
   getAllActiveStoreMappings,
   getAndroidIapTransactionById,
   getAndroidMappingById,
@@ -42,6 +44,8 @@ type IapAppCardOptions = {
   search?: string;
   storeAccountName?: string;
 };
+
+type IapAppCardsPageOptions = IapAppCardOptions & PaginationQuery;
 
 type CachedIapAppCard = IapAppCard & {
   appId: string | null;
@@ -158,6 +162,33 @@ export function getIapAppCardsPage(
     apps.length,
     pagination,
   );
+}
+
+export async function getPaginatedIapAppCards(
+  options: IapAppCardsPageOptions,
+): Promise<{
+  appPage: PaginatedResult<IapAppCard>;
+  storeNames: string[];
+}> {
+  const platform =
+    options.platform === "android" || options.platform === "ios"
+      ? options.platform
+      : undefined;
+  const [result, storeNames] = await Promise.all([
+    getActiveIapAppMappingsPage({
+      platform,
+      search: options.search,
+      storeAccountName: options.storeAccountName,
+      skip: options.skip,
+      take: options.take,
+    }),
+    getActiveIapStoreNames({ platform }),
+  ]);
+
+  return {
+    appPage: paginatedResult(result.apps, result.total, options),
+    storeNames,
+  };
 }
 
 type IapTransactionPageOptions = PaginationQuery & {

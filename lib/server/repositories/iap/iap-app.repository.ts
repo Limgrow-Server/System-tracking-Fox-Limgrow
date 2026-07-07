@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { searchTextVariants } from "@/lib/search";
 import { convertCurrencyAmountToVnd } from "@/lib/server/currency-conversion";
 import type {
+  IapAppCard,
   IapAppMetrics,
   IapRevenueBucket,
   IapRevenueGranularity,
@@ -111,9 +112,129 @@ export type IosNotificationEventSummary =
   }>;
 
 type IapAppMappingOptions = {
+  platform?: string;
   search?: string;
   storeAccountName?: string;
 };
+
+type IapAppMappingPageOptions = IapAppMappingOptions & {
+  skip: number;
+  take: number;
+};
+
+type IapAppMappingRow = IapAppCard & {
+  appId: string | null;
+};
+
+type CountRow = {
+  total: number | bigint | null;
+};
+
+type StoreNameRow = {
+  storeAccountName: string | null;
+};
+
+function activeStatusSql() {
+  return Prisma.sql`'active'::mapping_status`;
+}
+
+function searchSql(search: string | undefined, columns: Prisma.Sql[]) {
+  const variants = searchTextVariants(search?.trim() ?? "");
+  if (!variants.length) return Prisma.empty;
+
+  const conditions = variants.flatMap((variant) => {
+    const pattern = `%${variant}%`;
+    return columns.map((column) => Prisma.sql`${column} ILIKE ${pattern}`);
+  });
+
+  return Prisma.sql`AND (${Prisma.join(conditions, " OR ")})`;
+}
+
+function storeAccountSql(storeAccountName: string | undefined) {
+  const normalized = storeAccountName?.trim();
+  if (!normalized) return Prisma.empty;
+
+  return Prisma.sql`
+    AND lower(coalesce(profile."store_account_name", mapping."store_account_name")) = lower(${normalized})
+  `;
+}
+
+function androidIapAppSelectSql(options?: IapAppMappingOptions) {
+  return Prisma.sql`
+    SELECT
+      mapping."id"::text AS "mappingId",
+      'android' AS "platform",
+      mapping."app_id" AS "appId",
+      mapping."app_name" AS "appName",
+      mapping."package_name" AS "identifier",
+      mapping."app_icon_url" AS "appIconUrl",
+      mapping."app_link" AS "appLink",
+      coalesce(profile."store_account_name", mapping."store_account_name") AS "storeAccountName",
+      mapping."store_profile_id"::text AS "storeProfileId",
+      NULL::numeric AS "revenueMicros",
+      NULL::text AS "revenueCurrency",
+      NULL::integer AS "transactionCount"
+    FROM "android_store_mappings" mapping
+    LEFT JOIN "android_store_profiles" profile
+      ON profile."id" = mapping."store_profile_id"
+    WHERE mapping."status" = ${activeStatusSql()}
+      ${storeAccountSql(options?.storeAccountName)}
+      ${searchSql(options?.search, [
+        Prisma.sql`mapping."app_name"`,
+        Prisma.sql`mapping."app_id"`,
+        Prisma.sql`mapping."package_name"`,
+        Prisma.sql`mapping."store_account_name"`,
+        Prisma.sql`profile."store_account_name"`,
+      ])}
+  `;
+}
+
+function iosIapAppSelectSql(options?: IapAppMappingOptions) {
+  return Prisma.sql`
+    SELECT
+      mapping."id"::text AS "mappingId",
+      'ios' AS "platform",
+      mapping."app_id" AS "appId",
+      mapping."app_name" AS "appName",
+      mapping."bundle_id" AS "identifier",
+      mapping."app_icon_url" AS "appIconUrl",
+      mapping."app_link" AS "appLink",
+      coalesce(profile."store_account_name", mapping."store_account_name") AS "storeAccountName",
+      mapping."store_profile_id"::text AS "storeProfileId",
+      NULL::numeric AS "revenueMicros",
+      NULL::text AS "revenueCurrency",
+      NULL::integer AS "transactionCount"
+    FROM "ios_store_mappings" mapping
+    LEFT JOIN "ios_store_profiles" profile
+      ON profile."id" = mapping."store_profile_id"
+    WHERE mapping."status" = ${activeStatusSql()}
+      ${storeAccountSql(options?.storeAccountName)}
+      ${searchSql(options?.search, [
+        Prisma.sql`mapping."app_name"`,
+        Prisma.sql`mapping."app_id"`,
+        Prisma.sql`mapping."apple_app_id"`,
+        Prisma.sql`mapping."bundle_id"`,
+        Prisma.sql`mapping."store_account_name"`,
+        Prisma.sql`profile."store_account_name"`,
+      ])}
+  `;
+}
+
+function iapAppBaseSql(options?: IapAppMappingOptions) {
+  if (options?.platform === "android") {
+    return androidIapAppSelectSql(options);
+  }
+
+  if (options?.platform === "ios") {
+    return iosIapAppSelectSql(options);
+  }
+
+  return Prisma.sql`
+    ${androidIapAppSelectSql(options)}
+    UNION ALL
+    ${iosIapAppSelectSql(options)}
+  `;
+}
 
 function androidMappingWhere(
   options?: IapAppMappingOptions,
@@ -212,6 +333,57 @@ export async function getAllActiveStoreMappings(options?: IapAppMappingOptions) 
   ]);
 
   return { androidMappings, iosMappings };
+}
+
+export async function getActiveIapAppMappingsPage(
+  options: IapAppMappingPageOptions,
+) {
+  const baseSql = iapAppBaseSql(options);
+  const [rows, countRows] = await Promise.all([
+    prisma.$queryRaw<IapAppMappingRow[]>(Prisma.sql`
+      SELECT *
+      FROM (${baseSql}) apps
+      ORDER BY "appName" ASC, "identifier" ASC, "mappingId" ASC
+      LIMIT ${options.take}
+      OFFSET ${options.skip}
+    `),
+    prisma.$queryRaw<CountRow[]>(Prisma.sql`
+      SELECT COUNT(*)::int AS total
+      FROM (${baseSql}) apps
+    `),
+  ]);
+  const total = Number(countRows[0]?.total ?? 0);
+
+  return {
+    apps: rows.map((row) => ({
+      appIconUrl: row.appIconUrl,
+      appLink: row.appLink,
+      appName: row.appName,
+      identifier: row.identifier,
+      mappingId: row.mappingId,
+      platform: row.platform,
+      revenueCurrency: row.revenueCurrency,
+      revenueMicros: row.revenueMicros,
+      storeAccountName: row.storeAccountName,
+      storeProfileId: row.storeProfileId,
+      transactionCount: row.transactionCount,
+    })),
+    total,
+  };
+}
+
+export async function getActiveIapStoreNames(options?: IapAppMappingOptions) {
+  const baseSql = iapAppBaseSql({ platform: options?.platform });
+  const rows = await prisma.$queryRaw<StoreNameRow[]>(Prisma.sql`
+    SELECT DISTINCT "storeAccountName"
+    FROM (${baseSql}) apps
+    WHERE "storeAccountName" IS NOT NULL AND "storeAccountName" <> ''
+    ORDER BY "storeAccountName" ASC
+  `);
+
+  return rows
+    .map((row) => row.storeAccountName?.trim() ?? "")
+    .filter(Boolean);
 }
 
 export async function getAndroidMappingById(id: string) {

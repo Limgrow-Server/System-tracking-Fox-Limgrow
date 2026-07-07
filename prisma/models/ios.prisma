@@ -23,6 +23,7 @@ model IosStoreProfile {
   reviewTarget     ReviewStoreTarget?
 
   @@index([status, storeAccountName], map: "ios_store_profiles_status_name_idx")
+  @@index([updatedAt(sort: Desc)], map: "ios_store_profiles_updated_idx")
   @@map("ios_store_profiles")
 }
 
@@ -51,7 +52,10 @@ model IosStoreMapping {
   @@index([appId, status], map: "ios_store_mappings_app_id_status_idx")
   @@index([appleAppId, status], map: "ios_store_mappings_apple_app_id_status_idx")
   @@index([bundleId, status], map: "ios_store_mappings_bundle_status_idx")
+  @@index([status, appName, bundleId, id], map: "ios_store_mappings_status_app_name_bundle_idx")
+  @@index([storeProfileId, updatedAt(sort: Desc)], map: "ios_store_mappings_profile_updated_idx")
   @@index([storeAccountName], map: "ios_store_mappings_store_name_idx")
+  @@index([updatedAt(sort: Desc)], map: "ios_store_mappings_updated_idx")
   @@map("ios_store_mappings")
 }
 
@@ -84,6 +88,7 @@ model IosCredential {
   @@unique([storeProfileId, credentialPurpose], map: "ios_credentials_profile_purpose_key")
   @@index([credentialRef, status], map: "ios_credentials_lookup_idx")
   @@index([storeAccountName, credentialPurpose, status], map: "ios_credentials_store_purpose_status_idx")
+  @@index([updatedAt(sort: Desc)], map: "ios_credentials_updated_idx")
   @@index([vaultSecretId], map: "ios_credentials_vault_secret_id_idx")
   @@index([vaultSecretName], map: "ios_credentials_vault_secret_name_idx")
   @@map("ios_credentials")
@@ -225,7 +230,7 @@ model IosStoreReview {
   appTarget               ReviewAppTarget @relation(fields: [reviewAppTargetId], references: [id], onDelete: Cascade)
 
   @@unique([reviewAppTargetId, reviewId], map: "ios_store_reviews_app_review_key")
-  @@index([reviewAppTargetId, reviewCreatedAt], map: "ios_store_reviews_app_created_idx")
+  @@index([reviewAppTargetId, reviewUpdatedAt(sort: Desc), reviewCreatedAt(sort: Desc), fetchedAt(sort: Desc)], map: "ios_store_reviews_app_updated_idx")
   @@index([reviewAppTargetId, rating], map: "ios_store_reviews_app_rating_idx")
   @@index([developerReplyUpdatedAt], map: "ios_store_reviews_reply_updated_idx")
   @@index([territory], map: "ios_store_reviews_territory_idx")

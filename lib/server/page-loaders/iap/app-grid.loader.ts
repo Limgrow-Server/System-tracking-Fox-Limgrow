@@ -1,10 +1,11 @@
 import "server-only";
 
-import { canAccessIapApp } from "@/lib/auth/app-scope";
+import { canAccessIapApp, hasAllAppAccess } from "@/lib/auth/app-scope";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import {
   getIapAppCardLists,
   getIapAppCardsPage,
+  getPaginatedIapAppCards,
 } from "@/lib/server/services/iap/iap-app.service";
 import type { IapAppGridPageData } from "@/lib/tracking/page-data";
 
@@ -38,6 +39,32 @@ export async function getIapAppGridPageData(
     skip: (page - 1) * IAP_APP_PAGE_SIZE,
     take: IAP_APP_PAGE_SIZE,
   };
+
+  if (hasAllAppAccess(session)) {
+    const { appPage, storeNames } = await getPaginatedIapAppCards({
+      ...pagination,
+      platform,
+      search: search || undefined,
+      storeAccountName: storeAccountName || undefined,
+    });
+
+    return {
+      appPagination: {
+        page: appPage.page,
+        pageSize: appPage.pageSize,
+        total: appPage.total,
+        totalPages: appPage.totalPages,
+      },
+      apps: appPage.data,
+      filters: {
+        platform,
+        search,
+        storeAccountName,
+      },
+      storeNames,
+    };
+  }
+
   const { allApps, matchingApps } = await getIapAppCardLists({
     platform,
     search: search || undefined,

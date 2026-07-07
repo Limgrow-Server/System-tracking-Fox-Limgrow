@@ -146,6 +146,7 @@ export async function handleReplyStoresGet(request: Request) {
     const url = new URL(request.url);
     const data = await getReplyStoreListPageDataLoader(session, {
       ...reviewPagination(url, 10),
+      platform: clean(url.searchParams.get("platform")) || undefined,
       search: clean(url.searchParams.get("search")) || undefined,
     });
 
