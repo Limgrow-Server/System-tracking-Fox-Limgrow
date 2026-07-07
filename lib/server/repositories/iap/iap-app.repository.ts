@@ -9,6 +9,8 @@ import type {
   IapRevenueBucket,
   IapRevenueGranularity,
 } from "@/lib/tracking/page-data";
+import type { IosIapTwoHourCheckRecord } from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
+import type { IosIapTransactionSummaryRecord } from "@/lib/tracking/mappers/ios";
 
 const androidTransactionListSelect = {
   id: true,
@@ -60,10 +62,39 @@ const iosTransactionSummarySelect = {
   storefront: true,
   revocationDate: true,
   environment: true,
-  rawReceipt: true,
   verifiedAt: true,
   createdAt: true,
 } satisfies Prisma.IosIapTransactionSelect;
+
+const androidMappingByIdSelect = {
+  id: true,
+  storeProfileId: true,
+  storeAccountName: true,
+  appName: true,
+  appIconUrl: true,
+  appLink: true,
+  packageName: true,
+  storeProfile: {
+    select: { storeAccountName: true },
+  },
+} satisfies Prisma.AndroidStoreMappingSelect;
+
+const iosMappingByIdSelect = {
+  id: true,
+  storeProfileId: true,
+  storeAccountName: true,
+  appName: true,
+  appIconUrl: true,
+  appLink: true,
+  bundleId: true,
+  storeProfile: {
+    select: { storeAccountName: true },
+  },
+} satisfies Prisma.IosStoreMappingSelect;
+
+type IosMappingById = Prisma.IosStoreMappingGetPayload<{
+  select: typeof iosMappingByIdSelect;
+}>;
 
 const iosTrialAnalyticsTransactionSelect = {
   id: true,
@@ -389,22 +420,14 @@ export async function getActiveIapStoreNames(options?: IapAppMappingOptions) {
 export async function getAndroidMappingById(id: string) {
   return prisma.androidStoreMapping.findUnique({
     where: { id },
-    include: {
-      storeProfile: {
-        select: { storeAccountName: true },
-      },
-    },
+    select: androidMappingByIdSelect,
   });
 }
 
 export async function getIosMappingById(id: string) {
   return prisma.iosStoreMapping.findUnique({
     where: { id },
-    include: {
-      storeProfile: {
-        select: { storeAccountName: true },
-      },
-    },
+    select: iosMappingByIdSelect,
   });
 }
 
@@ -784,25 +807,26 @@ export async function getAndroidTransactionsByPackageAndProfilePage(
   options: AndroidTransactionPageOptions,
 ) {
   const where = androidTransactionWhere(packageName, storeProfileId, options);
-  const rowsPromise = prisma.iapAndroid.findMany({
-    where,
-    orderBy: revenueSortOrder(options.revenueSort)
-      ? [
-          { revenueMicros: revenueSortOrder(options.revenueSort) ?? "desc" },
-          { verifiedAt: "desc" },
-        ]
-      : { verifiedAt: "desc" },
-    skip: options.skip,
-    take: options.take,
-    select: androidTransactionListSelect,
-  });
+  const loadRows = () =>
+    prisma.iapAndroid.findMany({
+      where,
+      orderBy: revenueSortOrder(options.revenueSort)
+        ? [
+            { revenueMicros: revenueSortOrder(options.revenueSort) ?? "desc" },
+            { verifiedAt: "desc" },
+          ]
+        : { verifiedAt: "desc" },
+      skip: options.skip,
+      take: options.take,
+      select: androidTransactionListSelect,
+    });
 
   if (options.includeTotal === false) {
-    return [await rowsPromise, null] as const;
+    return [await loadRows(), null] as const;
   }
 
-  const [rows, total] = await prisma.$transaction([
-    rowsPromise,
+  const [rows, total] = await Promise.all([
+    loadRows(),
     prisma.iapAndroid.count({ where }),
   ]);
 
@@ -885,6 +909,65 @@ type IosTransactionPageOptions = {
   trial?: string;
 };
 
+type IosTransactionListPageRow = {
+  checkAppInstanceId: string | null;
+  checkAttempts: number | null;
+  checkAt: Date | null;
+  checkBundleId: string | null;
+  checkCreatedAt: Date | null;
+  checkEnvironment: string | null;
+  checkFirebaseAppId: string | null;
+  checkGa4EventName: string | null;
+  checkGa4SentAt: Date | null;
+  checkId: string | null;
+  checkLastError: string | null;
+  checkOriginalTransactionId: string | null;
+  checkProductId: string | null;
+  checkRawContext: Prisma.JsonValue | null;
+  checkRenewalStatus: string | null;
+  checkRenewed: boolean | null;
+  checkStatus: string | null;
+  checkStoreProfileId: string | null;
+  checkTransactionId: string | null;
+  checkUpdatedAt: Date | null;
+  checkUserId: string | null;
+  mappingAppIconUrl: string | null;
+  mappingAppLink: string | null;
+  mappingAppName: string;
+  mappingBundleId: string;
+  mappingId: string;
+  mappingProfileStoreAccountName: string | null;
+  mappingStoreAccountName: string;
+  mappingStoreProfileId: string;
+  txBillingPlanType: string | null;
+  txBundleId: string | null;
+  txCreatedAt: Date | null;
+  txCurrency: string | null;
+  txDecodedRenewalInfo: Prisma.JsonValue | null;
+  txEnvironment: string | null;
+  txExpiresDate: Date | null;
+  txHasDecodedNotification: boolean | null;
+  txHasSignedTransactionInfo: boolean | null;
+  txId: string | null;
+  txIsTrial: boolean | null;
+  txOfferDiscountType: string | null;
+  txOfferPeriod: string | null;
+  txOriginalTransactionId: string | null;
+  txPriceMilliunits: bigint | null;
+  txProductId: string | null;
+  txPurchaseDate: Date | null;
+  txRawReceiptSource: string | null;
+  txRawReceiptSubtype: string | null;
+  txRevenueMicros: bigint | null;
+  txRevocationDate: Date | null;
+  txState: string | null;
+  txStorefront: string | null;
+  txTransactionId: string | null;
+  txTransactionReason: string | null;
+  txUserId: string | null;
+  txVerifiedAt: Date | null;
+};
+
 function iosFreeTrialWhere(): Prisma.IosIapTransactionWhereInput {
   return {
     OR: [
@@ -945,31 +1028,310 @@ function iosTransactionWhere(
   return where;
 }
 
+function iosTransactionSqlConditions(options: Partial<IosTransactionPageOptions>) {
+  const conditions: Prisma.Sql[] = [
+    Prisma.sql`t.bundle_id = m.bundle_id`,
+    Prisma.sql`t.environment = 'production'`,
+    Prisma.sql`(t.store_profile_id = m.store_profile_id OR t.store_profile_id IS NULL)`,
+  ];
+  const state = options.state?.trim();
+  const trial = options.trial?.trim();
+  const purchaseDate = purchaseDateRange(
+    options.purchaseDateFrom,
+    options.purchaseDateTo,
+  );
+  const freeTrialCondition = Prisma.sql`(
+    t.is_trial = true
+    OR lower(t.offer_discount_type) = 'free_trial'
+    OR (t.offer_type = 1 AND t.price_milliunits = 0 AND t.revenue_micros = 0)
+  )`;
+
+  if (state && state !== "all") {
+    conditions.push(Prisma.sql`lower(t.state) = ${state.toLowerCase()}`);
+  }
+
+  if (trial === "trial") {
+    conditions.push(freeTrialCondition);
+  }
+
+  if (trial === "non_trial") {
+    conditions.push(Prisma.sql`NOT ${freeTrialCondition}`);
+  }
+
+  if (purchaseDate?.start) {
+    conditions.push(Prisma.sql`t.purchase_date >= ${purchaseDate.start}`);
+  }
+
+  if (purchaseDate?.end) {
+    conditions.push(Prisma.sql`t.purchase_date < ${purchaseDate.end}`);
+  }
+
+  return conditions;
+}
+
+function iosTransactionSqlOrderBy(revenueSort: string | null | undefined) {
+  const sort = revenueSortOrder(revenueSort);
+
+  if (sort === "asc") {
+    return Prisma.sql`ORDER BY t.revenue_micros ASC NULLS LAST, t.verified_at DESC`;
+  }
+
+  if (sort === "desc") {
+    return Prisma.sql`ORDER BY t.revenue_micros DESC NULLS LAST, t.verified_at DESC`;
+  }
+
+  return Prisma.sql`ORDER BY t.verified_at DESC`;
+}
+
+function compactJsonObject(record: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== null && value !== undefined),
+  );
+}
+
+function minimalIosRawReceipt(row: IosTransactionListPageRow) {
+  const receipt = compactJsonObject({
+    decodedNotification: row.txHasDecodedNotification ? {} : null,
+    decodedRenewalInfo: row.txDecodedRenewalInfo,
+    signedTransactionInfo: row.txHasSignedTransactionInfo ? "present" : null,
+    source: row.txRawReceiptSource,
+    subtype: row.txRawReceiptSubtype,
+  });
+
+  return Object.keys(receipt).length ? (receipt as Prisma.JsonObject) : null;
+}
+
+function iosTransactionFromListPageRow(
+  row: IosTransactionListPageRow,
+): IosIapTransactionSummaryRecord | null {
+  if (!row.txId || !row.txTransactionId || !row.txProductId || !row.txState) {
+    return null;
+  }
+
+  return {
+    billingPlanType: row.txBillingPlanType,
+    bundleId: row.txBundleId,
+    createdAt: row.txCreatedAt ?? new Date(0),
+    currency: row.txCurrency,
+    environment: row.txEnvironment ?? "production",
+    expiresDate: row.txExpiresDate,
+    id: row.txId,
+    isTrial: row.txIsTrial,
+    offerDiscountType: row.txOfferDiscountType,
+    offerPeriod: row.txOfferPeriod,
+    originalTransactionId: row.txOriginalTransactionId,
+    priceMilliunits: row.txPriceMilliunits,
+    productId: row.txProductId,
+    purchaseDate: row.txPurchaseDate,
+    rawReceipt: minimalIosRawReceipt(row),
+    revenueMicros: row.txRevenueMicros,
+    revocationDate: row.txRevocationDate,
+    state: row.txState,
+    storefront: row.txStorefront,
+    transactionId: row.txTransactionId,
+    transactionReason: row.txTransactionReason,
+    userId: row.txUserId,
+    verifiedAt: row.txVerifiedAt ?? new Date(0),
+  };
+}
+
+function iosTwoHourCheckFromListPageRow(
+  row: IosTransactionListPageRow,
+): IosIapTwoHourCheckRecord | null {
+  if (
+    !row.checkId ||
+    !row.checkTransactionId ||
+    !row.checkBundleId ||
+    !row.checkProductId ||
+    !row.checkEnvironment ||
+    !row.checkAppInstanceId ||
+    !row.checkGa4EventName ||
+    !row.checkAt ||
+    !row.checkStatus ||
+    row.checkAttempts === null ||
+    !row.checkCreatedAt ||
+    !row.checkUpdatedAt
+  ) {
+    return null;
+  }
+
+  return {
+    appInstanceId: row.checkAppInstanceId,
+    attempts: row.checkAttempts,
+    bundleId: row.checkBundleId,
+    checkAt: row.checkAt,
+    createdAt: row.checkCreatedAt,
+    environment: row.checkEnvironment,
+    firebaseAppId: row.checkFirebaseAppId,
+    ga4EventName: row.checkGa4EventName,
+    ga4SentAt: row.checkGa4SentAt,
+    id: row.checkId,
+    lastError: row.checkLastError,
+    originalTransactionId: row.checkOriginalTransactionId,
+    productId: row.checkProductId,
+    rawContext: row.checkRawContext ?? {},
+    renewalStatus: row.checkRenewalStatus,
+    renewed: row.checkRenewed,
+    status: row.checkStatus,
+    storeProfileId: row.checkStoreProfileId,
+    transactionId: row.checkTransactionId,
+    updatedAt: row.checkUpdatedAt,
+    userId: row.checkUserId,
+  };
+}
+
+function iosMappingFromListPageRow(
+  row: IosTransactionListPageRow | undefined,
+): IosMappingById | null {
+  if (!row) return null;
+
+  return {
+    appIconUrl: row.mappingAppIconUrl,
+    appLink: row.mappingAppLink,
+    appName: row.mappingAppName,
+    bundleId: row.mappingBundleId,
+    id: row.mappingId,
+    storeAccountName: row.mappingStoreAccountName,
+    storeProfile: {
+      storeAccountName:
+        row.mappingProfileStoreAccountName ?? row.mappingStoreAccountName,
+    },
+    storeProfileId: row.mappingStoreProfileId,
+  };
+}
+
+export async function getIosTransactionsListPageByMappingId(
+  mappingId: string,
+  options: IosTransactionPageOptions,
+) {
+  const conditions = iosTransactionSqlConditions(options);
+  const orderBy = iosTransactionSqlOrderBy(options.revenueSort);
+  const rows = await prisma.$queryRaw<IosTransactionListPageRow[]>(Prisma.sql`
+        WITH mapping AS (
+          SELECT
+            m.id,
+            m.store_profile_id,
+            m.store_account_name,
+            m.app_name,
+            m.app_icon_url,
+            m.app_link,
+            m.bundle_id,
+            sp.store_account_name AS profile_store_account_name
+          FROM public.ios_store_mappings m
+          LEFT JOIN public.ios_store_profiles sp ON sp.id = m.store_profile_id
+          WHERE m.id = ${mappingId}::uuid
+        ),
+        paged_transactions AS (
+          SELECT t.*
+          FROM public.ios_iap_transactions t
+          JOIN mapping m ON true
+          WHERE ${joinSql(conditions, Prisma.sql`AND`)}
+          ${orderBy}
+          LIMIT ${options.take}
+          OFFSET ${options.skip}
+        )
+        SELECT
+          m.id AS "mappingId",
+          m.store_profile_id AS "mappingStoreProfileId",
+          m.store_account_name AS "mappingStoreAccountName",
+          m.app_name AS "mappingAppName",
+          m.app_icon_url AS "mappingAppIconUrl",
+          m.app_link AS "mappingAppLink",
+          m.bundle_id AS "mappingBundleId",
+          m.profile_store_account_name AS "mappingProfileStoreAccountName",
+          t.id AS "txId",
+          t.transaction_id AS "txTransactionId",
+          t.original_transaction_id AS "txOriginalTransactionId",
+          t.product_id AS "txProductId",
+          t.user_id AS "txUserId",
+          t.bundle_id AS "txBundleId",
+          t.purchase_date AS "txPurchaseDate",
+          t.expires_date AS "txExpiresDate",
+          t.state AS "txState",
+          t.revenue_micros AS "txRevenueMicros",
+          t.price_milliunits AS "txPriceMilliunits",
+          t.currency AS "txCurrency",
+          t.is_trial AS "txIsTrial",
+          t.transaction_reason AS "txTransactionReason",
+          t.offer_discount_type AS "txOfferDiscountType",
+          t.offer_period AS "txOfferPeriod",
+          t.billing_plan_type AS "txBillingPlanType",
+          t.storefront AS "txStorefront",
+          t.revocation_date AS "txRevocationDate",
+          t.environment AS "txEnvironment",
+          t.raw_receipt::jsonb ->> 'source' AS "txRawReceiptSource",
+          t.raw_receipt::jsonb ->> 'subtype' AS "txRawReceiptSubtype",
+          t.raw_receipt::jsonb -> 'decodedRenewalInfo' AS "txDecodedRenewalInfo",
+          jsonb_typeof(t.raw_receipt::jsonb -> 'decodedNotification') = 'object' AS "txHasDecodedNotification",
+          t.raw_receipt::jsonb ? 'signedTransactionInfo' AS "txHasSignedTransactionInfo",
+          t.verified_at AS "txVerifiedAt",
+          t.created_at AS "txCreatedAt",
+          c.id AS "checkId",
+          c.store_profile_id AS "checkStoreProfileId",
+          c.transaction_id AS "checkTransactionId",
+          c.original_transaction_id AS "checkOriginalTransactionId",
+          c.user_id AS "checkUserId",
+          c.bundle_id AS "checkBundleId",
+          c.product_id AS "checkProductId",
+          c.environment AS "checkEnvironment",
+          c.app_instance_id AS "checkAppInstanceId",
+          c.firebase_app_id AS "checkFirebaseAppId",
+          c.ga4_event_name AS "checkGa4EventName",
+          c.check_at AS "checkAt",
+          c.status AS "checkStatus",
+          c.renewed AS "checkRenewed",
+          c.renewal_status AS "checkRenewalStatus",
+          c.ga4_sent_at AS "checkGa4SentAt",
+          c.attempts AS "checkAttempts",
+          c.last_error AS "checkLastError",
+          c.raw_context AS "checkRawContext",
+          c.created_at AS "checkCreatedAt",
+          c.updated_at AS "checkUpdatedAt"
+        FROM mapping m
+        LEFT JOIN paged_transactions t ON true
+        LEFT JOIN public.ios_iap_two_hour_checks c ON c.transaction_id = t.transaction_id
+        ${orderBy}
+      `);
+
+  const mapping = iosMappingFromListPageRow(rows[0]);
+  const transactions = rows
+    .map(iosTransactionFromListPageRow)
+    .filter((transaction): transaction is IosIapTransactionSummaryRecord =>
+      Boolean(transaction),
+    );
+  const twoHourChecks = rows
+    .map(iosTwoHourCheckFromListPageRow)
+    .filter((check): check is IosIapTwoHourCheckRecord => Boolean(check));
+
+  return { mapping, transactions, twoHourChecks };
+}
+
 export async function getIosTransactionsByBundleIdPage(
   bundleId: string,
   storeProfileId: string | undefined,
   options: IosTransactionPageOptions,
 ) {
   const where = iosTransactionWhere(bundleId, storeProfileId, options);
-  const rowsPromise = prisma.iosIapTransaction.findMany({
-    where,
-    orderBy: revenueSortOrder(options.revenueSort)
-      ? [
-          { revenueMicros: revenueSortOrder(options.revenueSort) ?? "desc" },
-          { verifiedAt: "desc" },
-        ]
-      : { verifiedAt: "desc" },
-    skip: options.skip,
-    take: options.take,
-    select: iosTransactionSummarySelect,
-  });
+  const loadRows = () =>
+    prisma.iosIapTransaction.findMany({
+      where,
+      orderBy: revenueSortOrder(options.revenueSort)
+        ? [
+            { revenueMicros: revenueSortOrder(options.revenueSort) ?? "desc" },
+            { verifiedAt: "desc" },
+          ]
+        : { verifiedAt: "desc" },
+      skip: options.skip,
+      take: options.take,
+      select: iosTransactionSummarySelect,
+    });
 
   if (options.includeTotal === false) {
-    return [await rowsPromise, null] as const;
+    return [await loadRows(), null] as const;
   }
 
-  const [rows, total] = await prisma.$transaction([
-    rowsPromise,
+  const [rows, total] = await Promise.all([
+    loadRows(),
     prisma.iosIapTransaction.count({ where }),
   ]);
 

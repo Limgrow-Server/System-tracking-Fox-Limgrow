@@ -29,7 +29,6 @@ export type IosIapTransactionSummaryRecord = Pick<
   | "priceMilliunits"
   | "productId"
   | "purchaseDate"
-  | "rawReceipt"
   | "revenueMicros"
   | "revocationDate"
   | "state"
@@ -38,7 +37,9 @@ export type IosIapTransactionSummaryRecord = Pick<
   | "transactionReason"
   | "userId"
   | "verifiedAt"
->;
+> & {
+  rawReceipt?: IosIapTransaction["rawReceipt"] | null;
+};
 
 function jsonRecord(value: unknown): Record<string, unknown> | null {
   return Boolean(value && typeof value === "object" && !Array.isArray(value))
