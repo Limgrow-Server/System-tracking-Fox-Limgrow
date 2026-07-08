@@ -643,6 +643,7 @@ export async function runIosIapTwoHourGa4Checks(options?: {
     renewed?: boolean;
     status: string;
     transactionId: string;
+    ga4Result?: unknown;
   }> = [];
 
   for (const check of claimed) {
