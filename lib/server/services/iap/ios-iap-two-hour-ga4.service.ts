@@ -353,7 +353,44 @@ function revenueTransactionForCheck(
   );
 }
 
-function ga4RevenueParams(
+async function convertToUsd(amount: number, baseCurrency: string): Promise<{ value: number; currency: string }> {
+  const cleanCurrency = baseCurrency.trim().toUpperCase();
+  if (cleanCurrency === "USD" || !cleanCurrency) {
+    return { value: amount, currency: "USD" };
+  }
+
+  try {
+    const response = await fetch("https://live-earth-map.limgrow.com/money/convert", {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        base: cleanCurrency,
+        target: "USD",
+        amount: amount,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(`Currency conversion API returned status ${response.status} for ${cleanCurrency} -> USD`);
+      return { value: amount, currency: baseCurrency };
+    }
+
+    const json = await response.json() as { data?: number };
+    if (json && typeof json.data === "number" && Number.isFinite(json.data)) {
+      return { value: json.data, currency: "USD" };
+    }
+
+    return { value: amount, currency: baseCurrency };
+  } catch (error) {
+    console.error("Currency conversion failed:", error);
+    return { value: amount, currency: baseCurrency };
+  }
+}
+
+async function ga4RevenueParams(
   check: IosIapTwoHourCheckRecord,
   decision: RenewalDecision,
   transactions: IosIapRenewalEvidenceTransaction[],
@@ -363,7 +400,43 @@ function ga4RevenueParams(
 
   if (!decision.renewed) {
     return {
-      currency: revenue.currency,
+      currency: revenue.currency || "USD",
+      revenue_source: "cancel_or_disabled",
+      revenue_transaction_id: revenue.transactionId,
+      value: 0,
+    };
+  }
+
+  if (revenue.currency && revenue.value > 0) {
+    const converted = await convertToUsd(revenue.value, revenue.currency);
+    return {
+      currency: converted.currency,
+      revenue_source: revenue.source,
+      revenue_transaction_id: revenue.transactionId,
+      value: converted.value,
+    };
+  }
+
+  return {
+    currency: revenue.currency || "USD",
+    revenue_source: revenue.source,
+    revenue_transaction_id: revenue.transactionId,
+    value: revenue.value,
+  };
+}
+
+// Raw revenue params — giữ nguyên currency gốc, KHÔNG convert sang USD
+function ga4RevenueParamsRaw(
+  check: IosIapTwoHourCheckRecord,
+  decision: RenewalDecision,
+  transactions: IosIapRenewalEvidenceTransaction[],
+) {
+  const transaction = revenueTransactionForCheck(check, transactions);
+  const revenue = revenueFromTransaction(transaction);
+
+  if (!decision.renewed) {
+    return {
+      currency: revenue.currency || "USD",
       revenue_source: "cancel_or_disabled",
       revenue_transaction_id: revenue.transactionId,
       value: 0,
@@ -371,8 +444,8 @@ function ga4RevenueParams(
   }
 
   return {
-    currency: revenue.currency,
-    revenue_source: revenue.source,
+    currency: revenue.currency || "USD",
+    revenue_source: revenue.source + "_raw",
     revenue_transaction_id: revenue.transactionId,
     value: revenue.value,
   };
@@ -388,34 +461,82 @@ async function sendGa4PurchaseTwoHourEvent(
   url.searchParams.set("firebase_app_id", config.firebaseAppId);
   url.searchParams.set("api_secret", config.apiSecret);
 
-  const eventName =
+  const isDebug =
+    boolEnv("IOS_IAP_2HOUR_GA4_DEBUG_MODE") ||
+    boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY");
+
+  const baseEventName =
     clean(process.env.IOS_IAP_2HOUR_GA4_EVENT_NAME) ||
     check.ga4EventName ||
     "purchase_2hour";
-  const revenue = ga4RevenueParams(check, decision, transactions);
-  const body = {
-    app_instance_id: check.appInstanceId,
-    events: [
+
+  const debugMode = isDebug ? 1 : null;
+
+  // Params dùng chung cho cả 2 event (không liên quan đến revenue)
+  const commonParams = {
+    bundle_id: check.bundleId,
+    engagement_time_msec: 1,
+    environment: check.environment,
+    original_transaction_id: check.originalTransactionId,
+    product_id: check.productId,
+    renewal_status: decision.renewalStatus,
+    transaction_id: check.transactionId,
+    debug_mode: debugMode,
+  };
+
+  let events: { name: string; params: Record<string, string | number | null> }[];
+
+  if (isDebug) {
+    // Debug mode: bắn 2 event —
+    //   test1: value đã convert sang USD
+    //   test2: giữ nguyên currency gốc, không convert
+    const revenueConverted = await ga4RevenueParams(check, decision, transactions);
+    const revenueRaw = ga4RevenueParamsRaw(check, decision, transactions);
+
+    events = [
       {
-        name: eventName,
+        name: `${baseEventName}_test1`,
         params: eventParams({
-          bundle_id: check.bundleId,
-          engagement_time_msec: 1,
-          environment: check.environment,
-          original_transaction_id: check.originalTransactionId,
-          product_id: check.productId,
+          ...commonParams,
+          currency: revenueConverted.currency,
+          revenue_source: revenueConverted.revenue_source,
+          revenue_transaction_id: revenueConverted.revenue_transaction_id,
+          value: revenueConverted.value,
+        }),
+      },
+      {
+        name: `${baseEventName}_test2`,
+        params: eventParams({
+          ...commonParams,
+          currency: revenueRaw.currency,
+          revenue_source: revenueRaw.revenue_source,
+          revenue_transaction_id: revenueRaw.revenue_transaction_id,
+          value: revenueRaw.value,
+        }),
+      },
+    ];
+  } else {
+    // Production: bắn 1 event duy nhất với value đã convert sang USD
+    const revenue = await ga4RevenueParams(check, decision, transactions);
+    events = [
+      {
+        name: baseEventName,
+        params: eventParams({
+          ...commonParams,
           currency: revenue.currency,
           revenue_source: revenue.revenue_source,
           revenue_transaction_id: revenue.revenue_transaction_id,
-          renewed: decision.renewed ? "true" : "false",
-          renewed_int: decision.renewed ? 1 : 0,
-          renewal_status: decision.renewalStatus,
-          transaction_id: check.transactionId,
           value: revenue.value,
         }),
       },
-    ],
+    ];
+  }
+
+  const body = {
+    app_instance_id: check.appInstanceId,
+    events,
   };
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -434,11 +555,11 @@ async function sendGa4PurchaseTwoHourEvent(
   }
 
   return {
-    eventName,
+    eventNames: events.map((e) => e.name),
     firebaseAppId: config.firebaseAppId,
+    isDebug,
     responseBody: responseText || null,
     responseStatus: response.status,
-    revenue,
     validationOnly: boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY"),
   };
 }
@@ -502,15 +623,19 @@ export async function runIosIapTwoHourGa4Checks(options?: {
   for (const check of claimed) {
     try {
       const { decision, evidence } = await decideRenewal(check);
-      const ga4Result = await sendGa4PurchaseTwoHourEvent(
-        check,
-        decision,
-        evidence.transactions,
-      );
+      let ga4Result = null;
+      if (decision.renewed) {
+        ga4Result = await sendGa4PurchaseTwoHourEvent(
+          check,
+          decision,
+          evidence.transactions,
+        );
+      }
       await markIosIapTwoHourCheckSent(check.id, {
         rawContext: jsonValue({
           decision,
           ga4: ga4Result,
+          skipped: !decision.renewed,
           notificationEventCount: evidence.notificationEvents.length,
           transactionCount: evidence.transactions.length,
         }),
