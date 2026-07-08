@@ -537,15 +537,31 @@ async function sendGa4PurchaseTwoHourEvent(
     events,
   };
 
+  const payloadStr = JSON.stringify(body, null, 2);
+  const decodedUrl = decodeURIComponent(url.toString());
+
+  console.log(`\n🚀 [GA4 SERVICE SEND] ─────────────────────────────────`);
+  console.log(`URL       : ${decodedUrl}`);
+  console.log(`Payload   :`);
+  for (const line of payloadStr.split("\n")) {
+    console.log(`  ${line}`);
+  }
+  console.log(`──────────────────────────────────────────────────────`);
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "user-agent": "system-tracking-ios-iap-ga4/1.0",
     },
-    body: JSON.stringify(body),
+    body: payloadStr,
   });
   const responseText = await response.text();
+
+  console.log(`✅ [GA4 SERVICE RESPONSE] ─────────────────────────────`);
+  console.log(`Status    : ${response.status} ${response.statusText}`);
+  console.log(`Body      : ${responseText || "(empty — accepted)"}`);
+  console.log(`──────────────────────────────────────────────────────\n`);
 
   if (!response.ok) {
     throw new Error(
@@ -561,6 +577,15 @@ async function sendGa4PurchaseTwoHourEvent(
     responseBody: responseText || null,
     responseStatus: response.status,
     validationOnly: boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY"),
+    debugLogs: {
+      url: decodedUrl,
+      payload: body,
+      response: {
+        status: response.status,
+        statusText: response.statusText,
+        body: responseText || null,
+      }
+    }
   };
 }
 
@@ -648,6 +673,7 @@ export async function runIosIapTwoHourGa4Checks(options?: {
         renewed: decision.renewed,
         status: "sent",
         transactionId: check.transactionId,
+        ga4Result: ga4Result, // Thêm ga4Result vào đây để handler nhận được log
       });
     } catch (error) {
       const shouldFail =
