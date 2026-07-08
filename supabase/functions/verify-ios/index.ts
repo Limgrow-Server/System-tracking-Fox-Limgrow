@@ -409,7 +409,7 @@ async function scheduleIosIapTwoHourCheck(
     };
   }
 
-  const delayMs = positiveIntEnv("IOS_IAP_2HOUR_CHECK_DELAY_MS", 2 * 60 * 60 * 1000);
+  const delayMs = positiveIntEnv("IOS_IAP_2HOUR_CHECK_DELAY_MS", 60 * 1000);
   const purchaseDateText = stringValue(transaction.purchase_date);
   const purchaseTime = purchaseDateText ? Date.parse(purchaseDateText) : Date.now();
   const checkAt = new Date((Number.isFinite(purchaseTime) ? purchaseTime : Date.now()) + delayMs);
