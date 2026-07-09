@@ -478,6 +478,7 @@ sequenceDiagram
   participant DB as Database
   participant Worker as 2-hour Worker
   participant Firebase as Firebase / GA4
+  participant Adjust as Adjust S2S
 
   User->>Mobile: Mua gói / bắt đầu free trial
   Mobile->>Server: POST verify-ios payload
@@ -490,8 +491,12 @@ sequenceDiagram
     Server->>Firebase: POST purchase_2hour + purchase
     Note over Server,Firebase: value/currency lấy từ ios_iap_transactions
     Firebase-->>Server: HTTP 204 accepted or error
+    opt App mapping có Adjust token và mobile có adjustAdid/idfa/idfv
+      Server->>Adjust: POST S2S event + revenue/currency
+      Adjust-->>Server: HTTP accepted or error
+    end
   else renewed = false
-    Server->>DB: Không gửi GA4, mark skipped trong raw_context
+    Server->>DB: Không gửi GA4/Adjust, mark skipped trong raw_context
   end
   Server->>DB: Mark sent/retrying/failed + raw_context
 ```
@@ -503,6 +508,14 @@ Revenue rule:
 | User không hủy sau 2 giờ | `purchase_2hour`, `purchase` | Revenue từ `revenue_micros`, fallback `price_milliunits` | Currency của transaction |
 | User hủy/disable renew trong 2 giờ | Không gửi GA4, mark skipped | n/a | n/a |
 | Thiếu giá nhưng vẫn `renewed=true` | Gửi `0` | `0` | Currency nếu có hoặc `USD` fallback |
+
+Adjust rule:
+
+| Điều kiện | Kết quả |
+|---|---|
+| `renewed=true`, app mapping có `adjust_app_token` + `adjust_event_token`, có `adjustAdid/idfa/idfv` | Gửi Adjust S2S event kèm `revenue`/`currency` nếu value >= `0.001` |
+| Thiếu Adjust config hoặc device id | Không fail job, ghi `raw_context.adjust.skipped=true` và `reason` |
+| `renewed=false` | Không gửi Adjust |
 
 ## 16. Review fetch manual/scheduled
 

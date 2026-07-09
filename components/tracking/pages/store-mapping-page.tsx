@@ -25,6 +25,9 @@ type StoreMappingForm = {
   appIconUrl: string;
   appLink: string;
   appId: string;
+  adjustAppToken: string;
+  adjustConfigText: string;
+  adjustEventToken: string;
   storeAccountName: string;
   storeProfileId: string;
   appName: string;
@@ -119,6 +122,9 @@ function createEmptyForm(platform: StoreMappingPlatformFilter): StoreMappingForm
     appIconUrl: "",
     appLink: "",
     appId: "",
+    adjustAppToken: "",
+    adjustConfigText: "",
+    adjustEventToken: "",
     storeAccountName: "",
     storeProfileId: "",
     appName: "",
@@ -141,6 +147,9 @@ function formFromMapping(mapping: StoreMapping): StoreMappingForm {
     appIconUrl: value(mapping.app_icon_url),
     appLink: value(mapping.app_link),
     appId: value(mapping.app_id),
+    adjustAppToken: value(mapping.adjust_app_token),
+    adjustConfigText: "",
+    adjustEventToken: value(mapping.adjust_event_token),
     storeAccountName: mapping.store_account_name,
     storeProfileId: mapping.store_profile_id,
     appName: mapping.app_name,
@@ -196,6 +205,38 @@ function hasFirebaseAnalyticsConfigValue(config: {
   firebaseAppId: string;
 }) {
   return Boolean(config.firebaseAnalyticsApiSecret || config.firebaseAppId);
+}
+
+function parseAdjustConfigText(text: string) {
+  const config = {
+    adjustAppToken: "",
+    adjustEventToken: "",
+  };
+
+  text.split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^\s*([A-Za-z0-9_]+)\s*=\s*(.+?)\s*$/);
+    if (!match) return;
+
+    const key = match[1].toLowerCase();
+    const parsedValue = unquoteEnvValue(match[2]);
+
+    if (key === "app_token" || key === "adjust_app_token") {
+      config.adjustAppToken = parsedValue;
+    }
+
+    if (key === "event_token" || key === "adjust_event_token") {
+      config.adjustEventToken = parsedValue;
+    }
+  });
+
+  return config;
+}
+
+function hasAdjustConfigValue(config: {
+  adjustAppToken: string;
+  adjustEventToken: string;
+}) {
+  return Boolean(config.adjustAppToken || config.adjustEventToken);
 }
 
 function MappingFormSection({ title, children }: { title: string; children: ReactNode }) {
@@ -309,11 +350,24 @@ export function StoreMappingPage({
     }));
   }
 
+  function updateAdjustConfigText(nextValue: string) {
+    const parsed = parseAdjustConfigText(nextValue);
+    const hasParsedValue = hasAdjustConfigValue(parsed);
+
+    setForm((current) => ({
+      ...current,
+      adjustAppToken: parsed.adjustAppToken || current.adjustAppToken,
+      adjustConfigText: hasParsedValue ? "" : nextValue,
+      adjustEventToken: parsed.adjustEventToken || current.adjustEventToken,
+    }));
+  }
+
   function storeMappingPayloadFromForm(
     formValue: StoreMappingForm = form,
     id: string | null = editingId,
   ) {
     const payload: Partial<StoreMappingForm> = { ...formValue };
+    delete payload.adjustConfigText;
     delete payload.firebaseAnalyticsConfigText;
     const body: Partial<StoreMappingForm> & {
       id: string | null;
@@ -872,6 +926,63 @@ export function StoreMappingPage({
                   </div>
                 </MappingFormSection>
 
+                <MappingFormSection title="Adjust S2S">
+                  <div className="grid gap-4">
+                    {drawerReadOnly ? null : (
+                      <div className="grid gap-2">
+                        <Label htmlFor="adjustConfigText">
+                          Paste Adjust keys
+                        </Label>
+                        <Textarea
+                          id="adjustConfigText"
+                          value={form.adjustConfigText}
+                          onChange={(event) =>
+                            updateAdjustConfigText(event.target.value)
+                          }
+                          placeholder={[
+                            "app_token=4w565xzmb54d",
+                            "event_token=f0ob4r",
+                          ].join("\n")}
+                          autoComplete="off"
+                          rows={3}
+                        />
+                      </div>
+                    )}
+                    <div className="grid gap-4 2xl:grid-cols-2">
+                      <div className="grid gap-2">
+                        <Label htmlFor="adjustAppToken">
+                          Adjust app token
+                        </Label>
+                        <Input
+                          id="adjustAppToken"
+                          value={form.adjustAppToken}
+                          onChange={(event) =>
+                            updateField("adjustAppToken", event.target.value)
+                          }
+                          autoComplete="off"
+                          placeholder="4w565xzmb54d"
+                          readOnly={drawerReadOnly}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="adjustEventToken">
+                          Adjust event token
+                        </Label>
+                        <Input
+                          id="adjustEventToken"
+                          value={form.adjustEventToken}
+                          onChange={(event) =>
+                            updateField("adjustEventToken", event.target.value)
+                          }
+                          autoComplete="off"
+                          placeholder="f0ob4r"
+                          readOnly={drawerReadOnly}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </MappingFormSection>
+
                 {!isAndroidForm ? (
                   <MappingFormSection title="Firebase Analytics">
                     <div className="grid gap-4">
@@ -1182,7 +1293,7 @@ export function StoreMappingPage({
                 <Input
                   value={searchQuery}
                   onChange={(event) => updateSearchQuery(event.target.value)}
-                  placeholder={platformFilter === "ios" ? "Search apps, stores, BundleId..." : "Search apps, stores, packages..."}
+                  placeholder={platformFilter === "ios" ? "Search apps, stores, BundleId, Adjust..." : "Search apps, stores, packages, Adjust..."}
                   className="pl-9"
                 />
               </div>
@@ -1236,15 +1347,24 @@ export function StoreMappingPage({
                     </TableCell>
                     <TableCell>
                       <div className="max-w-[260px] truncate font-mono text-sm">{runtimeId ?? "N/A"}</div>
-                      {mapping.platform === "ios" ? (
+                      {mapping.platform === "ios" ||
+                      mapping.adjust_app_token ||
+                      mapping.adjust_event_token ? (
                         <div className="mt-1 flex max-w-[260px] flex-wrap gap-1">
-                          {mapping.firebase_app_id ? (
+                          {mapping.platform === "ios" && mapping.firebase_app_id ? (
                             <Badge variant="outline" className="font-mono">
                               Firebase App ID
                             </Badge>
                           ) : null}
-                          {mapping.firebase_analytics_api_secret_configured ? (
+                          {mapping.platform === "ios" &&
+                          mapping.firebase_analytics_api_secret_configured ? (
                             <Badge variant="secondary">GA4 secret</Badge>
+                          ) : null}
+                          {mapping.adjust_app_token ? (
+                            <Badge variant="outline">Adjust app</Badge>
+                          ) : null}
+                          {mapping.adjust_event_token ? (
+                            <Badge variant="secondary">Adjust event</Badge>
                           ) : null}
                         </div>
                       ) : null}

@@ -11,6 +11,8 @@ type SaveAndroidStoreMappingInput = {
   appId: string | null;
   appIconUrl: string | null;
   appLink: string | null;
+  adjustAppToken: string | null;
+  adjustEventToken: string | null;
   appName: string;
   id?: string | null;
   packageName: string;
@@ -58,6 +60,8 @@ function androidStoreMappingWhere(options: AndroidStoreMappingPageOptions): Pris
       return [
         { appName: contains },
         { appId: contains },
+        { adjustAppToken: contains },
+        { adjustEventToken: contains },
         { packageName: contains },
         { storeAccountName: contains },
         { storeProfile: { storeAccountName: contains } },
@@ -137,6 +141,8 @@ export async function saveAndroidStoreMapping(
     appId: nullableAppId(input.appId),
     appIconUrl: input.appIconUrl,
     appLink: input.appLink,
+    adjustAppToken: input.adjustAppToken,
+    adjustEventToken: input.adjustEventToken,
     appName: input.appName,
     packageName: input.packageName,
     status: input.status,

@@ -910,6 +910,7 @@ type IosTransactionPageOptions = {
 };
 
 type IosTransactionListPageRow = {
+  checkAdjustAdid: string | null;
   checkAppInstanceId: string | null;
   checkAttempts: number | null;
   checkAt: Date | null;
@@ -920,6 +921,8 @@ type IosTransactionListPageRow = {
   checkGa4EventName: string | null;
   checkGa4SentAt: Date | null;
   checkId: string | null;
+  checkIdfa: string | null;
+  checkIdfv: string | null;
   checkLastError: string | null;
   checkOriginalTransactionId: string | null;
   checkProductId: string | null;
@@ -1157,6 +1160,7 @@ function iosTwoHourCheckFromListPageRow(
   }
 
   return {
+    adjustAdid: row.checkAdjustAdid,
     appInstanceId: row.checkAppInstanceId,
     attempts: row.checkAttempts,
     bundleId: row.checkBundleId,
@@ -1167,6 +1171,8 @@ function iosTwoHourCheckFromListPageRow(
     ga4EventName: row.checkGa4EventName,
     ga4SentAt: row.checkGa4SentAt,
     id: row.checkId,
+    idfa: row.checkIdfa,
+    idfv: row.checkIdfv,
     lastError: row.checkLastError,
     originalTransactionId: row.checkOriginalTransactionId,
     productId: row.checkProductId,
@@ -1291,6 +1297,9 @@ export async function getIosTransactionsListPageByMappingId(
           c.environment AS "checkEnvironment",
           c.app_instance_id AS "checkAppInstanceId",
           c.firebase_app_id AS "checkFirebaseAppId",
+          c.adjust_adid AS "checkAdjustAdid",
+          c.idfa AS "checkIdfa",
+          c.idfv AS "checkIdfv",
           c.ga4_event_name AS "checkGa4EventName",
           c.check_at AS "checkAt",
           c.status AS "checkStatus",
