@@ -918,11 +918,15 @@ export function ReviewAppDetailPage({ data }: { data: ReviewAppDetailPageData })
       mappingId: data.app.mappingId,
       page: String(page),
       pageSize: "10",
+      platform: data.app.platform,
     });
 
     if (nextSearch.trim()) params.set("search", nextSearch.trim());
     if (nextRating !== "all") params.set("rating", nextRating);
     if (nextReply !== "all") params.set("reply", nextReply);
+    if (!overrides && page !== 1) {
+      params.set("knownTotal", String(reviewPagination.total));
+    }
 
     setLoadingComments(true);
 

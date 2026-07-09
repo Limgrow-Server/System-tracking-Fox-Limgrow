@@ -14,6 +14,10 @@ function cleanClaimString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+// ── In-memory session cache (process-level, survives across requests) ──
+const sessionCache = new Map<string, { session: ConsoleSession; expiresAt: number }>();
+const SESSION_CACHE_TTL_MS = 30_000; // 30 seconds
+
 async function resolveConsoleSession(): Promise<ConsoleSession | null> {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.getClaims();
@@ -22,6 +26,12 @@ async function resolveConsoleSession(): Promise<ConsoleSession | null> {
 
   if (error || !authUserId || !email) {
     return null;
+  }
+
+  // Fast path: return cached session if still valid
+  const cached = sessionCache.get(authUserId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.session;
   }
 
   const member = await getTeamMemberByAuthUserOrEmail({
@@ -45,7 +55,7 @@ async function resolveConsoleSession(): Promise<ConsoleSession | null> {
       ? member
       : await linkTeamMemberAuthUser(member.id, authUserId);
 
-  return {
+  const session: ConsoleSession = {
     authUserId,
     memberId: linkedMember.id,
     email: linkedMember.email,
@@ -56,6 +66,13 @@ async function resolveConsoleSession(): Promise<ConsoleSession | null> {
     appScope: linkedMember.appScope,
     storeScope: linkedMember.storeScope,
   };
+
+  sessionCache.set(authUserId, {
+    session,
+    expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
+  });
+
+  return session;
 }
 
 export const getConsoleSession = cache(resolveConsoleSession);

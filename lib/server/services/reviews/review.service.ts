@@ -34,6 +34,7 @@ import {
   getIosReviewForReply,
   getIosReviewMappingById,
   getIosReviewMappingSummaryById,
+  getIosReviewMappingSummaryWithTargetById,
   getIosReviewMappingsByIds,
   getIosReviewRatingGroups,
   getIosReviewReplyGroups,
@@ -43,13 +44,14 @@ import {
   updateIosReviewDeveloperReply,
 } from "@/lib/server/repositories/reviews/ios-review.repository";
 import {
-  getActiveReviewAppScopesPage,
+  getActiveReviewAppCardsPage,
   getActiveReviewStoreOptions,
   getGlobalReviewFetchSchedule,
   getReviewReplyTemplateForRating,
   getReviewReplyTemplates,
   updateReviewStoreTargetReplyInfo,
   upsertReviewReplyTemplate,
+  type ReviewAppCardRecord,
   type ReviewReplyTemplateRecord,
 } from "@/lib/server/repositories/reviews/review.repository";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
@@ -73,6 +75,7 @@ import type {
   ReviewDeviceMetadataDto,
   ReplyConfigBasePageData,
   ReviewAppCard,
+  ReviewCommentsPageData,
   ReviewAppDetailPageData,
   ReviewAppStats,
   ReviewFetchRunDto,
@@ -109,6 +112,9 @@ type AndroidReviewMappingSummary = Awaited<
 type IosReviewMappingSummary = Awaited<
   ReturnType<typeof getActiveIosReviewMappingSummaries>
 >[number];
+type IosReviewMappingSummaryWithTarget = NonNullable<
+  Awaited<ReturnType<typeof getIosReviewMappingSummaryWithTargetById>>
+>;
 export type ReviewAppCardScope = Pick<
   ReviewAppCard,
   | "appName"
@@ -125,6 +131,15 @@ function iso(value: Date | null | undefined) {
 
 function enumText(value: unknown) {
   return String(value ?? "").toLowerCase();
+}
+
+function dbNumber(value: bigint | number | null | undefined) {
+  if (typeof value === "bigint") return Number(value);
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function dbNullableNumber(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function isUuid(value: string) {
@@ -313,6 +328,182 @@ function minimalReviewAppCard(scope: ReviewAppCardScope): ReviewAppCard {
   };
 }
 
+type ReviewCommentsPageOptions = {
+  knownTotal?: number;
+  platform?: string;
+  rating?: string;
+  reply?: string;
+  reviewPagination?: PaginationQuery;
+  search?: string;
+  skipAppLookup?: boolean;
+};
+
+export type ReviewCommentsPageResult = ReviewCommentsPageData & {
+  app: ReviewAppCard | null;
+};
+
+function reviewCommentsFilters(options?: ReviewCommentsPageOptions) {
+  return {
+    rating: options?.rating ?? "all",
+    reply: options?.reply ?? "all",
+    search: options?.search ?? "",
+  };
+}
+
+function reviewCommentsPagination(options?: ReviewCommentsPageOptions) {
+  return options?.reviewPagination ?? {
+    page: 1,
+    pageSize: 10,
+    skip: 0,
+    take: 10,
+  };
+}
+
+function reviewCommentsPageResult<TReview>(
+  app: ReviewAppCard | null,
+  reviewsPage: [TReview[], number],
+  reviewPagination: PaginationQuery,
+  options: ReviewCommentsPageOptions | undefined,
+  mapReview: (review: TReview) => StoreReviewDto,
+): ReviewCommentsPageResult {
+  const [reviews, reviewTotal] = reviewsPage;
+  const reviewDtos = reviews.map(mapReview);
+  const paginatedReviews = paginatedResult(
+    reviewDtos,
+    reviewTotal,
+    reviewPagination,
+  );
+
+  return {
+    app,
+    reviewFilters: reviewCommentsFilters(options),
+    reviewPagination: {
+      page: paginatedReviews.page,
+      pageSize: paginatedReviews.pageSize,
+      total: paginatedReviews.total,
+      totalPages: paginatedReviews.totalPages,
+    },
+    reviews: paginatedReviews.data,
+  };
+}
+
+async function getAndroidReviewCommentsPage(
+  mappingId: string,
+  options?: ReviewCommentsPageOptions,
+): Promise<ReviewCommentsPageResult> {
+  const reviewPagination = reviewCommentsPagination(options);
+  const reviewsPagePromise = getAndroidReviewsForMappingPage({
+    knownTotal: options?.knownTotal,
+    rating: options?.rating,
+    reply: options?.reply,
+    search: options?.search,
+    skip: reviewPagination.skip,
+    storeMappingId: mappingId,
+    take: reviewPagination.take,
+  });
+
+  if (options?.skipAppLookup) {
+    const reviewsPage = await reviewsPagePromise;
+    return reviewCommentsPageResult(
+      null,
+      reviewsPage,
+      reviewPagination,
+      options,
+      androidReviewDto,
+    );
+  }
+
+  const [mapping, reviewsPage] = await Promise.all([
+    getAndroidReviewMappingSummaryById(mappingId),
+    reviewsPagePromise,
+  ]);
+  if (!mapping) throw notFound("Review app mapping was not found.");
+
+  return reviewCommentsPageResult(
+    minimalReviewAppCard(androidReviewAppScope(mapping)),
+    reviewsPage,
+    reviewPagination,
+    options,
+    androidReviewDto,
+  );
+}
+
+async function getIosReviewCommentsPage(
+  mappingId: string,
+  options?: ReviewCommentsPageOptions,
+): Promise<ReviewCommentsPageResult> {
+  const reviewPagination = reviewCommentsPagination(options);
+
+  if (options?.skipAppLookup) {
+    const reviewsPage = await getIosReviewsForMappingPage({
+      knownTotal: options?.knownTotal,
+      rating: options?.rating,
+      reply: options?.reply,
+      search: options?.search,
+      skip: reviewPagination.skip,
+      storeMappingId: mappingId,
+      take: reviewPagination.take,
+    });
+
+    return reviewCommentsPageResult(
+      null,
+      reviewsPage,
+      reviewPagination,
+      options,
+      iosReviewDto,
+    );
+  }
+
+  const mapping = await getIosReviewMappingSummaryWithTargetById(mappingId);
+  if (!mapping) throw notFound("Review app mapping was not found.");
+
+  const reviewsPage = await getIosReviewsForMappingPage({
+    knownTotal: options?.knownTotal,
+    rating: options?.rating,
+    reply: options?.reply,
+    reviewAppTargetId: mapping.reviewTarget?.id,
+    search: options?.search,
+    skip: reviewPagination.skip,
+    storeMappingId: mappingId,
+    take: reviewPagination.take,
+  });
+
+  return reviewCommentsPageResult(
+    minimalReviewAppCard(
+      iosReviewAppScope(mapping as IosReviewMappingSummaryWithTarget),
+    ),
+    reviewsPage,
+    reviewPagination,
+    options,
+    iosReviewDto,
+  );
+}
+
+export async function getReviewCommentsPage(
+  mappingId: string,
+  options?: ReviewCommentsPageOptions,
+): Promise<ReviewCommentsPageResult> {
+  if (options?.platform === "android") {
+    return getAndroidReviewCommentsPage(mappingId, options);
+  }
+
+  if (options?.platform === "ios") {
+    return getIosReviewCommentsPage(mappingId, options);
+  }
+
+  const detail = await getReviewAppDetail(mappingId, {
+    ...options,
+    context: false,
+  });
+
+  return {
+    app: detail.app,
+    reviewFilters: detail.reviewFilters,
+    reviewPagination: detail.reviewPagination,
+    reviews: detail.reviews,
+  };
+}
+
 function reviewStoreOptionsFromScopes(apps: ReviewAppCardScope[]) {
   const stores = new Map<string, string>();
 
@@ -335,8 +526,12 @@ export async function getReviewAppCardScopes(options?: {
       ? options.platform
       : "all";
   const [androidSummaries, iosSummaries] = await Promise.all([
-    platform === "ios" ? Promise.resolve([]) : getActiveAndroidReviewMappingSummaries(),
-    platform === "android" ? Promise.resolve([]) : getActiveIosReviewMappingSummaries(),
+    platform === "ios"
+      ? Promise.resolve([])
+      : getActiveAndroidReviewMappingSummaries(),
+    platform === "android"
+      ? Promise.resolve([])
+      : getActiveIosReviewMappingSummaries(),
   ]);
 
   return sortReviewAppsByName([
@@ -347,6 +542,34 @@ export async function getReviewAppCardScopes(options?: {
       (platform === "all" || app.platform === platform) &&
       (options?.canAccess?.(app) ?? true),
   );
+}
+
+function reviewAppCardFromRecord(record: ReviewAppCardRecord): ReviewAppCard {
+  const reviewCount = dbNumber(record.reviewCount);
+  const repliedCount = dbNumber(record.repliedCount);
+
+  return {
+    appIconUrl: record.appIconUrl,
+    appLink: record.appLink,
+    appName: record.appName,
+    averageRating: dbNullableNumber(record.averageRating),
+    identifier: record.identifier,
+    lastErrorMessage: record.lastErrorMessage,
+    lastFetchedAt: iso(record.lastFetchedAt),
+    lastSyncStatus: record.lastSyncStatus ? enumText(record.lastSyncStatus) : null,
+    mappingId: record.mappingId,
+    pendingReplyCount: Math.max(dbNumber(record.pendingReplyCount), 0),
+    platform: record.platform,
+    repliedCount,
+    reviewCount,
+    storeAccountName: record.storeAccountName,
+    storeAvatarUrl: record.storeAvatarUrl,
+    storeContactEmail: record.storeContactEmail,
+    storeLink: record.storeLink,
+    storeProfileId: record.storeProfileId,
+    storeSupportPhone: record.storeSupportPhone,
+    storeWebsiteUrl: record.storeWebsiteUrl,
+  };
 }
 
 export async function hydrateReviewAppCards(
@@ -383,7 +606,9 @@ export async function hydrateReviewAppCards(
     ...androidMappings.map((mapping) =>
       reviewAppCard(
         mapping,
-        androidRatingGroups.filter((group) => group.storeMappingId === mapping.id),
+        androidRatingGroups.filter(
+          (group) => group.storeMappingId === mapping.id,
+        ),
         androidReplyCounts,
       ),
     ),
@@ -488,7 +713,7 @@ export async function getPaginatedReviewAppCards(options: PaginationQuery & {
       ? options.platform
       : undefined;
   const [page, storeOptions] = await Promise.all([
-    getActiveReviewAppScopesPage({
+    getActiveReviewAppCardsPage({
       platform,
       search: options.search,
       skip: options.skip,
@@ -497,8 +722,11 @@ export async function getPaginatedReviewAppCards(options: PaginationQuery & {
     }),
     getActiveReviewStoreOptions({ platform }),
   ]);
-  const paged = paginatedResult(page.scopes, page.total, options);
-  const apps = await hydrateReviewAppCards(paged.data);
+  const paged = paginatedResult(
+    page.cards.map(reviewAppCardFromRecord),
+    page.total,
+    options,
+  );
 
   return {
     appPagination: {
@@ -507,7 +735,7 @@ export async function getPaginatedReviewAppCards(options: PaginationQuery & {
       total: paged.total,
       totalPages: paged.totalPages,
     },
-    apps,
+    apps: paged.data,
     storeOptions,
   };
 }
@@ -739,6 +967,7 @@ async function getIosReviewAppDetail(
   mappingId: string,
   options?: {
     context?: boolean;
+    platform?: string;
     rating?: string;
     reply?: string;
     reviewPagination?: PaginationQuery;
@@ -864,6 +1093,7 @@ export async function getReviewAppDetail(
   mappingId: string,
   options?: {
     context?: boolean;
+    platform?: string;
     rating?: string;
     reply?: string;
     reviewPagination?: PaginationQuery;
@@ -877,6 +1107,10 @@ export async function getReviewAppDetail(
     skip: 0,
     take: 10,
   };
+
+  if (options?.platform === "ios") {
+    return getIosReviewAppDetail(mappingId, options);
+  }
 
   if (!needContext) {
     const mapping = await getAndroidReviewMappingSummaryById(mappingId);

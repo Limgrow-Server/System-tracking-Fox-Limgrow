@@ -397,6 +397,11 @@ export type ReviewAppDetailPageData = {
   fetchSchedule: ReviewFetchScheduleDto | null;
 };
 
+export type ReviewCommentsPageData = Pick<
+  ReviewAppDetailPageData,
+  "reviewFilters" | "reviewPagination" | "reviews"
+>;
+
 export type ReviewReplyTemplateDto = {
   id: string | null;
   storeMappingId: string;

@@ -9,10 +9,9 @@ import type { ConsoleSession } from "@/lib/auth/rbac";
 import { valuesMatchSearch } from "@/lib/search";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import {
-  getActiveReviewAppScopesForStoreProfiles,
-  getActiveReviewStoreScopesPage,
+  getActiveReplyStoreSummaryPage,
   getReviewReplyTemplates,
-  type ReviewStoreScopeRecord,
+  type ReplyStoreSummaryRecord,
 } from "@/lib/server/repositories/reviews/review.repository";
 import {
   getReviewAppCardScopes,
@@ -132,20 +131,30 @@ function filterReplyStoreScopes(
 
 function filterReplyApps(apps: ReviewAppCard[], search?: string) {
   return apps.filter((app) =>
-    valuesMatchSearch([app.appName, app.identifier, app.storeAccountName], search),
+    valuesMatchSearch(
+      [app.appName, app.identifier, app.storeAccountName],
+      search,
+    ),
   );
 }
 
-function fallbackStoreSummary(store: ReviewStoreScopeRecord): ReplyStoreSummary {
+function recordNumber(value: bigint | number | null | undefined) {
+  if (typeof value === "bigint") return Number(value);
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function replyStoreSummaryFromRecord(
+  store: ReplyStoreSummaryRecord,
+): ReplyStoreSummary {
   return {
-    activeTemplateCount: 0,
-    appCount: Number(store.appCount ?? 0),
+    activeTemplateCount: recordNumber(store.activeTemplateCount),
+    appCount: recordNumber(store.appCount),
     apps: [],
     contactEmail: store.contactEmail,
-    lastFetchedAt: null,
-    pendingReplyCount: 0,
+    lastFetchedAt: store.lastFetchedAt?.toISOString() ?? null,
+    pendingReplyCount: recordNumber(store.pendingReplyCount),
     platform: store.platform === "ios" ? "ios" : "android",
-    reviewCount: 0,
+    reviewCount: recordNumber(store.reviewCount),
     storeAccountName: store.storeAccountName,
     storeAvatarUrl: store.storeAvatarUrl,
     storeLink: store.storeLink,
@@ -218,28 +227,13 @@ export async function getReplyStoreListPageDataLoader(
   };
 
   if (hasAllAppAccess(session)) {
-    const storePage = await getActiveReviewStoreScopesPage({
+    const storePage = await getActiveReplyStoreSummaryPage({
       platform: options?.platform,
       search: options?.search,
       skip: pagination.skip,
       take: pagination.take,
     });
-    const pageStoreIds = storePage.stores.map((store) => store.storeProfileId);
-    const pageApps = await hydrateReviewAppCards(
-      await getActiveReviewAppScopesForStoreProfiles(pageStoreIds),
-    );
-    const summaries = buildStoreSummaries({
-      apps: pageApps,
-      templatesByMappingId: {},
-    });
-    const summaryByStoreId = new Map(
-      summaries.map((store) => [store.storeProfileId, store]),
-    );
-    const stores = storePage.stores.map(
-      (store) =>
-        summaryByStoreId.get(store.storeProfileId) ??
-        fallbackStoreSummary(store),
-    );
+    const stores = storePage.stores.map(replyStoreSummaryFromRecord);
 
     return {
       filters: {

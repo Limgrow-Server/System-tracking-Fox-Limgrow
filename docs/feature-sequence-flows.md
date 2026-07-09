@@ -465,40 +465,44 @@ Event Apple can cap nhat state:
 | `DID_FAIL_TO_RENEW` | Billing issue/grace/retry |
 | `CANCEL`, `REFUND`, `REVOKE` | Thu hoi/refund/cancel entitlement neu du evidence |
 
-## 15. IAP 2-hour GA4 event
+## 15. IAP 2-hour GA4 Event
+
+Chi tiết đầy đủ của flow này nằm trong [ios-iap-two-hour-ga4-flow.md](./ios-iap-two-hour-ga4-flow.md).
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant Worker as PM2 ios-iap-2hour-ga4 loop
-  participant Cron as /api/cron/iap-ga4-two-hour
-  participant Check as ios_iap_two_hour_checks
-  participant Tx as ios_iap_transactions
-  participant Events as ios_iap_notification_events
-  participant Mapping as ios_store_mappings
-  participant GA4 as GA4 Measurement Protocol
-  participant UI as IAP detail UI
+  actor User as User
+  participant Mobile as Mobile App
+  participant Server as Server
+  participant DB as Database
+  participant Worker as 2-hour Worker
+  participant Firebase as Firebase / GA4
 
-  Worker->>Cron: POST every IOS_IAP_2HOUR_INTERVAL_MS
-  Cron->>Check: Claim due checks where check_at <= now
-  Cron->>Tx: Load latest transactions/revenue/currency
-  Cron->>Events: Load cancel/renewal webhook evidence
-  Cron->>Cron: Decide renewed true/false
-  Cron->>Mapping: Resolve Firebase App ID + Analytics API secret
-  Cron->>GA4: POST event purchase_2hour with app_instance_id
-  Note over Cron,GA4: params include renewed, renewed_int, value, currency, product_id, transaction_id
-  GA4-->>Cron: HTTP 204 accepted or error
-  Cron->>Check: Mark sent/retrying/failed + raw_context
-  UI->>Check: Realtime/update shows sent state and revenue context
+  User->>Mobile: Mua gói / bắt đầu free trial
+  Mobile->>Server: POST verify-ios payload
+  Server->>Server: Verify Apple transaction và decode receipt
+  Server->>DB: Lưu transaction + schedule check_at = purchase_date + 2 giờ
+  Worker->>Server: POST /api/cron/iap-ga4-two-hour
+  Server->>DB: Claim check đến hạn, load transaction/events/mapping
+  Server->>Server: Quyết định renewed và chọn value/currency
+  alt renewed = true
+    Server->>Firebase: POST purchase_2hour + purchase
+    Note over Server,Firebase: value/currency lấy từ ios_iap_transactions
+    Firebase-->>Server: HTTP 204 accepted or error
+  else renewed = false
+    Server->>DB: Không gửi GA4, mark skipped trong raw_context
+  end
+  Server->>DB: Mark sent/retrying/failed + raw_context
 ```
 
 Revenue rule:
 
-| Decision | `value` gui len GA4 | `currency` |
-|---|---|---|
-| User khong huy sau 2h | Revenue tu `revenue_micros`, fallback `price_milliunits` | Currency cua transaction |
-| User huy/disable renew trong 2h | `0` | Currency neu co |
-| Thieu gia | `0` | null hoac currency neu co |
+| Decision | Events | `value` gửi lên GA4 | `currency` |
+|---|---|---|---|
+| User không hủy sau 2 giờ | `purchase_2hour`, `purchase` | Revenue từ `revenue_micros`, fallback `price_milliunits` | Currency của transaction |
+| User hủy/disable renew trong 2 giờ | Không gửi GA4, mark skipped | n/a | n/a |
+| Thiếu giá nhưng vẫn `renewed=true` | Gửi `0` | `0` | Currency nếu có hoặc `USD` fallback |
 
 ## 16. Review fetch manual/scheduled
 

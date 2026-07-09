@@ -4,8 +4,14 @@ import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, forbidden, notFound } from "@/lib/server/api/errors";
 import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
 import { errorJson } from "@/lib/server/api/responses";
-import { getReplyConfigPageDataLoader, getReplyStoreListPageDataLoader } from "@/lib/server/page-loaders/reviews/reply-config.loader";
-import { getReviewAppDetailPageData } from "@/lib/server/page-loaders/reviews/review-app-detail.loader";
+import {
+  getReplyConfigPageDataLoader,
+  getReplyStoreListPageDataLoader,
+} from "@/lib/server/page-loaders/reviews/reply-config.loader";
+import {
+  getReviewAppDetailPageData,
+  getReviewCommentsPageData,
+} from "@/lib/server/page-loaders/reviews/review-app-detail.loader";
 import { getReviewAppGridPageData } from "@/lib/server/page-loaders/reviews/review-app-grid.loader";
 import { getReviewFetchSchedulePageData } from "@/lib/server/page-loaders/reviews/review-fetch-schedule.loader";
 
@@ -22,6 +28,16 @@ function reviewPagination(url: URL, defaultPageSize = 10) {
   });
 }
 
+function knownTotalFromUrl(url: URL) {
+  const rawValue = clean(url.searchParams.get("knownTotal"));
+  if (!rawValue) return undefined;
+
+  const knownTotal = Number.parseInt(rawValue, 10);
+  return Number.isSafeInteger(knownTotal) && knownTotal >= 0
+    ? knownTotal
+    : undefined;
+}
+
 export async function handleReviewAppsGet(request: Request) {
   try {
     const session = await requireConsoleApiSession([...reviewRoles]);
@@ -30,7 +46,8 @@ export async function handleReviewAppsGet(request: Request) {
       ...reviewPagination(url, 12),
       platform: clean(url.searchParams.get("platform")) || undefined,
       search: clean(url.searchParams.get("search")) || undefined,
-      storeProfileId: clean(url.searchParams.get("storeProfileId")) || undefined,
+      storeProfileId:
+        clean(url.searchParams.get("storeProfileId")) || undefined,
     });
 
     return paginatedJson(
@@ -56,13 +73,35 @@ export async function handleReviewCommentsGet(request: Request) {
     const mappingId = clean(url.searchParams.get("mappingId"));
     if (!mappingId) throw badRequest("Comment app mapping id is required.");
     const context = url.searchParams.get("context") !== "false";
-
-    const data = await getReviewAppDetailPageData(mappingId, session, {
-      context,
+    const commonOptions = {
+      platform: clean(url.searchParams.get("platform")) || undefined,
       rating: clean(url.searchParams.get("rating")) || "all",
       reply: clean(url.searchParams.get("reply")) || "all",
       reviewPagination: reviewPagination(url, 10),
       search: clean(url.searchParams.get("search")) || undefined,
+    };
+
+    if (!context) {
+      const data = await getReviewCommentsPageData(mappingId, session, {
+        ...commonOptions,
+        knownTotal: knownTotalFromUrl(url),
+      });
+      if (!data) throw forbidden("You do not have access to this comment app.");
+
+      return paginatedJson(
+        {
+          data: data.reviews,
+          ...data.reviewPagination,
+        },
+        {
+          reviewFilters: data.reviewFilters,
+        },
+      );
+    }
+
+    const data = await getReviewAppDetailPageData(mappingId, session, {
+      context,
+      ...commonOptions,
     });
     if (!data) throw forbidden("You do not have access to this comment app.");
 

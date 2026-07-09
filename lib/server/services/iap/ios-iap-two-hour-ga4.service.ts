@@ -36,6 +36,13 @@ type RenewalDecision = {
   renewed: boolean;
 };
 
+type Ga4ItemParam = Record<string, string | number | null>;
+type Ga4EventParamValue = string | number | null | Ga4ItemParam[];
+type Ga4EventPayload = {
+  name: string;
+  params: Record<string, Ga4EventParamValue>;
+};
+
 const DEFAULT_BATCH_LIMIT = 25;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 5 * 60_000;
@@ -295,7 +302,7 @@ function measurementEndpoint() {
     : "https://www.google-analytics.com/mp/collect";
 }
 
-function eventParams(params: Record<string, string | number | null>) {
+function eventParams(params: Record<string, Ga4EventParamValue>) {
   return Object.fromEntries(
     Object.entries(params).filter(([, value]) => value !== null && value !== ""),
   );
@@ -334,60 +341,43 @@ function revenueFromTransaction(transaction: IosIapRenewalEvidenceTransaction | 
   };
 }
 
+function transactionRevenueValue(transaction: IosIapRenewalEvidenceTransaction) {
+  const revenueValue = scaledMoneyValue(transaction.revenueMicros, 1_000_000);
+  const priceValue = scaledMoneyValue(transaction.priceMilliunits, 1000);
+  return revenueValue ?? priceValue ?? 0;
+}
+
+function hasRevenueField(transaction: IosIapRenewalEvidenceTransaction) {
+  return transaction.revenueMicros !== null || transaction.priceMilliunits !== null;
+}
+
+function hasPositiveRevenue(transaction: IosIapRenewalEvidenceTransaction) {
+  return transactionRevenueValue(transaction) > 0;
+}
+
 function revenueTransactionForCheck(
   check: IosIapTwoHourCheckRecord,
   transactions: IosIapRenewalEvidenceTransaction[],
 ) {
+  const exactTransaction = transactions.find((transaction) =>
+    transaction.transactionId === check.transactionId
+  );
+  const sameOriginalTransactions = check.originalTransactionId
+    ? transactions.filter((transaction) =>
+        transaction.originalTransactionId === check.originalTransactionId
+      )
+    : [];
+
   return (
-    transactions.find((transaction) => transaction.transactionId === check.transactionId) ||
-    transactions.find((transaction) =>
-      check.originalTransactionId &&
-      transaction.originalTransactionId === check.originalTransactionId &&
-      (transaction.revenueMicros !== null || transaction.priceMilliunits !== null)
-    ) ||
-    transactions.find((transaction) =>
-      transaction.revenueMicros !== null || transaction.priceMilliunits !== null
-    ) ||
+    (exactTransaction && hasPositiveRevenue(exactTransaction) ? exactTransaction : null) ||
+    sameOriginalTransactions.find(hasPositiveRevenue) ||
+    transactions.find(hasPositiveRevenue) ||
+    exactTransaction ||
+    sameOriginalTransactions.find(hasRevenueField) ||
+    transactions.find(hasRevenueField) ||
     transactions[0] ||
     null
   );
-}
-
-async function convertToUsd(amount: number, baseCurrency: string): Promise<{ value: number; currency: string }> {
-  const cleanCurrency = baseCurrency.trim().toUpperCase();
-  if (cleanCurrency === "USD" || !cleanCurrency) {
-    return { value: amount, currency: "USD" };
-  }
-
-  try {
-    const response = await fetch("https://live-earth-map.limgrow.com/money/convert", {
-      method: "POST",
-      headers: {
-        "accept": "application/json",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        base: cleanCurrency,
-        target: "USD",
-        amount: amount,
-      }),
-    });
-
-    if (!response.ok) {
-      console.warn(`Currency conversion API returned status ${response.status} for ${cleanCurrency} -> USD`);
-      return { value: amount, currency: baseCurrency };
-    }
-
-    const json = await response.json() as { data?: number };
-    if (json && typeof json.data === "number" && Number.isFinite(json.data)) {
-      return { value: json.data, currency: "USD" };
-    }
-
-    return { value: amount, currency: baseCurrency };
-  } catch (error) {
-    console.error("Currency conversion failed:", error);
-    return { value: amount, currency: baseCurrency };
-  }
 }
 
 async function ga4RevenueParams(
@@ -407,16 +397,6 @@ async function ga4RevenueParams(
     };
   }
 
-  if (revenue.currency && revenue.value > 0) {
-    const converted = await convertToUsd(revenue.value, revenue.currency);
-    return {
-      currency: converted.currency,
-      revenue_source: revenue.source,
-      revenue_transaction_id: revenue.transactionId,
-      value: converted.value,
-    };
-  }
-
   return {
     currency: revenue.currency || "USD",
     revenue_source: revenue.source,
@@ -425,29 +405,37 @@ async function ga4RevenueParams(
   };
 }
 
-// Raw revenue params — giữ nguyên currency gốc, KHÔNG convert sang USD
-function ga4RevenueParamsRaw(
-  check: IosIapTwoHourCheckRecord,
-  decision: RenewalDecision,
-  transactions: IosIapRenewalEvidenceTransaction[],
-) {
-  const transaction = revenueTransactionForCheck(check, transactions);
-  const revenue = revenueFromTransaction(transaction);
+function shouldSendGa4PurchaseRevenueEvent() {
+  return boolEnv("IOS_IAP_2HOUR_GA4_SEND_PURCHASE_EVENT", true);
+}
 
-  if (!decision.renewed) {
-    return {
-      currency: revenue.currency || "USD",
-      revenue_source: "cancel_or_disabled",
-      revenue_transaction_id: revenue.transactionId,
-      value: 0,
-    };
-  }
+function twoHourPurchaseTransactionId(check: IosIapTwoHourCheckRecord) {
+  return `iap_2hour_${check.transactionId}`;
+}
+
+function purchaseRevenueEvent(
+  check: IosIapTwoHourCheckRecord,
+  revenue: Awaited<ReturnType<typeof ga4RevenueParams>>,
+): Ga4EventPayload {
+  const value = Number.isFinite(revenue.value) && revenue.value > 0
+    ? revenue.value
+    : 0;
 
   return {
-    currency: revenue.currency || "USD",
-    revenue_source: revenue.source + "_raw",
-    revenue_transaction_id: revenue.transactionId,
-    value: revenue.value,
+    name: "purchase",
+    params: eventParams({
+      currency: revenue.currency,
+      transaction_id: twoHourPurchaseTransactionId(check),
+      value,
+      items: [
+        {
+          item_id: check.productId,
+          item_name: check.productId,
+          price: value,
+          quantity: 1,
+        },
+      ],
+    }),
   };
 }
 
@@ -484,57 +472,28 @@ async function sendGa4PurchaseTwoHourEvent(
     debug_mode: debugMode,
   };
 
-  let events: { name: string; params: Record<string, string | number | null> }[];
+  const revenue = await ga4RevenueParams(check, decision, transactions);
+  const events: Ga4EventPayload[] = [
+    {
+      name: baseEventName,
+      params: eventParams({
+        ...commonParams,
+        currency: revenue.currency,
+        revenue_source: revenue.revenue_source,
+        revenue_transaction_id: revenue.revenue_transaction_id,
+        value: revenue.value,
+      }),
+    },
+  ];
+  const purchaseRevenueEvents: Ga4EventPayload[] =
+    decision.renewed && shouldSendGa4PurchaseRevenueEvent()
+      ? [purchaseRevenueEvent(check, revenue)]
+      : [];
 
-  if (isDebug) {
-    // Debug mode: bắn 2 event —
-    //   test1: value đã convert sang USD
-    //   test2: giữ nguyên currency gốc, không convert
-    const revenueConverted = await ga4RevenueParams(check, decision, transactions);
-    const revenueRaw = ga4RevenueParamsRaw(check, decision, transactions);
-
-    events = [
-      {
-        name: `${baseEventName}_test1`,
-        params: eventParams({
-          ...commonParams,
-          currency: revenueConverted.currency,
-          revenue_source: revenueConverted.revenue_source,
-          revenue_transaction_id: revenueConverted.revenue_transaction_id,
-          value: revenueConverted.value,
-        }),
-      },
-      {
-        name: `${baseEventName}_test2`,
-        params: eventParams({
-          ...commonParams,
-          currency: revenueRaw.currency,
-          revenue_source: revenueRaw.revenue_source,
-          revenue_transaction_id: revenueRaw.revenue_transaction_id,
-          value: revenueRaw.value,
-        }),
-      },
-    ];
-  } else {
-    // Production: bắn 1 event duy nhất với value đã convert sang USD
-    const revenue = await ga4RevenueParams(check, decision, transactions);
-    events = [
-      {
-        name: baseEventName,
-        params: eventParams({
-          ...commonParams,
-          currency: revenue.currency,
-          revenue_source: revenue.revenue_source,
-          revenue_transaction_id: revenue.revenue_transaction_id,
-          value: revenue.value,
-        }),
-      },
-    ];
-  }
-
+  const sentEvents = [...events, ...purchaseRevenueEvents];
   const body = {
-    app_instance_id: check.appInstanceId,
-    events,
+    app_instance_id: check.appInstanceId.toLowerCase(),
+    events: sentEvents,
   };
 
   const payloadStr = JSON.stringify(body, null, 2);
@@ -571,9 +530,10 @@ async function sendGa4PurchaseTwoHourEvent(
   }
 
   return {
-    eventNames: events.map((e) => e.name),
+    eventNames: sentEvents.map((e) => e.name),
     firebaseAppId: config.firebaseAppId,
     isDebug,
+    purchaseRevenueEventNames: purchaseRevenueEvents.map((event) => event.name),
     responseBody: responseText || null,
     responseStatus: response.status,
     validationOnly: boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY"),

@@ -315,18 +315,12 @@ export async function getIosTrialConversionAnalytics(
   bundleId: string,
   storeProfileId: string | undefined,
 ): Promise<IapTrialConversionAnalytics> {
-  const transactions = await getIosTrialAnalyticsTransactions(
-    bundleId,
-    storeProfileId,
-  );
-  const notificationEvents = await getIosIapNotificationEventsByBundleId(
-    bundleId,
-    storeProfileId,
-  );
-  const notificationSummary = await getIosIapNotificationEventSummaryByBundleId(
-    bundleId,
-    storeProfileId,
-  );
+  const [transactions, notificationEvents, notificationSummary] =
+    await Promise.all([
+      getIosTrialAnalyticsTransactions(bundleId, storeProfileId),
+      getIosIapNotificationEventsByBundleId(bundleId, storeProfileId),
+      getIosIapNotificationEventSummaryByBundleId(bundleId, storeProfileId),
+    ]);
 
   const groups = new Map<string, IosTrialAnalyticsTransaction[]>();
   for (const transaction of transactions) {
@@ -380,7 +374,7 @@ export async function getIosTrialConversionAnalytics(
     week: buildCohorts(chains, "week"),
   };
 
-  return {
+  const analytics = {
     activeAfterTrialCount: chains.filter((chain) => chain.activeAfterTrial).length,
     avgDaysToConversion: avgDays(conversionDayValues),
     cohorts: cohortsByGranularity.month,
@@ -406,4 +400,6 @@ export async function getIosTrialConversionAnalytics(
       .toString(),
     trialStartedCount: chains.length,
   };
+
+  return analytics;
 }
