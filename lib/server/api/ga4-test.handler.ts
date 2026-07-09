@@ -19,6 +19,14 @@ export async function handleGa4TestPost(request: Request) {
 
     const transactionId = clean(body.transactionId);
     if (!transactionId) throw badRequest("transactionId is required.");
+    const adjustAdid = clean(body.adjustAdid);
+    const idfa = clean(body.idfa);
+    const idfv = clean(body.idfv);
+    const adjustIdentifierData = {
+      ...(adjustAdid ? { adjustAdid } : {}),
+      ...(idfa ? { idfa } : {}),
+      ...(idfv ? { idfv } : {}),
+    };
 
     // 1. Tìm check record thực tế dựa theo transactionId
     const check = await prisma.iosIapTwoHourCheck.findFirst({
@@ -38,6 +46,7 @@ export async function handleGa4TestPost(request: Request) {
     await prisma.iosIapTransaction.upsert({
       where: { transactionId },
       update: {
+        ...adjustIdentifierData,
         priceMilliunits,
         currency,
         state: "purchased",
@@ -49,6 +58,7 @@ export async function handleGa4TestPost(request: Request) {
         productId: check.productId,
         bundleId: check.bundleId,
         state: "purchased",
+        ...adjustIdentifierData,
         priceMilliunits,
         currency,
         verifiedAt: new Date(),
@@ -61,6 +71,7 @@ export async function handleGa4TestPost(request: Request) {
       await prisma.iosIapTransaction.upsert({
         where: { transactionId: check.originalTransactionId },
         update: {
+          ...adjustIdentifierData,
           priceMilliunits,
           currency,
           state: "purchased",
@@ -72,6 +83,7 @@ export async function handleGa4TestPost(request: Request) {
           productId: check.productId,
           bundleId: check.bundleId,
           state: "purchased",
+          ...adjustIdentifierData,
           priceMilliunits,
           currency,
           verifiedAt: new Date(),
@@ -86,6 +98,7 @@ export async function handleGa4TestPost(request: Request) {
     await prisma.iosIapTwoHourCheck.update({
       where: { id: check.id },
       data: {
+        ...adjustIdentifierData,
         status: "processing",
         attempts: check.attempts + 1,
         updatedAt: new Date(),
@@ -103,6 +116,7 @@ export async function handleGa4TestPost(request: Request) {
     await prisma.iosIapTwoHourCheck.update({
       where: { id: check.id },
       data: {
+        ...adjustIdentifierData,
         status: "pending",
         attempts: 0, // Reset số lần thử về 0
         checkAt: new Date(Date.now() - 10000), // set về quá khứ để query raw gắp được
@@ -136,6 +150,7 @@ export async function handleGa4TestPost(request: Request) {
           lastError: updatedCheck?.lastError,
           renewed: updatedCheck?.renewed,
           renewalStatus: updatedCheck?.renewalStatus,
+          rawContext: updatedCheck?.rawContext,
         },
         cronResult,
       },
