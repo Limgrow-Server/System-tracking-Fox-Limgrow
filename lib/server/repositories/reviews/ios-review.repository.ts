@@ -169,6 +169,15 @@ const iosReviewMappingSummarySelect = {
   },
 } satisfies Prisma.IosStoreMappingSelect;
 
+const iosReviewMappingSummaryWithTargetSelect = {
+  ...iosReviewMappingSummarySelect,
+  reviewTarget: {
+    select: {
+      id: true,
+    },
+  },
+} satisfies Prisma.IosStoreMappingSelect;
+
 export function getActiveIosReviewMappingSummaries() {
   return prisma.iosStoreMapping.findMany({
     where: { status: "ACTIVE" },
@@ -195,6 +204,13 @@ export function getIosReviewMappingSummaryById(mappingId: string) {
   return prisma.iosStoreMapping.findUnique({
     where: { id: mappingId },
     select: iosReviewMappingSummarySelect,
+  });
+}
+
+export function getIosReviewMappingSummaryWithTargetById(mappingId: string) {
+  return prisma.iosStoreMapping.findUnique({
+    where: { id: mappingId },
+    select: iosReviewMappingSummaryWithTargetSelect,
   });
 }
 
@@ -297,7 +313,9 @@ export async function getIosReviewReplyGroups(mappingIds: string[]) {
 }
 
 type IosReviewPageOptions = {
+  knownTotal?: number;
   rating?: string;
+  reviewAppTargetId?: string;
   reply?: string;
   search?: string;
   skip: number;
@@ -308,7 +326,8 @@ type IosReviewPageOptions = {
 async function iosReviewWhere(
   options: IosReviewPageOptions,
 ): Promise<Prisma.IosStoreReviewWhereInput> {
-  const reviewAppTargetId = await iosReviewAppTargetId(options.storeMappingId);
+  const reviewAppTargetId =
+    options.reviewAppTargetId ?? (await iosReviewAppTargetId(options.storeMappingId));
   const where: Prisma.IosStoreReviewWhereInput = { reviewAppTargetId };
   const search = options.search?.trim();
   const rating = Number.parseInt(options.rating ?? "", 10);
@@ -341,16 +360,24 @@ export async function getIosReviewsForMappingPage(
   options: IosReviewPageOptions,
 ) {
   const where = await iosReviewWhere(options);
+  const totalPromise =
+    typeof options.knownTotal === "number"
+      ? Promise.resolve(options.knownTotal)
+      : prisma.iosStoreReview.count({ where });
 
-  return prisma.$transaction([
+  return Promise.all([
     prisma.iosStoreReview.findMany({
       where,
-      orderBy: [{ reviewUpdatedAt: "desc" }, { reviewCreatedAt: "desc" }, { fetchedAt: "desc" }],
+      orderBy: [
+        { reviewUpdatedAt: "desc" },
+        { reviewCreatedAt: "desc" },
+        { fetchedAt: "desc" },
+      ],
       skip: options.skip,
       take: options.take,
       omit: { rawReview: true },
     }),
-    prisma.iosStoreReview.count({ where }),
+    totalPromise,
   ]);
 }
 

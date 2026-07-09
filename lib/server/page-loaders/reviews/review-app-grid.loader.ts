@@ -27,7 +27,8 @@ export async function getReviewAppGridPageData(
     skip: options?.skip ?? 0,
     take: options?.take ?? 12,
   };
-  const page = hasAllAppAccess(session)
+  const hasFullAccess = hasAllAppAccess(session);
+  const page = hasFullAccess
     ? await getPaginatedReviewAppCards({
         ...pagination,
         platform,

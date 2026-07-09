@@ -150,11 +150,7 @@ export async function handleAdminIapTransactionReceiptGet(request: Request) {
 
 export async function handleAdminIapAppContextGet(request: Request) {
   try {
-    const session = await requireConsoleApiSession([
-      "Admin",
-      "Dev",
-      "Marketing",
-    ]);
+    const session = await requireConsoleApiSession(["Admin", "Dev", "Marketing"]);
     const url = new URL(request.url);
     const mappingId = clean(url.searchParams.get("mappingId"));
     const platform = platformFromSearch(clean(url.searchParams.get("platform")));
@@ -185,11 +181,7 @@ export async function handleAdminIapAppContextGet(request: Request) {
 
 export async function handleAdminIapTrialAnalyticsGet(request: Request) {
   try {
-    const session = await requireConsoleApiSession([
-      "Admin",
-      "Dev",
-      "Marketing",
-    ]);
+    const session = await requireConsoleApiSession(["Admin", "Dev", "Marketing"]);
     const url = new URL(request.url);
     const mappingId = clean(url.searchParams.get("mappingId"));
     const platform = platformFromSearch(clean(url.searchParams.get("platform")));
