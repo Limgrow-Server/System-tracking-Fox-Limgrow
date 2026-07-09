@@ -27,6 +27,18 @@ export type ReviewAppScopeRecord = {
   storeWebsiteUrl: string | null;
 };
 
+export type ReviewAppCardRecord = ReviewAppScopeRecord & {
+  appIconUrl: string | null;
+  appLink: string | null;
+  averageRating: number | null;
+  lastErrorMessage: string | null;
+  lastFetchedAt: Date | null;
+  lastSyncStatus: string | null;
+  pendingReplyCount: bigint | number | null;
+  repliedCount: bigint | number | null;
+  reviewCount: bigint | number | null;
+};
+
 export type ReviewAppScopePageOptions = {
   platform?: string;
   search?: string;
@@ -54,6 +66,13 @@ export type ReviewStoreScopeRecord = {
   storeProfileId: string;
   supportPhone: string | null;
   websiteUrl: string | null;
+};
+
+export type ReplyStoreSummaryRecord = ReviewStoreScopeRecord & {
+  activeTemplateCount: number | bigint | null;
+  lastFetchedAt: Date | null;
+  pendingReplyCount: number | bigint | null;
+  reviewCount: number | bigint | null;
 };
 
 export type ReviewStoreScopePageOptions = {
@@ -222,6 +241,91 @@ export async function getActiveReviewAppScopesPage(
   };
 }
 
+export async function getActiveReviewAppCardsPage(
+  options: ReviewAppScopePageOptions,
+) {
+  const scopeBaseSql = reviewAppScopeBaseSql(options);
+  const [rows, countRows] = await Promise.all([
+    prisma.$queryRaw<ReviewAppCardRecord[]>(Prisma.sql`
+        WITH page AS (
+          SELECT *
+          FROM (${scopeBaseSql}) apps
+          ORDER BY "appName" ASC, "identifier" ASC, "mappingId" ASC
+          LIMIT ${options.take}
+          OFFSET ${options.skip}
+        )
+        SELECT
+          page."appName",
+          page."identifier",
+          page."mappingId",
+          page."platform",
+          coalesce(android_mapping."app_icon_url", ios_mapping."app_icon_url") AS "appIconUrl",
+          coalesce(android_mapping."app_link", ios_mapping."app_link") AS "appLink",
+          page."storeAvatarUrl",
+          page."storeContactEmail",
+          page."storeLink",
+          page."storeAccountName",
+          page."storeProfileId",
+          page."storeSupportPhone",
+          page."storeWebsiteUrl",
+          coalesce(android_stats."reviewCount", ios_stats."reviewCount", 0)::int AS "reviewCount",
+          coalesce(android_stats."averageRating", ios_stats."averageRating") AS "averageRating",
+          coalesce(android_stats."repliedCount", ios_stats."repliedCount", 0)::int AS "repliedCount",
+          greatest(
+            coalesce(android_stats."reviewCount", ios_stats."reviewCount", 0) -
+            coalesce(android_stats."repliedCount", ios_stats."repliedCount", 0),
+            0
+          )::int AS "pendingReplyCount",
+          coalesce(android_sync."last_fetch_finished_at", ios_sync."last_fetch_finished_at") AS "lastFetchedAt",
+          coalesce(android_sync."status"::text, ios_sync."status"::text) AS "lastSyncStatus",
+          coalesce(android_sync."last_error_message", ios_sync."last_error_message") AS "lastErrorMessage"
+        FROM page
+        LEFT JOIN "android_store_mappings" android_mapping
+          ON page."platform" = 'android'
+          AND android_mapping."id" = page."mappingId"::uuid
+        LEFT JOIN "review_app_targets" android_target
+          ON page."platform" = 'android'
+          AND android_target."android_store_mapping_id" = android_mapping."id"
+        LEFT JOIN "review_sync_states" android_sync
+          ON android_sync."review_app_target_id" = android_target."id"
+        LEFT JOIN LATERAL (
+          SELECT
+            count(*)::int AS "reviewCount",
+            avg(review."rating")::float8 AS "averageRating",
+            count(*) FILTER (WHERE review."developer_reply_text" IS NOT NULL)::int AS "repliedCount"
+          FROM "android_store_reviews" review
+          WHERE review."store_mapping_id" = android_mapping."id"
+        ) android_stats ON page."platform" = 'android'
+        LEFT JOIN "ios_store_mappings" ios_mapping
+          ON page."platform" = 'ios'
+          AND ios_mapping."id" = page."mappingId"::uuid
+        LEFT JOIN "review_app_targets" ios_target
+          ON page."platform" = 'ios'
+          AND ios_target."ios_store_mapping_id" = ios_mapping."id"
+        LEFT JOIN "review_sync_states" ios_sync
+          ON ios_sync."review_app_target_id" = ios_target."id"
+        LEFT JOIN LATERAL (
+          SELECT
+            count(*)::int AS "reviewCount",
+            avg(review."rating")::float8 AS "averageRating",
+            count(*) FILTER (WHERE review."developer_reply_text" IS NOT NULL)::int AS "repliedCount"
+          FROM "ios_store_reviews" review
+          WHERE review."review_app_target_id" = ios_target."id"
+        ) ios_stats ON page."platform" = 'ios'
+        ORDER BY page."appName" ASC, page."identifier" ASC, page."mappingId" ASC
+      `),
+    prisma.$queryRaw<CountRow[]>(Prisma.sql`
+      SELECT COUNT(*)::int AS total
+      FROM (${scopeBaseSql}) apps
+    `),
+  ]);
+
+  return {
+    cards: rows,
+    total: Number(countRows[0]?.total ?? 0),
+  };
+}
+
 export async function getActiveReviewStoreOptions(options?: {
   platform?: string;
 }) {
@@ -287,6 +391,153 @@ export async function getActiveReviewStoreScopesPage(
           ${storeSearchSql}
         GROUP BY "storeProfileId", "storeAccountName"
       ) stores
+    `),
+  ]);
+
+  return {
+    stores: rows,
+    total: Number(countRows[0]?.total ?? 0),
+  };
+}
+
+export async function getActiveReplyStoreSummaryPage(
+  options: ReviewStoreScopePageOptions,
+) {
+  const baseSql = reviewAppScopeBaseSql({
+    platform: options.platform,
+    skip: 0,
+    take: 1,
+  });
+  const storeSearchSql = searchSql(options.search, [
+    Prisma.sql`"storeAccountName"`,
+  ]);
+  const storeBaseSql = Prisma.sql`
+    SELECT
+      COUNT(*)::int AS "appCount",
+      max("storeContactEmail") AS "contactEmail",
+      min("platform") AS "platform",
+      "storeAccountName",
+      max("storeAvatarUrl") AS "storeAvatarUrl",
+      max("storeLink") AS "storeLink",
+      "storeProfileId",
+      max("storeSupportPhone") AS "supportPhone",
+      max("storeWebsiteUrl") AS "websiteUrl"
+    FROM (${baseSql}) apps
+    WHERE "storeProfileId" IS NOT NULL
+      AND "storeAccountName" IS NOT NULL
+      AND "storeAccountName" <> ''
+      ${storeSearchSql}
+    GROUP BY "storeProfileId", "storeAccountName"
+  `;
+  const [rows, countRows] = await Promise.all([
+    prisma.$queryRaw<ReplyStoreSummaryRecord[]>(Prisma.sql`
+        WITH stores AS (
+          SELECT *
+          FROM (${storeBaseSql}) stores
+          ORDER BY "storeAccountName" ASC, "storeProfileId" ASC
+          LIMIT ${options.take}
+          OFFSET ${options.skip}
+        )
+        SELECT
+          stores."appCount",
+          stores."contactEmail",
+          stores."platform",
+          stores."storeAccountName",
+          stores."storeAvatarUrl",
+          stores."storeLink",
+          stores."storeProfileId",
+          stores."supportPhone",
+          stores."websiteUrl",
+          coalesce(android_reviews."reviewCount", ios_reviews."reviewCount", 0)::int AS "reviewCount",
+          coalesce(android_reviews."pendingReplyCount", ios_reviews."pendingReplyCount", 0)::int AS "pendingReplyCount",
+          coalesce(android_templates."activeTemplateCount", ios_templates."activeTemplateCount", 0)::int AS "activeTemplateCount",
+          coalesce(android_sync."lastFetchedAt", ios_sync."lastFetchedAt") AS "lastFetchedAt"
+        FROM stores
+        LEFT JOIN LATERAL (
+          SELECT
+            count(review."id")::int AS "reviewCount",
+            count(review."id") FILTER (
+              WHERE review."developer_reply_text" IS NULL
+            )::int AS "pendingReplyCount"
+          FROM "android_store_mappings" mapping
+          LEFT JOIN "android_store_reviews" review
+            ON review."store_mapping_id" = mapping."id"
+          WHERE stores."platform" = 'android'
+            AND mapping."status" = ${activeStatusSql()}
+            AND mapping."store_profile_id" = stores."storeProfileId"::uuid
+        ) android_reviews ON stores."platform" = 'android'
+        LEFT JOIN LATERAL (
+          SELECT
+            max(sync."last_fetch_finished_at") AS "lastFetchedAt"
+          FROM "android_store_mappings" mapping
+          LEFT JOIN "review_app_targets" target
+            ON target."android_store_mapping_id" = mapping."id"
+          LEFT JOIN "review_sync_states" sync
+            ON sync."review_app_target_id" = target."id"
+          WHERE stores."platform" = 'android'
+            AND mapping."status" = ${activeStatusSql()}
+            AND mapping."store_profile_id" = stores."storeProfileId"::uuid
+        ) android_sync ON stores."platform" = 'android'
+        LEFT JOIN LATERAL (
+          SELECT
+            count(template."id")::int AS "activeTemplateCount"
+          FROM "android_store_mappings" mapping
+          LEFT JOIN "review_app_targets" target
+            ON target."android_store_mapping_id" = mapping."id"
+          LEFT JOIN "review_reply_templates" template
+            ON template."review_app_target_id" = target."id"
+            AND template."is_active" = true
+            AND btrim(template."reply_text") <> ''
+          WHERE stores."platform" = 'android'
+            AND mapping."status" = ${activeStatusSql()}
+            AND mapping."store_profile_id" = stores."storeProfileId"::uuid
+        ) android_templates ON stores."platform" = 'android'
+        LEFT JOIN LATERAL (
+          SELECT
+            count(review."id")::int AS "reviewCount",
+            count(review."id") FILTER (
+              WHERE review."developer_reply_text" IS NULL
+            )::int AS "pendingReplyCount"
+          FROM "ios_store_mappings" mapping
+          LEFT JOIN "review_app_targets" target
+            ON target."ios_store_mapping_id" = mapping."id"
+          LEFT JOIN "ios_store_reviews" review
+            ON review."review_app_target_id" = target."id"
+          WHERE stores."platform" = 'ios'
+            AND mapping."status" = ${activeStatusSql()}
+            AND mapping."store_profile_id" = stores."storeProfileId"::uuid
+        ) ios_reviews ON stores."platform" = 'ios'
+        LEFT JOIN LATERAL (
+          SELECT
+            max(sync."last_fetch_finished_at") AS "lastFetchedAt"
+          FROM "ios_store_mappings" mapping
+          LEFT JOIN "review_app_targets" target
+            ON target."ios_store_mapping_id" = mapping."id"
+          LEFT JOIN "review_sync_states" sync
+            ON sync."review_app_target_id" = target."id"
+          WHERE stores."platform" = 'ios'
+            AND mapping."status" = ${activeStatusSql()}
+            AND mapping."store_profile_id" = stores."storeProfileId"::uuid
+        ) ios_sync ON stores."platform" = 'ios'
+        LEFT JOIN LATERAL (
+          SELECT
+            count(template."id")::int AS "activeTemplateCount"
+          FROM "ios_store_mappings" mapping
+          LEFT JOIN "review_app_targets" target
+            ON target."ios_store_mapping_id" = mapping."id"
+          LEFT JOIN "review_reply_templates" template
+            ON template."review_app_target_id" = target."id"
+            AND template."is_active" = true
+            AND btrim(template."reply_text") <> ''
+          WHERE stores."platform" = 'ios'
+            AND mapping."status" = ${activeStatusSql()}
+            AND mapping."store_profile_id" = stores."storeProfileId"::uuid
+        ) ios_templates ON stores."platform" = 'ios'
+        ORDER BY stores."storeAccountName" ASC, stores."storeProfileId" ASC
+      `),
+    prisma.$queryRaw<CountRow[]>(Prisma.sql`
+      SELECT COUNT(*)::int AS total
+      FROM (${storeBaseSql}) stores
     `),
   ]);
 

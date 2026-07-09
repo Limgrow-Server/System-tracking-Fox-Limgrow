@@ -939,6 +939,7 @@ type IosTransactionListPageRow = {
   mappingProfileStoreAccountName: string | null;
   mappingStoreAccountName: string;
   mappingStoreProfileId: string;
+  totalCount: bigint | number | null;
   txBillingPlanType: string | null;
   txBundleId: string | null;
   txCreatedAt: Date | null;
@@ -1206,6 +1207,18 @@ export async function getIosTransactionsListPageByMappingId(
 ) {
   const conditions = iosTransactionSqlConditions(options);
   const orderBy = iosTransactionSqlOrderBy(options.revenueSort);
+  const joinedConditions = joinSql(conditions, Prisma.sql`AND`);
+  const totalCte =
+    options.includeTotal === false
+      ? Prisma.sql`transaction_total AS (SELECT NULL::bigint AS total),`
+      : Prisma.sql`
+        transaction_total AS (
+          SELECT count(*) AS total
+          FROM public.ios_iap_transactions t
+          JOIN mapping m ON true
+          WHERE ${joinedConditions}
+        ),
+      `;
   const rows = await prisma.$queryRaw<IosTransactionListPageRow[]>(Prisma.sql`
         WITH mapping AS (
           SELECT
@@ -1221,11 +1234,12 @@ export async function getIosTransactionsListPageByMappingId(
           LEFT JOIN public.ios_store_profiles sp ON sp.id = m.store_profile_id
           WHERE m.id = ${mappingId}::uuid
         ),
+        ${totalCte}
         paged_transactions AS (
           SELECT t.*
           FROM public.ios_iap_transactions t
           JOIN mapping m ON true
-          WHERE ${joinSql(conditions, Prisma.sql`AND`)}
+          WHERE ${joinedConditions}
           ${orderBy}
           LIMIT ${options.take}
           OFFSET ${options.skip}
@@ -1239,6 +1253,7 @@ export async function getIosTransactionsListPageByMappingId(
           m.app_link AS "mappingAppLink",
           m.bundle_id AS "mappingBundleId",
           m.profile_store_account_name AS "mappingProfileStoreAccountName",
+          total.total AS "totalCount",
           t.id AS "txId",
           t.transaction_id AS "txTransactionId",
           t.original_transaction_id AS "txOriginalTransactionId",
@@ -1288,6 +1303,7 @@ export async function getIosTransactionsListPageByMappingId(
           c.created_at AS "checkCreatedAt",
           c.updated_at AS "checkUpdatedAt"
         FROM mapping m
+        CROSS JOIN transaction_total total
         LEFT JOIN paged_transactions t ON true
         LEFT JOIN public.ios_iap_two_hour_checks c ON c.transaction_id = t.transaction_id
         ${orderBy}
@@ -1302,8 +1318,15 @@ export async function getIosTransactionsListPageByMappingId(
   const twoHourChecks = rows
     .map(iosTwoHourCheckFromListPageRow)
     .filter((check): check is IosIapTwoHourCheckRecord => Boolean(check));
+  const rawTotal = rows[0]?.totalCount ?? null;
+  const total =
+    rawTotal === null
+      ? null
+      : typeof rawTotal === "bigint"
+        ? Number(rawTotal)
+        : rawTotal;
 
-  return { mapping, transactions, twoHourChecks };
+  return { mapping, total, transactions, twoHourChecks };
 }
 
 export async function getIosTransactionsByBundleIdPage(
@@ -1396,7 +1419,9 @@ export function getIosTransactionsByBundleIdMetrics(
     Prisma.sql`public.ios_iap_transactions`,
     Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
     Prisma.sql`lower(environment) = 'sandbox'`,
-    { revenueGranularity: options.revenueGranularity },
+    {
+      revenueGranularity: options.revenueGranularity,
+    },
   );
 }
 

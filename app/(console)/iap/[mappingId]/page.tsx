@@ -30,12 +30,12 @@ export default async function IapAppDetailRoutePage({
     trial?: string | string[];
   }>;
 }) {
+  const query = await searchParams;
   const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
   const { mappingId } = await params;
-  const query = await searchParams;
   const platform = single(query.platform);
-  
+
   if (!platform) {
     notFound();
   }

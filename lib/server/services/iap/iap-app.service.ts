@@ -291,17 +291,20 @@ export async function getIapAppTransactionsPage(
       };
     }
 
-    const [rawTransactions, total] = await loadTransactionPage();
-    const metrics = await getAndroidTransactionsByPackageAndProfileMetrics(
-      mapping.packageName,
-      mapping.storeProfileId,
-      options,
-    );
-    const transactionStates = await getAndroidTransactionStatesByPackageAndProfile(
-      mapping.packageName,
-      mapping.storeProfileId,
-      options,
-    );
+    const [[rawTransactions, total], metrics, transactionStates] =
+      await Promise.all([
+        loadTransactionPage(),
+        getAndroidTransactionsByPackageAndProfileMetrics(
+          mapping.packageName,
+          mapping.storeProfileId,
+          options,
+        ),
+        getAndroidTransactionStatesByPackageAndProfile(
+          mapping.packageName,
+          mapping.storeProfileId,
+          options,
+        ),
+      ]);
 
     return {
       appCard,
@@ -317,7 +320,12 @@ export async function getIapAppTransactionsPage(
 
   if (platform === "ios") {
     if (!includeContext) {
-      const { mapping, transactions: rawTransactions, twoHourChecks } =
+      const {
+        mapping,
+        total,
+        transactions: rawTransactions,
+        twoHourChecks,
+      } =
         await getIosTransactionsListPageByMappingId(mappingId, {
           ...options,
           includeTotal: false,
@@ -343,7 +351,7 @@ export async function getIapAppTransactionsPage(
           rawTransactions.map((transaction) =>
             iosIapTransactionToSummary(transaction),
           ),
-          fallbackTotal,
+          total ?? fallbackTotal,
           options,
         ),
         twoHourChecks: twoHourChecks.map(iosIapTwoHourCheckToTracking),
@@ -375,16 +383,19 @@ export async function getIapAppTransactionsPage(
         },
       );
 
-    const [rawTransactions, total] = await loadTransactionPage();
-    const metrics = await getIosTransactionsByBundleIdMetrics(
-      mapping.bundleId,
-      mapping.storeProfileId,
-      options,
-    );
-    const transactionStates = await getIosTransactionStatesByBundleId(
-      mapping.bundleId,
-      mapping.storeProfileId,
-    );
+    const [[rawTransactions, total], metrics, transactionStates] =
+      await Promise.all([
+        loadTransactionPage(),
+        getIosTransactionsByBundleIdMetrics(
+          mapping.bundleId,
+          mapping.storeProfileId,
+          options,
+        ),
+        getIosTransactionStatesByBundleId(
+          mapping.bundleId,
+          mapping.storeProfileId,
+        ),
+      ]);
 
     return {
       appCard,
@@ -491,14 +502,15 @@ export async function getIapAppDetail(
       storeProfileId: mapping.storeProfileId,
     };
 
-    const transactionPagePromise = getAndroidTransactionsByPackageAndProfilePage(
-      mapping.packageName,
-      mapping.storeProfileId,
-      options,
-    );
+    const loadTransactionPage = () =>
+      getAndroidTransactionsByPackageAndProfilePage(
+        mapping.packageName,
+        mapping.storeProfileId,
+        options,
+      );
 
     if (options.includeContext === false) {
-      const [rawTransactions, total] = await transactionPagePromise;
+      const [rawTransactions, total] = await loadTransactionPage();
 
       return {
         appCard,
@@ -514,18 +526,20 @@ export async function getIapAppDetail(
       };
     }
 
-    const [rawTransactions, total] = await transactionPagePromise;
-    const metrics = await getAndroidTransactionsByPackageAndProfileMetrics(
-      mapping.packageName,
-      mapping.storeProfileId,
-      options,
-    );
-    const transactionStates =
-      await getAndroidTransactionStatesByPackageAndProfile(
-        mapping.packageName,
-        mapping.storeProfileId,
-        options,
-      );
+    const [[rawTransactions, total], metrics, transactionStates] =
+      await Promise.all([
+        loadTransactionPage(),
+        getAndroidTransactionsByPackageAndProfileMetrics(
+          mapping.packageName,
+          mapping.storeProfileId,
+          options,
+        ),
+        getAndroidTransactionStatesByPackageAndProfile(
+          mapping.packageName,
+          mapping.storeProfileId,
+          options,
+        ),
+      ]);
 
     return {
       appCard,
@@ -540,6 +554,46 @@ export async function getIapAppDetail(
       twoHourChecks: [],
     };
   } else if (platform === "ios") {
+    if (options.includeContext === false) {
+      const {
+        mapping,
+        total,
+        transactions: rawTransactions,
+        twoHourChecks,
+      } = await getIosTransactionsListPageByMappingId(mappingId, {
+        ...options,
+        includeTotal: true,
+      });
+      if (!mapping) throw new Error("iOS mapping not found");
+
+      const appCard: IapAppCard = {
+        mappingId: mapping.id,
+        platform: "ios",
+        appName: mapping.appName,
+        identifier: mapping.bundleId,
+        appIconUrl: mapping.appIconUrl,
+        appLink: mapping.appLink,
+        storeAccountName:
+          mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
+        storeProfileId: mapping.storeProfileId,
+      };
+
+      return {
+        appCard,
+        trialAnalytics: null,
+        metrics: emptyIapAppMetrics(),
+        transactionStates: [],
+        transactions: paginatedResult(
+          rawTransactions.map((transaction) =>
+            iosIapTransactionToSummary(transaction),
+          ),
+          total ?? 0,
+          options,
+        ),
+        twoHourChecks: twoHourChecks.map(iosIapTwoHourCheckToTracking),
+      };
+    }
+
     const mapping = await getIosMappingById(mappingId);
     if (!mapping) throw new Error("iOS mapping not found");
 
@@ -555,49 +609,34 @@ export async function getIapAppDetail(
       storeProfileId: mapping.storeProfileId,
     };
 
-    const transactionPagePromise = getIosTransactionsByBundleIdPage(
-      mapping.bundleId,
-      mapping.storeProfileId,
-      options,
-    );
+    const loadTransactionPage = () =>
+      getIosTransactionsByBundleIdPage(
+        mapping.bundleId,
+        mapping.storeProfileId,
+        options,
+      );
 
-    if (options.includeContext === false) {
-      const [rawTransactions, total] = await transactionPagePromise;
-
-      return {
-        appCard,
-        trialAnalytics: null,
-        metrics: emptyIapAppMetrics(),
-        transactionStates: [],
-        transactions: paginatedResult(
-          rawTransactions.map((transaction) =>
-            iosIapTransactionToSummary(transaction),
-          ),
-          total ?? 0,
-          options,
-        ),
-        twoHourChecks:
-          await getIosTwoHourChecksForVisibleTransactions(rawTransactions),
-      };
-    }
-
-    const [rawTransactions, total] = await transactionPagePromise;
-    const metrics = await getIosTransactionsByBundleIdMetrics(
-      mapping.bundleId,
-      mapping.storeProfileId,
-      options,
-    );
-    const transactionStates = await getIosTransactionStatesByBundleId(
-      mapping.bundleId,
-      mapping.storeProfileId,
-    );
-    const trialAnalytics =
+    const trialAnalyticsPromise =
       options.includeTrialAnalytics === false
-        ? null
-        : await getIosTrialConversionAnalytics(
+        ? Promise.resolve(null)
+        : getIosTrialConversionAnalytics(
             mapping.bundleId,
             mapping.storeProfileId,
           );
+    const [[rawTransactions, total], metrics, transactionStates, trialAnalytics] =
+      await Promise.all([
+        loadTransactionPage(),
+        getIosTransactionsByBundleIdMetrics(
+          mapping.bundleId,
+          mapping.storeProfileId,
+          options,
+        ),
+        getIosTransactionStatesByBundleId(
+          mapping.bundleId,
+          mapping.storeProfileId,
+        ),
+        trialAnalyticsPromise,
+      ]);
 
     return {
       appCard,
@@ -649,17 +688,18 @@ export async function getIapAppContext(
         mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
       storeProfileId: mapping.storeProfileId,
     };
-    const metrics = await getAndroidTransactionsByPackageAndProfileMetrics(
-      mapping.packageName,
-      mapping.storeProfileId,
-      options,
-    );
-    const transactionStates =
-      await getAndroidTransactionStatesByPackageAndProfile(
+    const [metrics, transactionStates] = await Promise.all([
+      getAndroidTransactionsByPackageAndProfileMetrics(
         mapping.packageName,
         mapping.storeProfileId,
         options,
-      );
+      ),
+      getAndroidTransactionStatesByPackageAndProfile(
+        mapping.packageName,
+        mapping.storeProfileId,
+        options,
+      ),
+    ]);
 
     return { appCard, metrics, transactionStates };
   }
@@ -679,15 +719,17 @@ export async function getIapAppContext(
         mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
       storeProfileId: mapping.storeProfileId,
     };
-    const metrics = await getIosTransactionsByBundleIdMetrics(
-      mapping.bundleId,
-      mapping.storeProfileId,
-      options,
-    );
-    const transactionStates = await getIosTransactionStatesByBundleId(
-      mapping.bundleId,
-      mapping.storeProfileId,
-    );
+    const [metrics, transactionStates] = await Promise.all([
+      getIosTransactionsByBundleIdMetrics(
+        mapping.bundleId,
+        mapping.storeProfileId,
+        options,
+      ),
+      getIosTransactionStatesByBundleId(
+        mapping.bundleId,
+        mapping.storeProfileId,
+      ),
+    ]);
 
     return { appCard, metrics, transactionStates };
   }

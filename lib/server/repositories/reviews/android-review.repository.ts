@@ -234,6 +234,7 @@ export function getAndroidReviewReplyGroups(mappingIds: string[]) {
 }
 
 type AndroidReviewPageOptions = {
+  knownTotal?: number;
   rating?: string;
   reply?: string;
   search?: string;
@@ -281,8 +282,12 @@ export function getAndroidReviewsForMappingPage(
   options: AndroidReviewPageOptions,
 ) {
   const where = androidReviewWhere(options);
+  const totalPromise =
+    typeof options.knownTotal === "number"
+      ? Promise.resolve(options.knownTotal)
+      : prisma.androidStoreReview.count({ where });
 
-  return prisma.$transaction([
+  return Promise.all([
     prisma.androidStoreReview.findMany({
       where,
       orderBy: [{ userCommentUpdatedAt: "desc" }, { fetchedAt: "desc" }],
@@ -290,7 +295,7 @@ export function getAndroidReviewsForMappingPage(
       take: options.take,
       omit: { rawReview: true },
     }),
-    prisma.androidStoreReview.count({ where }),
+    totalPromise,
   ]);
 }
 
