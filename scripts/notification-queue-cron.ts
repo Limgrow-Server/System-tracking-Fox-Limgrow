@@ -13,23 +13,22 @@ import {
   type CronLoop,
 } from "./cron-utils";
 
-const DEFAULT_REVIEW_FETCH_INTERVAL_MS = 3 * 60_000;
+const DEFAULT_NOTIFICATION_QUEUE_INTERVAL_MS = 10_000;
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
-const INITIAL_CRON_DELAY_MS = 15_000;
 const currentFile = fileURLToPath(import.meta.url);
 const dirname = path.dirname(currentFile);
 const projectRoot = path.resolve(dirname, "..");
 
-function resolveReviewFetchCronUrl() {
-  const explicitUrl = process.env.REVIEW_FETCH_CRON_URL?.trim();
+function resolveNotificationQueueCronUrl() {
+  const explicitUrl = process.env.NOTIFICATION_QUEUE_CRON_URL?.trim();
   if (explicitUrl) return normalizeUrl(explicitUrl);
 
   return `${normalizeUrl(
     `http://127.0.0.1:${process.env.PORT || "3000"}`,
-  )}/api/cron/review-fetch`;
+  )}/api/cron/notification-batches`;
 }
 
-function summarizeCronResult(payload: unknown) {
+function summarizeNotificationQueueResult(payload: unknown) {
   const result = isRecord(payload) ? payload.result : null;
 
   if (!isRecord(result)) {
@@ -38,20 +37,24 @@ function summarizeCronResult(payload: unknown) {
 
   return JSON.stringify({
     checkedAt: result.checkedAt,
-    materialized: result.materialized,
-    retention: result.retention,
-    stale: result.stale,
-    worker: result.worker,
+    claimed: result.claimed,
+    processed: Array.isArray(result.processed) ? result.processed.length : 0,
+    recovered: result.recovered,
+    spool: result.spool,
   });
 }
 
-export async function runReviewFetchCronOnce(
+export async function runNotificationQueueCronOnce(
   url: string,
   signal: AbortSignal,
 ) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   const abortFromParent = () => controller.abort();
+  const dispatchSecret =
+    process.env.NOTIFICATION_DISPATCH_SECRET ||
+    process.env.NOTIFICATION_QUEUE_SECRET ||
+    "";
 
   if (signal.aborted) {
     controller.abort();
@@ -64,7 +67,13 @@ export async function runReviewFetchCronOnce(
       headers: {
         accept: "application/json",
         "content-type": "application/json",
-        "user-agent": "limgrow-review-fetch-cron/1.0",
+        ...(dispatchSecret
+          ? {
+              "x-dispatch-secret": dispatchSecret,
+              "x-notification-queue-secret": dispatchSecret,
+            }
+          : {}),
+        "user-agent": "limgrow-notification-queue/1.0",
       },
       method: "POST",
       signal: controller.signal,
@@ -73,43 +82,52 @@ export async function runReviewFetchCronOnce(
     const payload = text ? (JSON.parse(text) as unknown) : null;
 
     if (!response.ok || endpointFailed(payload)) {
-      throw new Error(text || `Cron endpoint returned HTTP ${response.status}`);
+      throw new Error(
+        text || `Notification queue endpoint returned HTTP ${response.status}`,
+      );
     }
 
-    console.log(
-      `[review-fetch-cron] ${new Date().toISOString()} ok ${summarizeCronResult(
-        payload,
-      )}`,
-    );
+    const claimed =
+      isRecord(payload) && isRecord(payload.result)
+        ? Number(payload.result.claimed ?? 0)
+        : 0;
+
+    if (claimed > 0) {
+      console.log(
+        `[notification-queue] ${new Date().toISOString()} ok ${summarizeNotificationQueueResult(
+          payload,
+        )}`,
+      );
+    }
   } finally {
     signal.removeEventListener("abort", abortFromParent);
     clearTimeout(timeout);
   }
 }
 
-export function startReviewFetchCronLoop(): CronLoop {
+export function startNotificationQueueCronLoop(): CronLoop {
   const controller = new AbortController();
   const signal = controller.signal;
-  const url = resolveReviewFetchCronUrl();
+  const url = resolveNotificationQueueCronUrl();
   const intervalMs = intEnv(
-    "REVIEW_FETCH_INTERVAL_MS",
-    DEFAULT_REVIEW_FETCH_INTERVAL_MS,
-    30_000,
+    "NOTIFICATION_QUEUE_INTERVAL_MS",
+    DEFAULT_NOTIFICATION_QUEUE_INTERVAL_MS,
+    1000,
   );
 
   console.log(
-    `[review-fetch-cron] running every ${intervalMs}ms against ${url}`,
+    `[notification-queue] running every ${intervalMs}ms against ${url}`,
   );
 
   void (async () => {
-    await sleep(INITIAL_CRON_DELAY_MS, signal);
+    await sleep(5_000, signal);
 
     while (!signal.aborted) {
       try {
-        await runReviewFetchCronOnce(url, signal);
+        await runNotificationQueueCronOnce(url, signal);
       } catch (error) {
         console.error(
-          `[review-fetch-cron] ${new Date().toISOString()} failed: ${errorMessage(
+          `[notification-queue] ${new Date().toISOString()} failed: ${errorMessage(
             error,
           )}`,
         );
@@ -133,11 +151,14 @@ async function main() {
   const controller = new AbortController();
 
   if (hasFlag(args, "--once")) {
-    await runReviewFetchCronOnce(resolveReviewFetchCronUrl(), controller.signal);
+    await runNotificationQueueCronOnce(
+      resolveNotificationQueueCronUrl(),
+      controller.signal,
+    );
     return;
   }
 
-  const loop = startReviewFetchCronLoop();
+  const loop = startNotificationQueueCronLoop();
 
   function shutdown() {
     loop.stop();
@@ -150,7 +171,7 @@ async function main() {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === currentFile) {
   void main().catch((error) => {
-    console.error(`[review-fetch-cron] fatal=${errorMessage(error)}`);
+    console.error(`[notification-queue] fatal=${errorMessage(error)}`);
     process.exit(1);
   });
 }
