@@ -40,6 +40,8 @@ function normalizeAndroidMappingPayload(payload: StoreMappingPayload) {
     appId: nullableAppId(payload.appId),
     appIconUrl: nullableText(payload.appIconUrl),
     appLink: nullableText(payload.appLink),
+    adjustAppToken: nullableText(payload.adjustAppToken),
+    adjustEventToken: nullableText(payload.adjustEventToken),
     appName: cleanText(payload.appName),
     packageName: nullableText(payload.packageName),
     status: mappingStatusMap[cleanText(payload.status).toLowerCase()] ?? MappingStatus.ACTIVE,
@@ -123,6 +125,8 @@ export async function saveAndroidStoreMappingDto(input: {
   appIconUrl: string | null;
   appLink: string | null;
   appId: string | null;
+  adjustAppToken: string | null;
+  adjustEventToken: string | null;
   appName: string;
   id?: string;
   packageName: string;
@@ -169,6 +173,8 @@ export async function createAndroidStoreMapping(payload: StoreMappingPayload) {
       appIconUrl: row.appIconUrl,
       appLink: row.appLink,
       appId: row.appId,
+      adjustAppToken: row.adjustAppToken,
+      adjustEventToken: row.adjustEventToken,
       appName: row.appName,
       packageName: row.packageName!,
       status: row.status,
@@ -201,6 +207,8 @@ export async function updateAndroidStoreMapping(payload: StoreMappingPayload) {
       appIconUrl: row.appIconUrl,
       appLink: row.appLink,
       appId: row.appId,
+      adjustAppToken: row.adjustAppToken,
+      adjustEventToken: row.adjustEventToken,
       appName: row.appName,
       id,
       packageName: row.packageName!,

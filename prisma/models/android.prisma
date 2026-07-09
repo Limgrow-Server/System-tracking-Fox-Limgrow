@@ -27,6 +27,8 @@ model AndroidStoreMapping {
   appIconUrl          String?                           @map("app_icon_url")
   appLink             String?                           @map("app_link")
   packageName         String                            @map("package_name")
+  adjustAppToken      String?                           @map("adjust_app_token")
+  adjustEventToken    String?                           @map("adjust_event_token")
   status              MappingStatus                     @default(ACTIVE)
   createdAt           DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime                          @updatedAt @map("updated_at") @db.Timestamptz(6)

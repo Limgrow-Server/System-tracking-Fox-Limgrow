@@ -39,6 +39,8 @@ model IosStoreMapping {
   bundleId                   String           @map("bundle_id")
   firebaseAppId              String?          @map("firebase_app_id")
   firebaseAnalyticsApiSecret String?          @map("firebase_analytics_api_secret") @db.Text
+  adjustAppToken             String?          @map("adjust_app_token")
+  adjustEventToken           String?          @map("adjust_event_token")
   status                     MappingStatus    @default(ACTIVE)
   createdAt                  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                  DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -119,6 +121,9 @@ model IosIapTransaction {
   storefront            String?
   storefrontId          String?   @map("storefront_id")
   appTransactionId      String?   @map("app_transaction_id")
+  adjustAdid            String?   @map("adjust_adid")
+  idfa                  String?
+  idfv                  String?
   revocationDate        DateTime? @map("revocation_date") @db.Timestamptz(6)
   revocationReason      Int?      @map("revocation_reason")
   revocationType        String?   @map("revocation_type")
@@ -188,6 +193,9 @@ model IosIapTwoHourCheck {
   environment           String           @default("production")
   appInstanceId         String           @map("app_instance_id")
   firebaseAppId         String?          @map("firebase_app_id")
+  adjustAdid            String?          @map("adjust_adid")
+  idfa                  String?
+  idfv                  String?
   ga4EventName          String           @default("purchase_2hour") @map("ga4_event_name")
   checkAt               DateTime         @map("check_at") @db.Timestamptz(6)
   status                String           @default("pending")

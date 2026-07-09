@@ -58,6 +58,8 @@ export type StoreMapping = {
   bundle_id: string | null;
   firebase_app_id: string | null;
   firebase_analytics_api_secret_configured: boolean;
+  adjust_app_token: string | null;
+  adjust_event_token: string | null;
   status: string;
   created_at: string;
   updated_at: string;

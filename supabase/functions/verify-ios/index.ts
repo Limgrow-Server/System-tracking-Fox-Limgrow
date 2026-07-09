@@ -8,6 +8,7 @@ import {
 } from "../_shared/edge-config.ts";
 
 type VerifyIosRequest = {
+  adjustAdid?: string;
   productAppId?: string;
   bundleId?: string;
   transactionId?: string;
@@ -17,6 +18,8 @@ type VerifyIosRequest = {
   credentialRef?: string;
   appInstanceId?: string;
   firebaseAppId?: string;
+  idfa?: string;
+  idfv?: string;
 };
 
 type StoreConfigContext = {
@@ -333,7 +336,7 @@ async function persistIosTransaction(
   row: Record<string, unknown> & { transaction_id: string }
 ) {
   const select =
-    "id,state,transaction_id,original_transaction_id,product_id,user_id,bundle_id,purchase_date,environment,store_profile_id";
+    "id,state,transaction_id,original_transaction_id,product_id,user_id,bundle_id,purchase_date,environment,store_profile_id,adjust_adid,idfa,idfv";
 
   const updateExisting = async (id: string) => {
     const { data, error } = await supabase
@@ -414,6 +417,14 @@ async function scheduleIosIapTwoHourCheck(
   const purchaseTime = purchaseDateText ? Date.parse(purchaseDateText) : Date.now();
   const checkAt = new Date((Number.isFinite(purchaseTime) ? purchaseTime : Date.now()) + delayMs);
   const firebaseAppId = clean(payload.firebaseAppId);
+  const adjustAdid = clean(payload.adjustAdid) || stringValue(transaction.adjust_adid) || null;
+  const idfa = clean(payload.idfa) || stringValue(transaction.idfa) || null;
+  const idfv = clean(payload.idfv) || stringValue(transaction.idfv) || null;
+  const adjustIdentifierColumns = {
+    ...(adjustAdid ? { adjust_adid: adjustAdid } : {}),
+    ...(idfa ? { idfa } : {}),
+    ...(idfv ? { idfv } : {}),
+  };
   const row = {
     app_instance_id: appInstanceId,
     bundle_id: bundleId,
@@ -426,6 +437,7 @@ async function scheduleIosIapTwoHourCheck(
     product_id: productId,
     raw_context: {
       delayMs,
+      adjustIdentifiersProvided: Boolean(adjustAdid || idfa || idfv),
       firebaseAppIdProvided: Boolean(firebaseAppId),
       scheduledAt: new Date().toISOString(),
       source: "verify_ios_edge_function",
@@ -435,6 +447,7 @@ async function scheduleIosIapTwoHourCheck(
     store_profile_id: stringValue(transaction.store_profile_id),
     transaction_id: transactionId,
     user_id: (stringValue(transaction.user_id) ?? clean(payload.userId)) || null,
+    ...adjustIdentifierColumns,
   };
 
   const { data: existing, error: existingError } = await supabase
@@ -452,6 +465,7 @@ async function scheduleIosIapTwoHourCheck(
       ? {
           app_instance_id: row.app_instance_id,
           firebase_app_id: row.firebase_app_id,
+          ...adjustIdentifierColumns,
           updated_at: new Date().toISOString(),
         }
       : {
@@ -583,6 +597,9 @@ async function verifyApple(
       ? "expired"
       : "purchased";
   const resolvedTransactionId = stringValue(decoded?.transactionId) ?? transactionId;
+  const adjustAdid = clean(payload.adjustAdid);
+  const idfa = clean(payload.idfa);
+  const idfv = clean(payload.idfv);
 
   const row = {
     store_profile_id: storeConfig.storeProfileId,
@@ -601,11 +618,17 @@ async function verifyApple(
     environment: normalizeEnvironment(decoded?.environment ?? verifiedEnvironment),
     raw_receipt: {
       ...provider,
+      adjustIdentifiersProvided: Boolean(
+        adjustAdid || idfa || idfv
+      ),
       requestedEnvironment: clean(payload.environment) || null,
       source: "verify_ios_edge_function",
       verifiedEnvironment,
     },
     verified_at: new Date().toISOString(),
+    ...(adjustAdid ? { adjust_adid: adjustAdid } : {}),
+    ...(idfa ? { idfa } : {}),
+    ...(idfv ? { idfv } : {}),
     offer_discount_type: stringValue(decoded?.offerDiscountType) || null,
     offer_type: finiteInt(decoded?.offerType),
     offer_period: stringValue(decoded?.offerPeriod) || null,
@@ -647,6 +670,7 @@ async function verifyApple(
   }
 
   console.info("Apple transaction verify saved", {
+    adjustIdentifiersProvided: Boolean(adjustAdid || idfa || idfv),
     bundleId,
     environment: row.environment,
     source: "verify_ios_edge_function",

@@ -4,11 +4,14 @@ import { ApiError, badRequest } from "@/lib/server/api/errors";
 import { createClient } from "@/lib/supabase/server";
 
 type VerifyIosIapPayload = {
+  adjustAdid?: unknown;
   appInstanceId?: unknown;
   bundleId?: unknown;
   credentialRef?: unknown;
   environment?: unknown;
   firebaseAppId?: unknown;
+  idfa?: unknown;
+  idfv?: unknown;
   productId?: unknown;
   transactionId?: unknown;
   userId?: unknown;
@@ -75,8 +78,11 @@ export async function verifyIosIapTransaction(payload: VerifyIosIapPayload) {
   const bundleId = clean(payload.bundleId);
   const transactionId = clean(payload.transactionId);
   const credentialRef = clean(payload.credentialRef);
+  const adjustAdid = clean(payload.adjustAdid);
   const appInstanceId = clean(payload.appInstanceId);
   const firebaseAppId = clean(payload.firebaseAppId);
+  const idfa = clean(payload.idfa);
+  const idfv = clean(payload.idfv);
   const productId = clean(payload.productId);
   const userId = clean(payload.userId);
 
@@ -104,10 +110,13 @@ export async function verifyIosIapTransaction(payload: VerifyIosIapPayload) {
     },
     body: JSON.stringify({
       bundleId,
+      adjustAdid: adjustAdid || undefined,
       appInstanceId: appInstanceId || undefined,
       credentialRef: credentialRef || undefined,
       environment: normalizeEnvironment(payload.environment),
       firebaseAppId: firebaseAppId || undefined,
+      idfa: idfa || undefined,
+      idfv: idfv || undefined,
       productId: productId || undefined,
       transactionId,
       userId: userId || undefined,

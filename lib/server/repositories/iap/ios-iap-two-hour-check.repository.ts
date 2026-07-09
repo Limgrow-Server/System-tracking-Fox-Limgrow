@@ -15,6 +15,9 @@ export const iosIapTwoHourCheckSelect = {
   environment: true,
   appInstanceId: true,
   firebaseAppId: true,
+  adjustAdid: true,
+  idfa: true,
+  idfv: true,
   ga4EventName: true,
   checkAt: true,
   status: true,
@@ -36,6 +39,9 @@ const iosIapRenewalEvidenceTransactionSelect = {
   revenueMicros: true,
   priceMilliunits: true,
   currency: true,
+  adjustAdid: true,
+  idfa: true,
+  idfv: true,
   rawReceipt: true,
   verifiedAt: true,
 } satisfies Prisma.IosIapTransactionSelect;
@@ -67,6 +73,7 @@ export type IosIapRenewalEvidenceEvent =
   }>;
 
 type ClaimedIosIapTwoHourCheckRow = {
+  adjustAdid: string | null;
   appInstanceId: string;
   attempts: number;
   bundleId: string;
@@ -77,6 +84,8 @@ type ClaimedIosIapTwoHourCheckRow = {
   ga4EventName: string;
   ga4SentAt: Date | null;
   id: string;
+  idfa: string | null;
+  idfv: string | null;
   lastError: string | null;
   originalTransactionId: string | null;
   productId: string;
@@ -138,6 +147,9 @@ export async function claimDueIosIapTwoHourChecks(input: {
       checks.environment,
       checks.app_instance_id AS "appInstanceId",
       checks.firebase_app_id AS "firebaseAppId",
+      checks.adjust_adid AS "adjustAdid",
+      checks.idfa,
+      checks.idfv,
       checks.ga4_event_name AS "ga4EventName",
       checks.check_at AS "checkAt",
       checks.status,
