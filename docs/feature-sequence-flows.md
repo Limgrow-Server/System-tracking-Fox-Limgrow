@@ -314,7 +314,7 @@ sequenceDiagram
   History->>Job: Poll/realtime read job status
 ```
 
-Hien tai `supabase/functions/send-notification` va `dispatch-notifications` khong xu ly gui nua. Gui notification chay tren Next server/PM2 worker de giam tai Edge Function va de kiem soat DB pool tot hon.
+Hien tai `system-tracking-server/supabase-legacy/functions/send-notification` va `dispatch-notifications` khong xu ly gui nua. Gui notification chay tren Next server/PM2 worker de giam tai Edge Function va de kiem soat DB pool tot hon.
 
 ## 10. Scheduled notification
 

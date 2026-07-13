@@ -1,4 +1,0 @@
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-
-export { handleAdminIapAppTransactionsGet as GET } from "@/lib/server/api/admin-iap.handler";

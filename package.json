@@ -1,13 +1,13 @@
 {
-  "name": "system-tracking",
+  "name": "system-tracking-ui",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "tsx scripts/review-fetch-cron.ts dev",
+    "dev": "next dev",
     "dev:debug": "next dev --inspect",
     "prebuild": "prisma generate --schema prisma",
     "build": "next build",
-    "start": "tsx scripts/review-fetch-cron.ts start",
+    "start": "next start",
     "lint": "eslint",
     "check": "npm run lint --if-present && npm run typecheck --if-present && npm run test --if-present && npm run build",
     "prepare": "husky",
