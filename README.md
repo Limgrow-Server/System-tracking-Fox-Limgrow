@@ -2,7 +2,43 @@
 
 Console nội bộ để Admin quản lý Supabase Auth/RBAC, Android/iOS App Mapping và Android/iOS Credential Config. Secret credential không lưu plaintext trong bảng app; payload được lưu trong Supabase Vault, còn DB app chỉ giữ metadata và Vault pointer.
 
-Tài liệu nguồn của hệ thống là [docs/SRS.md](docs/SRS.md). Trước khi thay đổi code hoặc schema, đọc SRS trước.
+Tài liệu nguồn của hệ thống là [../docs/SRS.md](../docs/SRS.md). Trước khi thay đổi code hoặc schema, đọc SRS trước.
+
+## Kiến trúc API hiện tại
+
+Next.js app trong folder này chỉ còn phần FE/page rendering. Toàn bộ runtime API `/api/*` đã được chuyển sang NestJS backend trong folder sibling:
+
+```text
+../system-tracking-server
+```
+
+Cấu trúc hiện tại:
+
+```text
+system-tracking/
+- system-tracking-ui/      # UI Next.js
+- system-tracking-server/  # Backend NestJS
+```
+
+Khi deploy FE, cấu hình:
+
+```env
+SYSTEM_TRACKING_API_URL="https://tracking-api.example.com"
+```
+
+Next.js sẽ rewrite `/api/*` và `/functions/v1/*` sang NestJS bằng `beforeFiles`. Secrets phục vụ API, cron, mobile ingest, notification queue, IAP verify, GA4/Adjust nên đặt ở NestJS backend, không đặt để Next xử lý API nữa.
+
+`npm run dev` và `npm run start` của repo này chỉ chạy Next.js. Background workers được chạy trong NestJS backend bằng `API_CRON_WORKERS_ENABLED=true`.
+
+Nếu `SYSTEM_TRACKING_API_URL` không được set, Next mặc định proxy `/api/*` và `/functions/v1/*` về `http://127.0.0.1:2156`.
+
+Các lệnh backend có thể chạy từ root repo:
+
+```bash
+npm run server:install
+npm run server:build
+npm run server:start
+```
 
 ## Yêu cầu
 
@@ -227,7 +263,7 @@ Commit những file liên quan:
 ```bash
 git status --short
 git add prisma/schema.prisma prisma/models prisma/migrations
-git add README.md docs supabase/functions supabase/config.toml
+git add README.md docs system-tracking-server/supabase-legacy/functions system-tracking-server/supabase-legacy/config.toml
 git commit -m "feat(scope): describe schema change"
 ```
 
@@ -251,7 +287,7 @@ npm run prisma:migrate:deploy:production
 npm run prisma:migrate:status:production
 ```
 
-Sau database migration, deploy Edge Functions vào đúng Supabase project production nếu có thay đổi trong `supabase/functions` hoặc `supabase/config.toml`.
+Sau database migration, deploy Edge Functions vào đúng Supabase project production nếu có thay đổi trong `system-tracking-server/supabase-legacy/functions` hoặc `system-tracking-server/supabase-legacy/config.toml`.
 
 ## 7. Deploy Supabase Edge Functions
 
@@ -301,7 +337,7 @@ supabase functions deploy verify-ios --project-ref <project-ref>
 
 Mobile token/event request được ghi nhanh vào `mobile_ingest_events`; server worker `/api/cron/mobile-ingest` sẽ claim theo batch và xử lý song song bằng worker pool nhỏ. Khi chạy bằng `npm start`, script PM2 hiện tại tự chạy worker này. Mobile ingest dùng Prisma pool riêng, chỉnh bằng `MOBILE_INGEST_DATABASE_CONNECTION_LIMIT` và `MOBILE_INGEST_DATABASE_POOL_TIMEOUT` để không ăn hết pool chính của UI/IAP. Có thể chỉnh tốc độ bằng `MOBILE_INGEST_INTERVAL_MS`, `MOBILE_INGEST_ACTIVE_INTERVAL_MS`, `MOBILE_INGEST_BATCH_SIZE`, `MOBILE_INGEST_CONCURRENCY`, `MOBILE_INGEST_ENQUEUE_CONCURRENCY`, và `MOBILE_INGEST_WORKER_CONNECTION_RESERVE`; mặc định nên bắt đầu với `batch=100`, `concurrency=3`, `connection_limit=6`, `pool_timeout=10`. Duplicate token đã xử lý gần đây không bị queue lại trong khoảng `MOBILE_INGEST_DEDUPE_COOLDOWN_MS`. Nếu batch lớn, đặt `MOBILE_INGEST_LOCK_TTL_MS` lớn hơn thời gian xử lý một batch để row chưa tới lượt không bị recover thành `retrying` quá sớm. Khi database đang backlog có thể tắt tạm từng loop bằng `MOBILE_INGEST_ENABLED=false`, `REVIEW_FETCH_CRON_ENABLED=false`, `NOTIFICATION_QUEUE_ENABLED=false`, hoặc `IOS_IAP_2HOUR_ENABLED=false`; review fetch cũng có thể giãn bằng `REVIEW_FETCH_INTERVAL_MS`.
 
-`supabase/config.toml` đang bật `verify_jwt = true`, nên caller phải gửi Supabase JWT hợp lệ. Nếu mobile app không dùng Supabase Auth, deploy các endpoint mobile bằng `--no-verify-jwt` và giữ app-level key qua `apikey`, `x-api-key`, hoặc Bearer token.
+`system-tracking-server/supabase-legacy/config.toml` đang bật `verify_jwt = true`, nên caller phải gửi Supabase JWT hợp lệ. Nếu mobile app không dùng Supabase Auth, deploy các endpoint mobile bằng `--no-verify-jwt` và giữ app-level key qua `apikey`, `x-api-key`, hoặc Bearer token.
 
 Chi tiết cách Edge Functions lấy Firebase/Google/Apple config cho các verify endpoint nằm ở [docs/edge-functions-config-guide.md](docs/edge-functions-config-guide.md).
 
