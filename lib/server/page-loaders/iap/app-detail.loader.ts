@@ -46,15 +46,15 @@ export async function getIapAppDetailPageData(
   const page = pageNumber(options?.page);
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
-  const environment =
-    platform === "android" ? clean(options?.environment) || "production" : "production";
+  const environment = clean(options?.environment) || "production";
   const purchaseDateFrom = clean(options?.purchaseDateFrom);
   const purchaseDateTo = clean(options?.purchaseDateTo);
   const selectedRevenueGranularity = revenueGranularity(
     options?.revenueGranularity,
   );
   const revenueSort =
-    clean(options?.revenueSort) === "asc" || clean(options?.revenueSort) === "desc"
+    clean(options?.revenueSort) === "asc" ||
+    clean(options?.revenueSort) === "desc"
       ? clean(options?.revenueSort)
       : "none";
   const trial = clean(options?.trial) || "all";
@@ -65,23 +65,22 @@ export async function getIapAppDetailPageData(
     transactionStates,
     trialAnalytics,
     twoHourChecks,
-  } =
-    await getIapAppDetail(mappingId, platform, {
-      environment,
-      includeContext: false,
-      includeTrialAnalytics: false,
-      kind,
-      page,
-      pageSize: IAP_TRANSACTION_PAGE_SIZE,
-      purchaseDateFrom,
-      purchaseDateTo,
-      revenueGranularity: selectedRevenueGranularity,
-      revenueSort,
-      skip: (page - 1) * IAP_TRANSACTION_PAGE_SIZE,
-      state,
-      take: IAP_TRANSACTION_PAGE_SIZE,
-      trial,
-    });
+  } = await getIapAppDetail(mappingId, platform, {
+    environment,
+    includeContext: false,
+    includeTrialAnalytics: false,
+    kind,
+    page,
+    pageSize: IAP_TRANSACTION_PAGE_SIZE,
+    purchaseDateFrom,
+    purchaseDateTo,
+    revenueGranularity: selectedRevenueGranularity,
+    revenueSort,
+    skip: (page - 1) * IAP_TRANSACTION_PAGE_SIZE,
+    state,
+    take: IAP_TRANSACTION_PAGE_SIZE,
+    trial,
+  });
   if (!canAccessIapApp(session, appCard)) return null;
 
   return {

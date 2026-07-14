@@ -68,6 +68,7 @@ const iosTransactionSummarySelect = {
 
 const androidMappingByIdSelect = {
   id: true,
+  appId: true,
   storeProfileId: true,
   storeAccountName: true,
   appName: true,
@@ -81,6 +82,7 @@ const androidMappingByIdSelect = {
 
 const iosMappingByIdSelect = {
   id: true,
+  appId: true,
   storeProfileId: true,
   storeAccountName: true,
   appName: true,
@@ -132,10 +134,9 @@ const iosNotificationEventSummarySelect = {
   processedAt: true,
 } satisfies Prisma.IosIapNotificationEventSelect;
 
-export type IosTrialAnalyticsTransaction =
-  Prisma.IosIapTransactionGetPayload<{
-    select: typeof iosTrialAnalyticsTransactionSelect;
-  }>;
+export type IosTrialAnalyticsTransaction = Prisma.IosIapTransactionGetPayload<{
+  select: typeof iosTrialAnalyticsTransactionSelect;
+}>;
 
 export type IosNotificationEventSummary =
   Prisma.IosIapNotificationEventGetPayload<{
@@ -286,7 +287,9 @@ function androidMappingWhere(
   }
 
   if (search) {
-    const searchOr: Prisma.AndroidStoreMappingWhereInput[] = searchTextVariants(search).flatMap((variant) => {
+    const searchOr: Prisma.AndroidStoreMappingWhereInput[] = searchTextVariants(
+      search,
+    ).flatMap((variant) => {
       const contains = { contains: variant, mode: "insensitive" as const };
 
       return [
@@ -298,7 +301,10 @@ function androidMappingWhere(
       ];
     });
 
-    where.AND = [...(where.AND instanceof Array ? where.AND : []), { OR: searchOr }];
+    where.AND = [
+      ...(where.AND instanceof Array ? where.AND : []),
+      { OR: searchOr },
+    ];
   }
 
   return where;
@@ -323,7 +329,9 @@ function iosMappingWhere(
   }
 
   if (search) {
-    const searchOr: Prisma.IosStoreMappingWhereInput[] = searchTextVariants(search).flatMap((variant) => {
+    const searchOr: Prisma.IosStoreMappingWhereInput[] = searchTextVariants(
+      search,
+    ).flatMap((variant) => {
       const contains = { contains: variant, mode: "insensitive" as const };
 
       return [
@@ -335,13 +343,18 @@ function iosMappingWhere(
       ];
     });
 
-    where.AND = [...(where.AND instanceof Array ? where.AND : []), { OR: searchOr }];
+    where.AND = [
+      ...(where.AND instanceof Array ? where.AND : []),
+      { OR: searchOr },
+    ];
   }
 
   return where;
 }
 
-export async function getAllActiveStoreMappings(options?: IapAppMappingOptions) {
+export async function getAllActiveStoreMappings(
+  options?: IapAppMappingOptions,
+) {
   const [androidMappings, iosMappings] = await Promise.all([
     prisma.androidStoreMapping.findMany({
       where: androidMappingWhere(options),
@@ -412,9 +425,7 @@ export async function getActiveIapStoreNames(options?: IapAppMappingOptions) {
     ORDER BY "storeAccountName" ASC
   `);
 
-  return rows
-    .map((row) => row.storeAccountName?.trim() ?? "")
-    .filter(Boolean);
+  return rows.map((row) => row.storeAccountName?.trim() ?? "").filter(Boolean);
 }
 
 export async function getAndroidMappingById(id: string) {
@@ -511,7 +522,9 @@ function normalizeRevenueGranularity(
     : "month";
 }
 
-function revenueSortOrder(value: string | null | undefined): Prisma.SortOrder | null {
+function revenueSortOrder(
+  value: string | null | undefined,
+): Prisma.SortOrder | null {
   const normalized = value?.trim().toLowerCase();
   return normalized === "asc" || normalized === "desc" ? normalized : null;
 }
@@ -548,10 +561,9 @@ function revenueBucketSql(granularity: IapRevenueGranularity) {
 
 function joinSql(parts: Prisma.Sql[], separator: Prisma.Sql) {
   if (!parts.length) return Prisma.empty;
-  return parts.slice(1).reduce(
-    (sql, part) => Prisma.sql`${sql} ${separator} ${part}`,
-    parts[0],
-  );
+  return parts
+    .slice(1)
+    .reduce((sql, part) => Prisma.sql`${sql} ${separator} ${part}`, parts[0]);
 }
 
 async function iapMetricsFromRows(
@@ -896,6 +908,7 @@ export async function getAndroidTransactionStatesByPackageAndProfile(
 }
 
 type IosTransactionPageOptions = {
+  environment?: string;
   includeTotal?: boolean;
   page: number;
   pageSize: number;
@@ -934,6 +947,7 @@ type IosTransactionListPageRow = {
   checkTransactionId: string | null;
   checkUpdatedAt: Date | null;
   checkUserId: string | null;
+  mappingAppId: string | null;
   mappingAppIconUrl: string | null;
   mappingAppLink: string | null;
   mappingAppName: string;
@@ -993,8 +1007,13 @@ function iosTransactionWhere(
 ): Prisma.IosIapTransactionWhereInput {
   const where: Prisma.IosIapTransactionWhereInput = {
     bundleId,
-    environment: "production",
   };
+  const environment = options?.environment?.trim().toLowerCase();
+  if (environment === "sandbox" || environment === "test") {
+    where.environment = "sandbox";
+  } else if (environment !== "all") {
+    where.environment = "production";
+  }
   const state = options?.state?.trim();
   const trial = options?.trial?.trim();
   const purchaseDate = purchaseDateRange(
@@ -1032,12 +1051,27 @@ function iosTransactionWhere(
   return where;
 }
 
-function iosTransactionSqlConditions(options: Partial<IosTransactionPageOptions>) {
+function iosTransactionSqlConditions(
+  options: Partial<IosTransactionPageOptions>,
+) {
   const conditions: Prisma.Sql[] = [
     Prisma.sql`t.bundle_id = m.bundle_id`,
-    Prisma.sql`t.environment = 'production'`,
     Prisma.sql`(t.store_profile_id = m.store_profile_id OR t.store_profile_id IS NULL)`,
   ];
+  const environment = options.environment?.trim().toLowerCase();
+  const testMapping = Prisma.sql`replace(lower(coalesce(m.app_id, '')), '-', '') = 'li000'`;
+  if (environment === "sandbox" || environment === "test") {
+    conditions.push(
+      Prisma.sql`lower(t.environment) = 'sandbox' AND ${testMapping}`,
+    );
+  } else if (environment === "all") {
+    conditions.push(Prisma.sql`(
+      lower(t.environment) = 'production'
+      OR (lower(t.environment) = 'sandbox' AND ${testMapping})
+    )`);
+  } else {
+    conditions.push(Prisma.sql`lower(t.environment) = 'production'`);
+  }
   const state = options.state?.trim();
   const trial = options.trial?.trim();
   const purchaseDate = purchaseDateRange(
@@ -1089,7 +1123,9 @@ function iosTransactionSqlOrderBy(revenueSort: string | null | undefined) {
 
 function compactJsonObject(record: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.entries(record).filter(([, value]) => value !== null && value !== undefined),
+    Object.entries(record).filter(
+      ([, value]) => value !== null && value !== undefined,
+    ),
   );
 }
 
@@ -1193,6 +1229,7 @@ function iosMappingFromListPageRow(
   if (!row) return null;
 
   return {
+    appId: row.mappingAppId,
     appIconUrl: row.mappingAppIconUrl,
     appLink: row.mappingAppLink,
     appName: row.mappingAppName,
@@ -1229,6 +1266,7 @@ export async function getIosTransactionsListPageByMappingId(
         WITH mapping AS (
           SELECT
             m.id,
+            m.app_id,
             m.store_profile_id,
             m.store_account_name,
             m.app_name,
@@ -1252,6 +1290,7 @@ export async function getIosTransactionsListPageByMappingId(
         )
         SELECT
           m.id AS "mappingId",
+          m.app_id AS "mappingAppId",
           m.store_profile_id AS "mappingStoreProfileId",
           m.store_account_name AS "mappingStoreAccountName",
           m.app_name AS "mappingAppName",
@@ -1386,10 +1425,17 @@ export function getIosTransactionsByBundleIdMetrics(
   storeProfileId: string | undefined,
   options: Partial<IosTransactionPageOptions>,
 ) {
-  const conditions = [
-    Prisma.sql`bundle_id = ${bundleId}`,
-    Prisma.sql`environment = 'production'`,
-  ];
+  const conditions = [Prisma.sql`bundle_id = ${bundleId}`];
+  const environment = options.environment?.trim().toLowerCase();
+  if (environment === "sandbox" || environment === "test") {
+    conditions.push(Prisma.sql`lower(environment) = 'sandbox'`);
+  } else if (environment === "all") {
+    conditions.push(
+      Prisma.sql`lower(environment) IN ('production', 'sandbox')`,
+    );
+  } else {
+    conditions.push(Prisma.sql`lower(environment) = 'production'`);
+  }
   const state = options.state?.trim();
   const trial = options.trial?.trim();
 
@@ -1429,6 +1475,7 @@ export function getIosTransactionsByBundleIdMetrics(
     Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
     Prisma.sql`lower(environment) = 'sandbox'`,
     {
+      includeTest: environment !== "production",
       revenueGranularity: options.revenueGranularity,
     },
   );
@@ -1494,10 +1541,11 @@ export async function getIosIapNotificationEventSummaryByBundleId(
 export async function getIosTransactionStatesByBundleId(
   bundleId: string,
   storeProfileId?: string,
+  options?: Partial<IosTransactionPageOptions>,
 ) {
   const rows = await prisma.iosIapTransaction.groupBy({
     by: ["state"],
-    where: iosTransactionWhere(bundleId, storeProfileId),
+    where: iosTransactionWhere(bundleId, storeProfileId, options),
     orderBy: { state: "asc" },
   });
 
