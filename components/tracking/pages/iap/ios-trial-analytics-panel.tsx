@@ -1,12 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import {
-  Bell,
-  Clock3,
-  FileJson,
-  RotateCcw,
-} from "lucide-react";
+import { Bell, Clock3, FileJson, RotateCcw } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -98,7 +93,7 @@ function renewalStatusBadgeClass(status: "enabled" | "disabled") {
 }
 
 function renewalStatusLabel(status: "enabled" | "disabled") {
-  return status === "enabled" ? "Renew enabled" : "Renew disabled";
+  return status === "enabled" ? "Auto-renew on" : "Auto-renew off";
 }
 
 function titleCase(value: string) {
@@ -140,11 +135,11 @@ function TrialConversionTooltip({
           <span className="font-semibold">{formatNumber(data.trials)}</span>
         </div>
         <div className="flex items-center justify-between gap-4">
-          <span className="text-muted-foreground">Continued</span>
+          <span className="text-muted-foreground">Paid renewals</span>
           <span className="font-semibold">{formatNumber(data.continued)}</span>
         </div>
         <div className="flex items-center justify-between gap-4">
-          <span className="text-muted-foreground">Conversion</span>
+          <span className="text-muted-foreground">Renewal rate</span>
           <span className="font-semibold">{formatPercent(data.rate)}</span>
         </div>
       </div>
@@ -164,7 +159,10 @@ function TrialConversionAreaChart({ data }: { data: TrialConversionDatum[] }) {
   return (
     <div className="h-[230px]">
       <ResponsiveContainer height="100%" width="100%">
-        <AreaChart data={data} margin={{ bottom: 4, left: 0, right: 12, top: 16 }}>
+        <AreaChart
+          data={data}
+          margin={{ bottom: 4, left: 0, right: 12, top: 16 }}
+        >
           <defs>
             <linearGradient id="trialStartsFill" x1="0" x2="0" y1="0" y2="1">
               <stop offset="5%" stopColor="#2563eb" stopOpacity={0.32} />
@@ -219,7 +217,7 @@ function TrialConversionAreaChart({ data }: { data: TrialConversionDatum[] }) {
             dataKey="continued"
             dot={false}
             fill="url(#trialContinuedFill)"
-            name="Continued"
+            name="Paid renewals"
             stroke="#10b981"
             strokeWidth={3}
             type="monotone"
@@ -299,11 +297,11 @@ export function IosTrialAnalyticsPanel({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <div className="text-base font-semibold">
-                Free Trial vs Continued Usage
+                Free Trials vs Paid Renewals
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
-                Statistical comparison of free-trial starts and users who keep
-                using the subscription after the trial period.
+                Compares trial starts with confirmed paid renewal transactions
+                after the trial ends.
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -315,9 +313,7 @@ export function IosTrialAnalyticsPanel({
                     onClick={() => setGranularity(item.value)}
                     size="sm"
                     type="button"
-                    variant={
-                      granularity === item.value ? "default" : "ghost"
-                    }
+                    variant={granularity === item.value ? "default" : "ghost"}
                   >
                     {item.label}
                   </Button>
@@ -329,15 +325,13 @@ export function IosTrialAnalyticsPanel({
         <div className="p-4">
           <div className="mb-3 flex items-center justify-between gap-4">
             <div>
-              <div className="text-sm font-semibold">
-                Trial continuation cohorts
-              </div>
+              <div className="text-sm font-semibold">Trial renewal cohorts</div>
               <div className="mt-1 text-xs text-muted-foreground">
                 {selectedGranularity?.rangeLabel ?? "Trial cohort timeline"}
               </div>
             </div>
             <div className="text-xs text-muted-foreground">
-              {formatNumber(analytics.notConvertedCount)} not converted
+              {formatNumber(analytics.notConvertedCount)} not renewed yet
             </div>
           </div>
           <TrialConversionAreaChart data={trialChartData} />
@@ -348,7 +342,9 @@ export function IosTrialAnalyticsPanel({
         <div className="border-b p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-base font-semibold">App Store Notifications</div>
+              <div className="text-base font-semibold">
+                App Store Notifications
+              </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 Recent webhook events for this app.
               </div>
@@ -399,7 +395,10 @@ export function IosTrialAnalyticsPanel({
         <div className="max-h-[330px] space-y-2 overflow-auto p-4">
           {events.length ? (
             events.map((event) => (
-              <div key={event.id} className="rounded-lg border bg-background p-3">
+              <div
+                key={event.id}
+                className="rounded-lg border bg-background p-3"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold">

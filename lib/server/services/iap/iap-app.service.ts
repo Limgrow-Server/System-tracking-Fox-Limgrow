@@ -48,12 +48,47 @@ type IapAppCardOptions = {
 
 type IapAppCardsPageOptions = IapAppCardOptions & PaginationQuery;
 
+function normalizedAppId(value: string | null | undefined) {
+  return (
+    value
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "") ?? ""
+  );
+}
+
+function appEnvironment(
+  platform: "android" | "ios",
+  appId: string | null | undefined,
+  requested: string | undefined,
+) {
+  const testAppId = platform === "android" ? "la000" : "li000";
+  if (normalizedAppId(appId) !== testAppId) return "production";
+
+  const environment = requested?.trim().toLowerCase();
+  if (environment === "all") return "all";
+  if (
+    platform === "ios" &&
+    (environment === "sandbox" || environment === "test")
+  ) {
+    return "sandbox";
+  }
+  if (
+    platform === "android" &&
+    (environment === "test" || environment === "sandbox")
+  ) {
+    return "test";
+  }
+  return "production";
+}
+
 type CachedIapAppCard = IapAppCard & {
   appId: string | null;
 };
 
 function toPublicIapAppCard(app: CachedIapAppCard): IapAppCard {
   return {
+    appId: app.appId,
     appIconUrl: app.appIconUrl,
     appLink: app.appLink,
     appName: app.appName,
@@ -65,7 +100,10 @@ function toPublicIapAppCard(app: CachedIapAppCard): IapAppCard {
   };
 }
 
-function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions) {
+function filterIapAppCards(
+  apps: CachedIapAppCard[],
+  options?: IapAppCardOptions,
+) {
   const platform =
     options?.platform === "android" || options?.platform === "ios"
       ? options.platform
@@ -78,12 +116,10 @@ function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions
     const matchesStore =
       !storeAccountName ||
       app.storeAccountName.toLowerCase() === storeAccountName;
-    const matchesSearch = valuesMatchSearch([
-      app.appName,
-      app.identifier,
-      app.storeAccountName,
-      app.appId,
-    ], search);
+    const matchesSearch = valuesMatchSearch(
+      [app.appName, app.identifier, app.storeAccountName, app.appId],
+      search,
+    );
 
     return matchesPlatform && matchesStore && matchesSearch;
   });
@@ -91,8 +127,7 @@ function filterIapAppCards(apps: CachedIapAppCard[], options?: IapAppCardOptions
 
 const getCachedIapAppCards = unstable_cache(
   async (): Promise<CachedIapAppCard[]> => {
-    const { androidMappings, iosMappings } =
-      await getAllActiveStoreMappings();
+    const { androidMappings, iosMappings } = await getAllActiveStoreMappings();
 
     const androidCards: CachedIapAppCard[] = androidMappings.map((m) => ({
       appId: m.appId,
@@ -255,7 +290,16 @@ export async function getIapAppTransactionsPage(
     const mapping = await getAndroidMappingById(mappingId);
     if (!mapping) throw new Error("Android mapping not found");
 
+    const scopedOptions = {
+      ...options,
+      environment: appEnvironment(
+        "android",
+        mapping.appId,
+        options.environment,
+      ),
+    };
     const appCard: IapAppCard = {
+      appId: mapping.appId,
       mappingId: mapping.id,
       platform: "android",
       appName: mapping.appName,
@@ -272,7 +316,7 @@ export async function getIapAppTransactionsPage(
         mapping.packageName,
         mapping.storeProfileId,
         {
-          ...options,
+          ...scopedOptions,
           includeTotal: includeContext || options.knownTotal === undefined,
         },
       );
@@ -286,7 +330,7 @@ export async function getIapAppTransactionsPage(
         transactions: paginatedResult(
           rawTransactions.map((transaction) => iapAndroidToDto(transaction)),
           total ?? fallbackTotal,
-          options,
+          scopedOptions,
         ),
       };
     }
@@ -297,7 +341,7 @@ export async function getIapAppTransactionsPage(
         getAndroidTransactionsByPackageAndProfileMetrics(
           mapping.packageName,
           mapping.storeProfileId,
-          options,
+          scopedOptions,
         ),
         getAndroidTransactionStatesByPackageAndProfile(
           mapping.packageName,
@@ -325,14 +369,14 @@ export async function getIapAppTransactionsPage(
         total,
         transactions: rawTransactions,
         twoHourChecks,
-      } =
-        await getIosTransactionsListPageByMappingId(mappingId, {
-          ...options,
-          includeTotal: false,
-        });
+      } = await getIosTransactionsListPageByMappingId(mappingId, {
+        ...options,
+        includeTotal: false,
+      });
       if (!mapping) throw new Error("iOS mapping not found");
 
       const appCard: IapAppCard = {
+        appId: mapping.appId,
         mappingId: mapping.id,
         platform: "ios",
         appName: mapping.appName,
@@ -361,7 +405,12 @@ export async function getIapAppTransactionsPage(
     const mapping = await getIosMappingById(mappingId);
     if (!mapping) throw new Error("iOS mapping not found");
 
+    const scopedOptions = {
+      ...options,
+      environment: appEnvironment("ios", mapping.appId, options.environment),
+    };
     const appCard: IapAppCard = {
+      appId: mapping.appId,
       mappingId: mapping.id,
       platform: "ios",
       appName: mapping.appName,
@@ -378,7 +427,7 @@ export async function getIapAppTransactionsPage(
         mapping.bundleId,
         mapping.storeProfileId,
         {
-          ...options,
+          ...scopedOptions,
           includeTotal: includeContext || options.knownTotal === undefined,
         },
       );
@@ -389,11 +438,12 @@ export async function getIapAppTransactionsPage(
         getIosTransactionsByBundleIdMetrics(
           mapping.bundleId,
           mapping.storeProfileId,
-          options,
+          scopedOptions,
         ),
         getIosTransactionStatesByBundleId(
           mapping.bundleId,
           mapping.storeProfileId,
+          scopedOptions,
         ),
       ]);
 
@@ -432,8 +482,7 @@ export async function getIapTransactionReceipt(
         identifier: transaction.packageName,
         mappingId: transaction.packageName,
         platform: "android",
-        storeAccountName:
-          transaction.storeProfile?.storeAccountName ?? "",
+        storeAccountName: transaction.storeProfile?.storeAccountName ?? "",
         storeProfileId: transaction.storeProfileId ?? "",
       },
       rawReceipt: transaction.rawReceipt,
@@ -452,8 +501,7 @@ export async function getIapTransactionReceipt(
         identifier: transaction.bundleId ?? "",
         mappingId: transaction.bundleId ?? transaction.transactionId,
         platform: "ios",
-        storeAccountName:
-          transaction.storeProfile?.storeAccountName ?? "",
+        storeAccountName: transaction.storeProfile?.storeAccountName ?? "",
         storeProfileId: transaction.storeProfileId ?? "",
       },
       rawReceipt: transaction.rawReceipt,
@@ -481,7 +529,9 @@ export async function getIapAppDetail(
 ): Promise<{
   appCard: IapAppCard;
   metrics: IapAppMetrics;
-  trialAnalytics: Awaited<ReturnType<typeof getIosTrialConversionAnalytics>> | null;
+  trialAnalytics: Awaited<
+    ReturnType<typeof getIosTrialConversionAnalytics>
+  > | null;
   transactionStates: string[];
   transactions: PaginatedResult<IapAppTransaction>;
   twoHourChecks: IosIapTwoHourCheck[];
@@ -490,7 +540,16 @@ export async function getIapAppDetail(
     const mapping = await getAndroidMappingById(mappingId);
     if (!mapping) throw new Error("Android mapping not found");
 
+    const scopedOptions = {
+      ...options,
+      environment: appEnvironment(
+        "android",
+        mapping.appId,
+        options.environment,
+      ),
+    };
     const appCard: IapAppCard = {
+      appId: mapping.appId,
       mappingId: mapping.id,
       platform: "android",
       appName: mapping.appName,
@@ -506,7 +565,7 @@ export async function getIapAppDetail(
       getAndroidTransactionsByPackageAndProfilePage(
         mapping.packageName,
         mapping.storeProfileId,
-        options,
+        scopedOptions,
       );
 
     if (options.includeContext === false) {
@@ -520,7 +579,7 @@ export async function getIapAppDetail(
         transactions: paginatedResult(
           rawTransactions.map((transaction) => iapAndroidToDto(transaction)),
           total ?? 0,
-          options,
+          scopedOptions,
         ),
         twoHourChecks: [],
       };
@@ -532,7 +591,7 @@ export async function getIapAppDetail(
         getAndroidTransactionsByPackageAndProfileMetrics(
           mapping.packageName,
           mapping.storeProfileId,
-          options,
+          scopedOptions,
         ),
         getAndroidTransactionStatesByPackageAndProfile(
           mapping.packageName,
@@ -567,6 +626,7 @@ export async function getIapAppDetail(
       if (!mapping) throw new Error("iOS mapping not found");
 
       const appCard: IapAppCard = {
+        appId: mapping.appId,
         mappingId: mapping.id,
         platform: "ios",
         appName: mapping.appName,
@@ -597,7 +657,12 @@ export async function getIapAppDetail(
     const mapping = await getIosMappingById(mappingId);
     if (!mapping) throw new Error("iOS mapping not found");
 
+    const scopedOptions = {
+      ...options,
+      environment: appEnvironment("ios", mapping.appId, options.environment),
+    };
     const appCard: IapAppCard = {
+      appId: mapping.appId,
       mappingId: mapping.id,
       platform: "ios",
       appName: mapping.appName,
@@ -613,7 +678,7 @@ export async function getIapAppDetail(
       getIosTransactionsByBundleIdPage(
         mapping.bundleId,
         mapping.storeProfileId,
-        options,
+        scopedOptions,
       );
 
     const trialAnalyticsPromise =
@@ -623,20 +688,25 @@ export async function getIapAppDetail(
             mapping.bundleId,
             mapping.storeProfileId,
           );
-    const [[rawTransactions, total], metrics, transactionStates, trialAnalytics] =
-      await Promise.all([
-        loadTransactionPage(),
-        getIosTransactionsByBundleIdMetrics(
-          mapping.bundleId,
-          mapping.storeProfileId,
-          options,
-        ),
-        getIosTransactionStatesByBundleId(
-          mapping.bundleId,
-          mapping.storeProfileId,
-        ),
-        trialAnalyticsPromise,
-      ]);
+    const [
+      [rawTransactions, total],
+      metrics,
+      transactionStates,
+      trialAnalytics,
+    ] = await Promise.all([
+      loadTransactionPage(),
+      getIosTransactionsByBundleIdMetrics(
+        mapping.bundleId,
+        mapping.storeProfileId,
+        scopedOptions,
+      ),
+      getIosTransactionStatesByBundleId(
+        mapping.bundleId,
+        mapping.storeProfileId,
+        scopedOptions,
+      ),
+      trialAnalyticsPromise,
+    ]);
 
     return {
       appCard,
@@ -677,7 +747,16 @@ export async function getIapAppContext(
     const mapping = await getAndroidMappingById(mappingId);
     if (!mapping) throw new Error("Android mapping not found");
 
+    const scopedOptions = {
+      ...options,
+      environment: appEnvironment(
+        "android",
+        mapping.appId,
+        options.environment,
+      ),
+    };
     const appCard: IapAppCard = {
+      appId: mapping.appId,
       mappingId: mapping.id,
       platform: "android",
       appName: mapping.appName,
@@ -692,12 +771,12 @@ export async function getIapAppContext(
       getAndroidTransactionsByPackageAndProfileMetrics(
         mapping.packageName,
         mapping.storeProfileId,
-        options,
+        scopedOptions,
       ),
       getAndroidTransactionStatesByPackageAndProfile(
         mapping.packageName,
         mapping.storeProfileId,
-        options,
+        scopedOptions,
       ),
     ]);
 
@@ -708,7 +787,12 @@ export async function getIapAppContext(
     const mapping = await getIosMappingById(mappingId);
     if (!mapping) throw new Error("iOS mapping not found");
 
+    const scopedOptions = {
+      ...options,
+      environment: appEnvironment("ios", mapping.appId, options.environment),
+    };
     const appCard: IapAppCard = {
+      appId: mapping.appId,
       mappingId: mapping.id,
       platform: "ios",
       appName: mapping.appName,
@@ -723,11 +807,12 @@ export async function getIapAppContext(
       getIosTransactionsByBundleIdMetrics(
         mapping.bundleId,
         mapping.storeProfileId,
-        options,
+        scopedOptions,
       ),
       getIosTransactionStatesByBundleId(
         mapping.bundleId,
         mapping.storeProfileId,
+        scopedOptions,
       ),
     ]);
 
@@ -742,7 +827,9 @@ export async function getIapAppTrialAnalytics(
   platform: string,
 ): Promise<{
   appCard: IapAppCard;
-  trialAnalytics: Awaited<ReturnType<typeof getIosTrialConversionAnalytics>> | null;
+  trialAnalytics: Awaited<
+    ReturnType<typeof getIosTrialConversionAnalytics>
+  > | null;
 }> {
   if (platform !== "ios") {
     const mapping = await getAndroidMappingById(mappingId);

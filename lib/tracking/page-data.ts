@@ -60,6 +60,7 @@ export type NotificationsPageData = {
 };
 
 export type IapAppCard = {
+  appId?: string | null;
   mappingId: string;
   platform: "android" | "ios";
   appName: string;
@@ -452,11 +453,7 @@ export type ReplyConfigPageData = ReplyConfigBasePageData & {
 };
 
 export type NotificationPaginationKey =
-  | "deliveryEvents"
-  | "historyJobs"
-  | "overviewApps"
-  | "schedules"
-  | "tokens";
+  "deliveryEvents" | "historyJobs" | "overviewApps" | "schedules" | "tokens";
 
 export type NotificationPaginationMap = Partial<
   Record<NotificationPaginationKey, PaginationMeta>
