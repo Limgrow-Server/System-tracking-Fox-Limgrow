@@ -191,12 +191,15 @@ export type IapAppDetailPageData = {
   app: IapAppCard;
   filters: {
     environment: string;
+    adjustStatus: string;
+    firebaseStatus: string;
     kind: string;
     purchaseDateFrom: string;
     purchaseDateTo: string;
     revenueGranularity: IapRevenueGranularity;
     revenueSort: string;
     state: string;
+    twoHourStatus: string;
     trial: string;
   };
   metrics: IapAppMetrics;

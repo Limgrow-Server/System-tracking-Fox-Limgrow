@@ -120,6 +120,39 @@ type IapTransactionReceiptResponse = {
 
 const IAP_TRANSACTION_SKELETON_COUNT = 8;
 const IAP_REALTIME_REFRESH_DELAY_MS = 650;
+const IAP_TWO_HOUR_FILTER_OPTIONS = [
+  { label: "All 2h", value: "all" },
+  { label: "2h Passed", value: "passed" },
+  { label: "2h Cancelled", value: "cancelled" },
+  { label: "2h Checked", value: "checked" },
+  { label: "2h Failed", value: "failed" },
+  { label: "2h Checking", value: "processing" },
+  { label: "2h Retrying", value: "retrying" },
+  { label: "2h Pending", value: "pending" },
+  { label: "No 2h row", value: "not_scheduled" },
+  { label: "Not applicable", value: "not_applicable" },
+];
+const IAP_FIREBASE_FILTER_OPTIONS = [
+  { label: "All Firebase", value: "all" },
+  { label: "Firebase Sent", value: "sent" },
+  { label: "Firebase Failed", value: "failed" },
+  { label: "Firebase Retrying", value: "retrying" },
+  { label: "Firebase Pending", value: "pending" },
+  { label: "Firebase Not sent", value: "not_sent" },
+  { label: "Firebase No row", value: "not_scheduled" },
+  { label: "Firebase No data", value: "no_data" },
+];
+const IAP_ADJUST_FILTER_OPTIONS = [
+  { label: "All Adjust", value: "all" },
+  { label: "Adjust Sent", value: "sent" },
+  { label: "Adjust Skipped", value: "skipped" },
+  { label: "Adjust Failed", value: "failed" },
+  { label: "Adjust Retrying", value: "retrying" },
+  { label: "Adjust Pending", value: "pending" },
+  { label: "Adjust Not sent", value: "not_sent" },
+  { label: "Adjust No row", value: "not_scheduled" },
+  { label: "Adjust No data", value: "no_data" },
+];
 
 function formatRevenue(
   micros: number | string | null,
@@ -993,8 +1026,17 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [filterEnvironment, setFilterEnvironment] = useState<string>(
     data.filters.environment,
   );
+  const [filterAdjustStatus, setFilterAdjustStatus] = useState<string>(
+    data.filters.adjustStatus,
+  );
+  const [filterFirebaseStatus, setFilterFirebaseStatus] = useState<string>(
+    data.filters.firebaseStatus,
+  );
   const [filterState, setFilterState] = useState<string>(data.filters.state);
   const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
+  const [filterTwoHourStatus, setFilterTwoHourStatus] = useState<string>(
+    data.filters.twoHourStatus,
+  );
   const [filterTrial, setFilterTrial] = useState<string>(data.filters.trial);
   const [filterPurchaseDateFrom, setFilterPurchaseDateFrom] = useState<string>(
     data.filters.purchaseDateFrom,
@@ -1014,11 +1056,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
   const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
   const latestViewRef = useRef({
+    filterAdjustStatus: data.filters.adjustStatus,
     filterEnvironment: data.filters.environment,
+    filterFirebaseStatus: data.filters.firebaseStatus,
     filterKind: data.filters.kind,
     filterPurchaseDateFrom: data.filters.purchaseDateFrom,
     filterPurchaseDateTo: data.filters.purchaseDateTo,
     filterState: data.filters.state,
+    filterTwoHourStatus: data.filters.twoHourStatus,
     filterTrial: data.filters.trial,
     page: data.transactionPagination.page,
     revenueGranularity: data.filters.revenueGranularity,
@@ -1033,11 +1078,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   async function loadTransactionsPage(
     page: number,
     overrides?: {
+      filterAdjustStatus?: string;
       filterEnvironment?: string;
+      filterFirebaseStatus?: string;
       filterKind?: string;
       filterPurchaseDateFrom?: string;
       filterPurchaseDateTo?: string;
       filterState?: string;
+      filterTwoHourStatus?: string;
       filterTrial?: string;
       revenueGranularity?: IapRevenueGranularity;
       revenueSort?: string;
@@ -1046,10 +1094,16 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       silent?: boolean;
     },
   ) {
+    const nextFilterAdjustStatus =
+      overrides?.filterAdjustStatus ?? filterAdjustStatus;
     const nextFilterEnvironment =
       overrides?.filterEnvironment ?? filterEnvironment;
+    const nextFilterFirebaseStatus =
+      overrides?.filterFirebaseStatus ?? filterFirebaseStatus;
     const nextFilterState = overrides?.filterState ?? filterState;
     const nextFilterKind = overrides?.filterKind ?? filterKind;
+    const nextFilterTwoHourStatus =
+      overrides?.filterTwoHourStatus ?? filterTwoHourStatus;
     const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
     const nextFilterPurchaseDateFrom =
       overrides?.filterPurchaseDateFrom ?? filterPurchaseDateFrom;
@@ -1073,6 +1127,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
     if (isIos && nextFilterTrial !== "all") {
       params.set("trial", nextFilterTrial);
+    }
+    if (isIos && nextFilterTwoHourStatus !== "all") {
+      params.set("twoHourStatus", nextFilterTwoHourStatus);
+    }
+    if (isIos && nextFilterFirebaseStatus !== "all") {
+      params.set("firebaseStatus", nextFilterFirebaseStatus);
+    }
+    if (isIos && nextFilterAdjustStatus !== "all") {
+      params.set("adjustStatus", nextFilterAdjustStatus);
     }
     if (nextFilterPurchaseDateFrom) {
       params.set("purchaseDateFrom", nextFilterPurchaseDateFrom);
@@ -1367,22 +1430,28 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
 
   useEffect(() => {
     latestViewRef.current = {
+      filterAdjustStatus,
       filterEnvironment,
+      filterFirebaseStatus,
       filterKind,
       filterPurchaseDateFrom,
       filterPurchaseDateTo,
       filterState,
+      filterTwoHourStatus,
       filterTrial,
       page: transactionPagination.page,
       revenueGranularity,
       revenueSort,
     };
   }, [
+    filterAdjustStatus,
     filterEnvironment,
+    filterFirebaseStatus,
     filterKind,
     filterPurchaseDateFrom,
     filterPurchaseDateTo,
     filterState,
+    filterTwoHourStatus,
     filterTrial,
     revenueGranularity,
     revenueSort,
@@ -1406,10 +1475,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           latest.page,
           {
             filterEnvironment: latest.filterEnvironment,
+            filterAdjustStatus: latest.filterAdjustStatus,
+            filterFirebaseStatus: latest.filterFirebaseStatus,
             filterKind: latest.filterKind,
             filterPurchaseDateFrom: latest.filterPurchaseDateFrom,
             filterPurchaseDateTo: latest.filterPurchaseDateTo,
             filterState: latest.filterState,
+            filterTwoHourStatus: latest.filterTwoHourStatus,
             filterTrial: latest.filterTrial,
             revenueGranularity: latest.revenueGranularity,
             revenueSort: latest.revenueSort,
@@ -1577,6 +1649,40 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       currency: "VND",
     }).format(n);
   const fmtNum = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
+  const hasActiveTransactionFilters =
+    Boolean(filterPurchaseDateFrom || filterPurchaseDateTo) ||
+    filterState !== "all" ||
+    (isTestApp && filterEnvironment !== "production") ||
+    (!isIos && filterKind !== "all") ||
+    (isIos &&
+      (filterTrial !== "all" ||
+        filterTwoHourStatus !== "all" ||
+        filterFirebaseStatus !== "all" ||
+        filterAdjustStatus !== "all"));
+
+  function resetTransactionFilters() {
+    setFilterEnvironment("production");
+    setFilterKind("all");
+    setFilterTrial("all");
+    setFilterState("all");
+    setFilterTwoHourStatus("all");
+    setFilterFirebaseStatus("all");
+    setFilterAdjustStatus("all");
+    setFilterPurchaseDateFrom("");
+    setFilterPurchaseDateTo("");
+    void loadTransactionsPage(1, {
+      filterAdjustStatus: "all",
+      filterEnvironment: "production",
+      filterFirebaseStatus: "all",
+      filterKind: "all",
+      filterPurchaseDateFrom: "",
+      filterPurchaseDateTo: "",
+      filterState: "all",
+      filterTwoHourStatus: "all",
+      filterTrial: "all",
+    });
+  }
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-muted/10 p-4 sm:p-6 gap-6">
       {/* Breadcrumb */}
@@ -1787,6 +1893,78 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 ))}
               </SelectContent>
             </Select>
+            {isIos ? (
+              <>
+                <Select
+                  value={filterTwoHourStatus}
+                  onValueChange={(v) => {
+                    setFilterTwoHourStatus(v);
+                    void loadTransactionsPage(1, { filterTwoHourStatus: v });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[150px]">
+                    <SelectValue placeholder="2h Check" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_TWO_HOUR_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filterFirebaseStatus}
+                  onValueChange={(v) => {
+                    setFilterFirebaseStatus(v);
+                    void loadTransactionsPage(1, {
+                      filterFirebaseStatus: v,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[165px]">
+                    <SelectValue placeholder="Firebase" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_FIREBASE_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filterAdjustStatus}
+                  onValueChange={(v) => {
+                    setFilterAdjustStatus(v);
+                    void loadTransactionsPage(1, { filterAdjustStatus: v });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[155px]">
+                    <SelectValue placeholder="Adjust" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_ADJUST_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            ) : null}
+            {hasActiveTransactionFilters ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 bg-background px-2.5"
+                onClick={resetTransactionFilters}
+              >
+                <X size={13} />
+                Reset
+              </Button>
+            ) : null}
           </div>
         </div>
 

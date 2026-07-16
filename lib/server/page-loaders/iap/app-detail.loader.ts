@@ -11,7 +11,9 @@ import type {
 const IAP_TRANSACTION_PAGE_SIZE = 10;
 
 type IapAppDetailOptions = {
+  adjustStatus?: string;
   environment?: string;
+  firebaseStatus?: string;
   kind?: string;
   page?: number;
   purchaseDateFrom?: string;
@@ -19,6 +21,7 @@ type IapAppDetailOptions = {
   revenueGranularity?: string;
   revenueSort?: string;
   state?: string;
+  twoHourStatus?: string;
   trial?: string;
 };
 
@@ -44,9 +47,11 @@ export async function getIapAppDetailPageData(
   options?: IapAppDetailOptions,
 ): Promise<IapAppDetailPageData | null> {
   const page = pageNumber(options?.page);
+  const adjustStatus = clean(options?.adjustStatus) || "all";
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
   const environment = clean(options?.environment) || "production";
+  const firebaseStatus = clean(options?.firebaseStatus) || "all";
   const purchaseDateFrom = clean(options?.purchaseDateFrom);
   const purchaseDateTo = clean(options?.purchaseDateTo);
   const selectedRevenueGranularity = revenueGranularity(
@@ -57,6 +62,7 @@ export async function getIapAppDetailPageData(
     clean(options?.revenueSort) === "desc"
       ? clean(options?.revenueSort)
       : "none";
+  const twoHourStatus = clean(options?.twoHourStatus) || "all";
   const trial = clean(options?.trial) || "all";
   const {
     appCard,
@@ -66,7 +72,9 @@ export async function getIapAppDetailPageData(
     trialAnalytics,
     twoHourChecks,
   } = await getIapAppDetail(mappingId, platform, {
+    adjustStatus,
     environment,
+    firebaseStatus,
     includeContext: false,
     includeTrialAnalytics: false,
     kind,
@@ -79,6 +87,7 @@ export async function getIapAppDetailPageData(
     skip: (page - 1) * IAP_TRANSACTION_PAGE_SIZE,
     state,
     take: IAP_TRANSACTION_PAGE_SIZE,
+    twoHourStatus,
     trial,
   });
   if (!canAccessIapApp(session, appCard)) return null;
@@ -86,13 +95,16 @@ export async function getIapAppDetailPageData(
   return {
     app: appCard,
     filters: {
+      adjustStatus,
       environment,
+      firebaseStatus,
       kind,
       purchaseDateFrom,
       purchaseDateTo,
       revenueGranularity: selectedRevenueGranularity,
       revenueSort,
       state,
+      twoHourStatus,
       trial,
     },
     trialAnalytics,
