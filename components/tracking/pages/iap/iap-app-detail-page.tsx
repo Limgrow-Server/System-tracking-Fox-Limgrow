@@ -1649,8 +1649,12 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       currency: "VND",
     }).format(n);
   const fmtNum = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
+  const defaultPurchaseDate = dateInputValue(new Date());
+  const hasCustomPurchaseDate =
+    filterPurchaseDateFrom !== defaultPurchaseDate ||
+    filterPurchaseDateTo !== defaultPurchaseDate;
   const hasActiveTransactionFilters =
-    Boolean(filterPurchaseDateFrom || filterPurchaseDateTo) ||
+    hasCustomPurchaseDate ||
     filterState !== "all" ||
     (isTestApp && filterEnvironment !== "production") ||
     (!isIos && filterKind !== "all") ||
@@ -1668,15 +1672,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     setFilterTwoHourStatus("all");
     setFilterFirebaseStatus("all");
     setFilterAdjustStatus("all");
-    setFilterPurchaseDateFrom("");
-    setFilterPurchaseDateTo("");
+    setFilterPurchaseDateFrom(defaultPurchaseDate);
+    setFilterPurchaseDateTo(defaultPurchaseDate);
     void loadTransactionsPage(1, {
       filterAdjustStatus: "all",
       filterEnvironment: "production",
       filterFirebaseStatus: "all",
       filterKind: "all",
-      filterPurchaseDateFrom: "",
-      filterPurchaseDateTo: "",
+      filterPurchaseDateFrom: defaultPurchaseDate,
+      filterPurchaseDateTo: defaultPurchaseDate,
       filterState: "all",
       filterTwoHourStatus: "all",
       filterTrial: "all",
@@ -1975,9 +1979,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 <th className="px-4 py-3">Transaction / Order</th>
                 <th className="px-4 py-3">Product Info</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">2h Check</th>
-                <th className="px-4 py-3">Firebase</th>
-                <th className="px-4 py-3">Adjust</th>
+                {isIos ? (
+                  <>
+                    <th className="px-4 py-3">2h Check</th>
+                    <th className="px-4 py-3">Firebase</th>
+                    <th className="px-4 py-3">Adjust</th>
+                  </>
+                ) : null}
                 <th className="px-4 py-3">
                   <button
                     type="button"
@@ -2018,15 +2026,19 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                         <td className="px-4 py-3.5">
                           <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
                         </td>
-                        <td className="px-4 py-3.5">
-                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                        </td>
+                        {isIos ? (
+                          <>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                          </>
+                        ) : null}
                         <td className="px-4 py-3.5">
                           <div className="h-4 w-24 animate-pulse rounded bg-muted" />
                         </td>
@@ -2173,30 +2185,34 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-4 py-3.5">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourStatus.className}`}
-                            title={twoHourStatus.title}
-                          >
-                            {twoHourStatus.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${firebaseStatus.className}`}
-                            title={firebaseStatus.title}
-                          >
-                            {firebaseStatus.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${adjustStatus.className}`}
-                            title={adjustStatus.title}
-                          >
-                            {adjustStatus.label}
-                          </span>
-                        </td>
+                        {isIos ? (
+                          <>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourStatus.className}`}
+                                title={twoHourStatus.title}
+                              >
+                                {twoHourStatus.label}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${firebaseStatus.className}`}
+                                title={firebaseStatus.title}
+                              >
+                                {firebaseStatus.label}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${adjustStatus.className}`}
+                                title={adjustStatus.title}
+                              >
+                                {adjustStatus.label}
+                              </span>
+                            </td>
+                          </>
+                        ) : null}
                         <td className="px-4 py-3.5">
                           <div className="font-semibold">
                             {formatRevenue(revenue, currency)}
@@ -2243,7 +2259,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   })}
               {!tableLoading && !visible.length && (
                 <TableEmptyState
-                  colSpan={9}
+                  colSpan={isIos ? 9 : 6}
                   icon={CreditCard}
                   title="No transactions found"
                   description="Try changing your filters."
