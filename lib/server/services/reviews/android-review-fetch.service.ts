@@ -15,6 +15,10 @@ import {
   notFound,
 } from "@/lib/server/api/errors";
 import {
+  rewriteStoreProviderUrl,
+  type StoreProviderEndpointContext,
+} from "@/lib/server/outbound/store-provider-endpoints";
+import {
   type AndroidReviewFingerprint,
   type AndroidReviewUpsertInput,
   createAndroidReviewFetchRun,
@@ -266,12 +270,17 @@ async function listGooglePlayReviews(input: {
   maxResults: number;
   packageName: string;
   pageToken: string;
+  providerContext: StoreProviderEndpointContext;
   translationLanguage: string;
 }) {
   const url = new URL(
-    `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(
-      input.packageName,
-    )}/reviews`,
+    rewriteStoreProviderUrl(
+      "androidPublisher",
+      `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(
+        input.packageName,
+      )}/reviews`,
+      input.providerContext,
+    ),
   );
   url.searchParams.set("maxResults", String(input.maxResults));
   if (input.pageToken) url.searchParams.set("token", input.pageToken);
@@ -593,7 +602,19 @@ async function executeAndroidStoreReviewFetch(
       context = { runId: createdRun.id, storeMappingId: mapping.id };
     }
 
-    const accessToken = await googleServiceAccountAccessToken(serviceAccount);
+    const providerContext: StoreProviderEndpointContext = {
+      appIdentifier: mapping.packageName,
+      packageName: mapping.packageName,
+      platform: "android",
+      storeAccountName:
+        mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
+      storeProfileId: mapping.storeProfileId,
+    };
+    const accessToken = await googleServiceAccountAccessToken(
+      serviceAccount,
+      undefined,
+      providerContext,
+    );
     const fetchUntilPageLimit = normalized.scanMode === "LIMITED";
 
     while (!fetchUntilPageLimit || pagesFetched < normalized.maxPages) {
@@ -611,6 +632,7 @@ async function executeAndroidStoreReviewFetch(
         maxResults: normalized.maxResults,
         packageName: mapping.packageName,
         pageToken,
+        providerContext,
         translationLanguage: normalized.translationLanguage,
       });
 
@@ -809,7 +831,9 @@ export async function enqueueAndroidReviewFetchRuns(input: {
   storeMappingId: string;
   toDate?: string;
 }) {
-  const mapping = await getAndroidReviewMappingSummaryById(input.storeMappingId);
+  const mapping = await getAndroidReviewMappingSummaryById(
+    input.storeMappingId,
+  );
   if (!mapping || mapping.status !== "ACTIVE") {
     throw notFound("No active Android app was found for comment fetch.");
   }

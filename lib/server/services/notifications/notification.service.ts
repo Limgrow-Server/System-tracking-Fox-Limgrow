@@ -660,6 +660,42 @@ export async function getDeviceTokenSummariesForDeviceIds(
   return mapDeviceTokenSummariesWithLastSent(devices);
 }
 
+export async function getDeviceTokensForEventReferences(
+  input: {
+    deviceIds?: string[];
+    deviceTokenIds?: string[];
+  },
+  take = 200,
+) {
+  const deviceIds = unique(input.deviceIds ?? []);
+  const deviceTokenIds = unique(input.deviceTokenIds ?? []);
+  if (!deviceIds.length && !deviceTokenIds.length) return [];
+
+  const [devicesByTokenId, devicesByDeviceId] = await prisma.$transaction([
+    deviceTokenIds.length
+      ? prisma.deviceToken.findMany({
+        orderBy: { lastSeenAt: "desc" },
+        where: { id: { in: deviceTokenIds } },
+      })
+      : prisma.deviceToken.findMany({ take: 0 }),
+    deviceIds.length
+      ? prisma.deviceToken.findMany({
+        orderBy: { lastSeenAt: "desc" },
+        take,
+        where: {
+          deviceId: { in: deviceIds },
+          ...(deviceTokenIds.length ? { id: { notIn: deviceTokenIds } } : {}),
+        },
+      })
+      : prisma.deviceToken.findMany({ take: 0 }),
+  ]);
+  const devices = Array.from(
+    new Map([...devicesByTokenId, ...devicesByDeviceId].map((device) => [device.id, device])).values(),
+  );
+
+  return mapDeviceTokensWithLastSent(devices);
+}
+
 export async function getDeviceTokenSummaries(
   take = 120,
   options?: { activeOnly?: boolean },

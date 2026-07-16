@@ -2,6 +2,11 @@ import "server-only";
 
 import { createSign } from "crypto";
 
+import {
+  rewriteStoreProviderUrl,
+  type StoreProviderEndpointContext,
+} from "@/lib/server/outbound/store-provider-endpoints";
+
 export const GOOGLE_ANDROID_PUBLISHER_SCOPE =
   "https://www.googleapis.com/auth/androidpublisher";
 
@@ -30,11 +35,18 @@ function signGoogleJwt(
 export async function googleServiceAccountAccessToken(
   serviceAccount: Record<string, unknown>,
   scope = GOOGLE_ANDROID_PUBLISHER_SCOPE,
+  context: StoreProviderEndpointContext = {},
 ) {
   const clientEmail = stringValue(serviceAccount.client_email);
   const privateKey = stringValue(serviceAccount.private_key);
-  const tokenUri =
-    stringValue(serviceAccount.token_uri) ?? "https://oauth2.googleapis.com/token";
+  const audienceTokenUri =
+    stringValue(serviceAccount.token_uri) ??
+    "https://oauth2.googleapis.com/token";
+  const tokenUri = rewriteStoreProviderUrl(
+    "googleOAuthToken",
+    audienceTokenUri,
+    context,
+  );
 
   if (!clientEmail || !privateKey) {
     throw new Error(
@@ -46,7 +58,7 @@ export async function googleServiceAccountAccessToken(
   const assertion = signGoogleJwt(
     { alg: "RS256", typ: "JWT" },
     {
-      aud: tokenUri,
+      aud: audienceTokenUri,
       exp: now + 3600,
       iat: now,
       iss: clientEmail,

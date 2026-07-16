@@ -4,8 +4,12 @@ import { createSign } from "crypto";
 import type { NotificationJob, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import { normalizeAppId } from "@/lib/tracking/identity";
+import {
+  rewriteStoreProviderUrl,
+  type StoreProviderEndpointContext,
+} from "@/lib/server/outbound/store-provider-endpoints";
 import { getCredentialVaultSecret } from "@/lib/server/repositories/vault/secret.repository";
+import { normalizeAppId } from "@/lib/tracking/identity";
 
 type MobilePlatform = "android" | "ios";
 type TargetType = "device" | "topic";
@@ -123,11 +127,17 @@ const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 const FIREBASE_CONFIG_CACHE_TTL_MS = 5 * 60_000;
 const GOOGLE_TOKEN_CACHE_SKEW_MS = 5 * 60_000;
 
-const googleTokenCache = new Map<string, { expiresAt: number; token: string }>();
-const firebaseConfigCache = new Map<string, {
-  config: FirebaseRuntimeConfig;
-  expiresAt: number;
-}>();
+const googleTokenCache = new Map<
+  string,
+  { expiresAt: number; token: string }
+>();
+const firebaseConfigCache = new Map<
+  string,
+  {
+    config: FirebaseRuntimeConfig;
+    expiresAt: number;
+  }
+>();
 
 const deviceTargetSelect = {
   appIdentifier: true,
@@ -171,23 +181,30 @@ function normalizeAppIdentifier(input: {
 }) {
   const platform = clean(input.platform);
   if (platform === "android") {
-    return normalizePackageName(input.packageName)
-      || normalizeAppId(input.appId)
-      || normalizeAppId(input.productAppId);
+    return (
+      normalizePackageName(input.packageName) ||
+      normalizeAppId(input.appId) ||
+      normalizeAppId(input.productAppId)
+    );
   }
   if (platform === "ios") {
-    return normalizeBundleId(input.bundleId)
-      || normalizeAppId(input.appId)
-      || normalizeAppId(input.productAppId);
+    return (
+      normalizeBundleId(input.bundleId) ||
+      normalizeAppId(input.appId) ||
+      normalizeAppId(input.productAppId)
+    );
   }
-  return normalizePackageName(input.packageName)
-    || normalizeBundleId(input.bundleId)
-    || normalizeAppId(input.appId)
-    || normalizeAppId(input.productAppId);
+  return (
+    normalizePackageName(input.packageName) ||
+    normalizeBundleId(input.bundleId) ||
+    normalizeAppId(input.appId) ||
+    normalizeAppId(input.productAppId)
+  );
 }
 
 function inferPlatform(payload: SendNotificationRequest): MobilePlatform {
-  if (payload.platform === "android" || payload.platform === "ios") return payload.platform;
+  if (payload.platform === "android" || payload.platform === "ios")
+    return payload.platform;
   if (clean(payload.bundleId)) return "ios";
   return "android";
 }
@@ -206,30 +223,43 @@ function topicSegment(value: unknown) {
 }
 
 function notificationAppId(payload: SendNotificationRequest) {
-  return normalizeAppId(payload.appId) || normalizeAppId(payload.productAppId) || clean(payload.appName);
+  return (
+    normalizeAppId(payload.appId) ||
+    normalizeAppId(payload.productAppId) ||
+    clean(payload.appName)
+  );
 }
 
-function normalizeLocaleNotifications(payload: SendNotificationRequest): LocaleNotification[] {
+function normalizeLocaleNotifications(
+  payload: SendNotificationRequest,
+): LocaleNotification[] {
   const rows = Array.isArray(payload.notifications)
     ? payload.notifications
-      .filter((item) => item.enabled !== false)
-      .map((item) => ({
-        body: clean(item.message),
-        title: clean(item.title),
-        topicCode: topicSegment(clean(item.topicCode) || clean(item.languageCode)).toLowerCase(),
-      }))
+        .filter((item) => item.enabled !== false)
+        .map((item) => ({
+          body: clean(item.message),
+          title: clean(item.title),
+          topicCode: topicSegment(
+            clean(item.topicCode) || clean(item.languageCode),
+          ).toLowerCase(),
+        }))
     : [];
 
   if (!rows.length) throw new Error("notification_payload_required");
 
   rows.forEach((row) => {
     if (!row.topicCode) throw new Error("topic_code_required");
-    if (!row.title || !row.body) throw new Error(`missing_title_or_message_for_${row.topicCode}`);
+    if (!row.title || !row.body)
+      throw new Error(`missing_title_or_message_for_${row.topicCode}`);
     if (row.title.length > TITLE_MAX_LENGTH) {
-      throw new Error(`title_too_long_for_${row.topicCode}_max_${TITLE_MAX_LENGTH}`);
+      throw new Error(
+        `title_too_long_for_${row.topicCode}_max_${TITLE_MAX_LENGTH}`,
+      );
     }
     if (row.body.length > MESSAGE_MAX_LENGTH) {
-      throw new Error(`message_too_long_for_${row.topicCode}_max_${MESSAGE_MAX_LENGTH}`);
+      throw new Error(
+        `message_too_long_for_${row.topicCode}_max_${MESSAGE_MAX_LENGTH}`,
+      );
     }
   });
 
@@ -243,17 +273,25 @@ function stringArray(value: unknown) {
 
 function objectPayload(value: unknown): Record<string, unknown> {
   if (value === undefined || value === null || value === "") return {};
-  if (typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value === "object" && !Array.isArray(value))
+    return value as Record<string, unknown>;
   throw new Error("data_payload_must_be_a_json_object");
 }
 
 function fcmDataPayload(value: Record<string, unknown>) {
-  return Object.entries(value).reduce<Record<string, string>>((items, [key, rawValue]) => {
-    const cleanedKey = clean(key);
-    if (!cleanedKey || rawValue === undefined || rawValue === null) return items;
-    items[cleanedKey] = typeof rawValue === "object" ? JSON.stringify(rawValue) : String(rawValue);
-    return items;
-  }, {});
+  return Object.entries(value).reduce<Record<string, string>>(
+    (items, [key, rawValue]) => {
+      const cleanedKey = clean(key);
+      if (!cleanedKey || rawValue === undefined || rawValue === null)
+        return items;
+      items[cleanedKey] =
+        typeof rawValue === "object"
+          ? JSON.stringify(rawValue)
+          : String(rawValue);
+      return items;
+    },
+    {},
+  );
 }
 
 function primaryLocale(locales: LocaleNotification[]) {
@@ -287,13 +325,15 @@ async function mapWithConcurrency<T, R>(
   let nextIndex = 0;
   const workerCount = Math.min(Math.max(concurrency, 1), items.length);
 
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index], index);
-    }
-  }));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    }),
+  );
 
   return results;
 }
@@ -311,17 +351,25 @@ function parseSecretText(secretText: string, secretFormat?: string | null) {
   return { value: secretText };
 }
 
-async function findMobileApp(platform: MobilePlatform, input: SendNotificationRequest): Promise<ResolvedMobileApp | null> {
-  const appId = normalizeAppId(input.appId) || normalizeAppId(input.productAppId);
+async function findMobileApp(
+  platform: MobilePlatform,
+  input: SendNotificationRequest,
+): Promise<ResolvedMobileApp | null> {
+  const appId =
+    normalizeAppId(input.appId) || normalizeAppId(input.productAppId);
   const appName = clean(input.appName) || clean(input.productAppId);
-  const identifier = platform === "android" ? normalizePackageName(input.packageName) : normalizeBundleId(input.bundleId);
+  const identifier =
+    platform === "android"
+      ? normalizePackageName(input.packageName)
+      : normalizeBundleId(input.bundleId);
   const storeProfileId = clean(input.storeProfileId);
   const storeAccountName = clean(input.storeAccountName);
 
   if (platform === "android") {
     const whereCandidates: Prisma.AndroidStoreMappingWhereInput[] = [];
     if (storeProfileId) {
-      if (identifier) whereCandidates.push({ packageName: identifier, storeProfileId });
+      if (identifier)
+        whereCandidates.push({ packageName: identifier, storeProfileId });
       else if (appId) whereCandidates.push({ appId, storeProfileId });
       else if (appName) whereCandidates.push({ appName, storeProfileId });
     } else if (storeAccountName && identifier) {
@@ -361,7 +409,8 @@ async function findMobileApp(platform: MobilePlatform, input: SendNotificationRe
 
   const whereCandidates: Prisma.IosStoreMappingWhereInput[] = [];
   if (storeProfileId) {
-    if (identifier) whereCandidates.push({ bundleId: identifier, storeProfileId });
+    if (identifier)
+      whereCandidates.push({ bundleId: identifier, storeProfileId });
     else if (appId) whereCandidates.push({ appId, storeProfileId });
     else if (appName) whereCandidates.push({ appName, storeProfileId });
   } else if (storeAccountName && identifier) {
@@ -400,12 +449,15 @@ async function findMobileApp(platform: MobilePlatform, input: SendNotificationRe
   return null;
 }
 
-async function resolveFirebaseConfig(payload: SendNotificationRequest): Promise<FirebaseRuntimeConfig> {
+async function resolveFirebaseConfig(
+  payload: SendNotificationRequest,
+): Promise<FirebaseRuntimeConfig> {
   const platform = inferPlatform(payload);
   const app = await findMobileApp(platform, payload);
   const credentialRef = clean(payload.credentialRef);
   const storeProfileId = app?.storeProfileId || clean(payload.storeProfileId);
-  const storeAccountName = app?.storeAccountName || clean(payload.storeAccountName);
+  const storeAccountName =
+    app?.storeAccountName || clean(payload.storeAccountName);
 
   if (platform === "android") {
     const credential = await prisma.androidCredential.findFirst({
@@ -421,7 +473,8 @@ async function resolveFirebaseConfig(payload: SendNotificationRequest): Promise<
       },
       orderBy: { updatedAt: "desc" },
     });
-    if (!credential) throw new Error("No active android service account credential found");
+    if (!credential)
+      throw new Error("No active android service account credential found");
 
     const secretText = await getCredentialVaultSecret(credential.vaultSecretId);
     const serviceAccount = parseSecretText(secretText, "json");
@@ -433,9 +486,11 @@ async function resolveFirebaseConfig(payload: SendNotificationRequest): Promise<
     return {
       app,
       credential: {
-        clientEmail: stringValue(serviceAccount.client_email) ?? credential.clientEmail,
+        clientEmail:
+          stringValue(serviceAccount.client_email) ?? credential.clientEmail,
         credentialRef: credential.credentialRef,
-        projectId: stringValue(serviceAccount.project_id) ?? credential.projectId,
+        projectId:
+          stringValue(serviceAccount.project_id) ?? credential.projectId,
         serviceAccount,
       },
     };
@@ -455,7 +510,8 @@ async function resolveFirebaseConfig(payload: SendNotificationRequest): Promise<
     },
     orderBy: { updatedAt: "desc" },
   });
-  if (!credential) throw new Error("No active ios firebase_admin credential found");
+  if (!credential)
+    throw new Error("No active ios firebase_admin credential found");
 
   const secretText = await getCredentialVaultSecret(credential.vaultSecretId);
   const serviceAccount = parseSecretText(secretText, credential.secretFormat);
@@ -467,7 +523,8 @@ async function resolveFirebaseConfig(payload: SendNotificationRequest): Promise<
   return {
     app,
     credential: {
-      clientEmail: stringValue(serviceAccount.client_email) ?? credential.clientEmail,
+      clientEmail:
+        stringValue(serviceAccount.client_email) ?? credential.clientEmail,
       credentialRef: credential.credentialRef,
       projectId: stringValue(serviceAccount.project_id) ?? credential.projectId,
       serviceAccount,
@@ -512,22 +569,40 @@ function base64Url(input: string | Buffer) {
   return Buffer.from(input).toString("base64url");
 }
 
-function signGoogleJwt(header: Record<string, unknown>, payload: Record<string, unknown>, privateKeyPem: string) {
+function signGoogleJwt(
+  header: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  privateKeyPem: string,
+) {
   const signingInput = `${base64Url(JSON.stringify(header))}.${base64Url(JSON.stringify(payload))}`;
-  const signature = createSign("RSA-SHA256").update(signingInput).sign(privateKeyPem);
+  const signature = createSign("RSA-SHA256")
+    .update(signingInput)
+    .sign(privateKeyPem);
   return `${signingInput}.${base64Url(signature)}`;
 }
 
-async function googleAccessToken(serviceAccount: Record<string, unknown>) {
+async function googleAccessToken(
+  serviceAccount: Record<string, unknown>,
+  context: StoreProviderEndpointContext,
+) {
   const clientEmail = stringValue(serviceAccount.client_email);
   const privateKey = stringValue(serviceAccount.private_key);
-  const tokenUri = stringValue(serviceAccount.token_uri) ?? "https://oauth2.googleapis.com/token";
+  const audienceTokenUri =
+    stringValue(serviceAccount.token_uri) ??
+    "https://oauth2.googleapis.com/token";
+  const tokenUri = rewriteStoreProviderUrl(
+    "googleOAuthToken",
+    audienceTokenUri,
+    context,
+  );
 
   if (!clientEmail || !privateKey) {
-    throw new Error("Firebase service account must include client_email and private_key");
+    throw new Error(
+      "Firebase service account must include client_email and private_key",
+    );
   }
 
-  const cacheKey = `${clientEmail}:${tokenUri}`;
+  const cacheKey = `${clientEmail}:${FCM_SCOPE}:${audienceTokenUri}:${tokenUri}`;
   const cached = googleTokenCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now() + GOOGLE_TOKEN_CACHE_SKEW_MS) {
     return cached.token;
@@ -537,7 +612,7 @@ async function googleAccessToken(serviceAccount: Record<string, unknown>) {
   const assertion = signGoogleJwt(
     { alg: "RS256", typ: "JWT" },
     {
-      aud: tokenUri,
+      aud: audienceTokenUri,
       exp: now + 3600,
       iat: now,
       iss: clientEmail,
@@ -561,10 +636,13 @@ async function googleAccessToken(serviceAccount: Record<string, unknown>) {
   }
 
   const accessToken = stringValue(body.access_token);
-  if (!accessToken) throw new Error("Google OAuth response did not include access_token");
+  if (!accessToken)
+    throw new Error("Google OAuth response did not include access_token");
   const expiresInSeconds = Number(body.expires_in);
   googleTokenCache.set(cacheKey, {
-    expiresAt: Date.now() + (Number.isFinite(expiresInSeconds) ? expiresInSeconds : 3600) * 1000,
+    expiresAt:
+      Date.now() +
+      (Number.isFinite(expiresInSeconds) ? expiresInSeconds : 3600) * 1000,
     token: accessToken,
   });
   return accessToken;
@@ -611,7 +689,8 @@ function logTargetValue(input: {
   targetType: TargetType;
   targetValue: string;
 }) {
-  if (input.targetType === "device") return input.deviceId ?? "fcm-token-redacted";
+  if (input.targetType === "device")
+    return input.deviceId ?? "fcm-token-redacted";
   return input.targetValue;
 }
 
@@ -657,10 +736,15 @@ function logSendFailure(message: string, details: Record<string, unknown>) {
   console.error(`[notification-worker] ${message}`, details);
 }
 
-function formatFcmError(body: unknown, projectId: string, clientEmail: string | null) {
+function formatFcmError(
+  body: unknown,
+  projectId: string,
+  clientEmail: string | null,
+) {
   const message =
     body && typeof body === "object" && "error" in body
-      ? stringValue((body.error as Record<string, unknown>)?.message) ?? JSON.stringify(body)
+      ? (stringValue((body.error as Record<string, unknown>)?.message) ??
+        JSON.stringify(body))
       : typeof body === "string"
         ? body
         : JSON.stringify(body);
@@ -673,13 +757,14 @@ function formatFcmError(body: unknown, projectId: string, clientEmail: string | 
 }
 
 function fcmDetailErrorCode(body: unknown) {
-  const error = body && typeof body === "object" && "error" in body
-    ? (body as Record<string, unknown>).error
-    : null;
+  const error =
+    body && typeof body === "object" && "error" in body
+      ? (body as Record<string, unknown>).error
+      : null;
   if (!error || typeof error !== "object") return null;
 
   const details = Array.isArray((error as Record<string, unknown>).details)
-    ? (error as Record<string, unknown>).details as unknown[]
+    ? ((error as Record<string, unknown>).details as unknown[])
     : [];
   for (const detail of details) {
     if (!detail || typeof detail !== "object") continue;
@@ -694,9 +779,10 @@ function fcmErrorCode(body: unknown) {
   const detailCode = fcmDetailErrorCode(body);
   if (detailCode) return detailCode;
 
-  const error = body && typeof body === "object" && "error" in body
-    ? (body as Record<string, unknown>).error
-    : null;
+  const error =
+    body && typeof body === "object" && "error" in body
+      ? (body as Record<string, unknown>).error
+      : null;
   if (!error || typeof error !== "object") return null;
 
   return stringValue((error as Record<string, unknown>).status);
@@ -710,13 +796,20 @@ function userFacingFcmError(code: string | null, formattedError: string) {
   return formattedError;
 }
 
-function isInvalidFcmTokenError(input: { body: unknown; formattedError: string }) {
+function isInvalidFcmTokenError(input: {
+  body: unknown;
+  formattedError: string;
+}) {
   const code = fcmDetailErrorCode(input.body);
   if (code === "UNREGISTERED") return true;
 
   const message = input.formattedError.toLowerCase();
   if (code === "INVALID_ARGUMENT") {
-    return message.includes("registration token") || message.includes("fcm token") || message.includes("token is not");
+    return (
+      message.includes("registration token") ||
+      message.includes("fcm token") ||
+      message.includes("token is not")
+    );
   }
 
   return false;
@@ -763,10 +856,17 @@ async function sendFcm(input: {
     },
     body: JSON.stringify(requestPayload),
   });
-  const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  const body = (await response.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
 
   if (!response.ok) {
-    const formattedError = formatFcmError(body, input.projectId, input.clientEmail);
+    const formattedError = formatFcmError(
+      body,
+      input.projectId,
+      input.clientEmail,
+    );
     const code = fcmErrorCode(body);
     const error = userFacingFcmError(code, formattedError);
     const invalidToken = isInvalidFcmTokenError({ body, formattedError });
@@ -809,7 +909,10 @@ async function sendFcm(input: {
       providerMessageId: null,
       status: response.status,
       targetType: input.targetType,
-      targetValue: input.targetType === "device" ? input.deviceId ?? input.targetValue : input.targetValue,
+      targetValue:
+        input.targetType === "device"
+          ? (input.deviceId ?? input.targetValue)
+          : input.targetValue,
       topicCode: input.topicCode ?? null,
     };
   }
@@ -832,7 +935,10 @@ async function sendFcm(input: {
     providerMessageId: stringValue(body?.name),
     status: response.status,
     targetType: input.targetType,
-    targetValue: input.targetType === "device" ? input.deviceId ?? input.targetValue : input.targetValue,
+    targetValue:
+      input.targetType === "device"
+        ? (input.deviceId ?? input.targetValue)
+        : input.targetValue,
     topicCode: input.topicCode ?? null,
   };
 }
@@ -851,26 +957,36 @@ async function getDeviceTargets(input: {
 
   const rows: DeviceTargetRow[] = [];
   if (input.deviceTokenIds.length) {
-    for (const tokenIdBatch of chunks(input.deviceTokenIds, DEVICE_TOKEN_QUERY_BATCH_SIZE)) {
-      rows.push(...await prisma.deviceToken.findMany({
-        select: deviceTargetSelect,
-        where: {
-          id: { in: tokenIdBatch },
-          platform: input.platform,
-          status: "active",
-        },
-      }));
+    for (const tokenIdBatch of chunks(
+      input.deviceTokenIds,
+      DEVICE_TOKEN_QUERY_BATCH_SIZE,
+    )) {
+      rows.push(
+        ...(await prisma.deviceToken.findMany({
+          select: deviceTargetSelect,
+          where: {
+            id: { in: tokenIdBatch },
+            platform: input.platform,
+            status: "active",
+          },
+        })),
+      );
     }
   } else {
-    for (const deviceIdBatch of chunks(input.deviceIds, DEVICE_TOKEN_QUERY_BATCH_SIZE)) {
-      rows.push(...await prisma.deviceToken.findMany({
-        select: deviceTargetSelect,
-        where: {
-          deviceId: { in: deviceIdBatch },
-          platform: input.platform,
-          status: "active",
-        },
-      }));
+    for (const deviceIdBatch of chunks(
+      input.deviceIds,
+      DEVICE_TOKEN_QUERY_BATCH_SIZE,
+    )) {
+      rows.push(
+        ...(await prisma.deviceToken.findMany({
+          select: deviceTargetSelect,
+          where: {
+            deviceId: { in: deviceIdBatch },
+            platform: input.platform,
+            status: "active",
+          },
+        })),
+      );
     }
   }
 
@@ -886,40 +1002,56 @@ async function getDeviceTargets(input: {
     platform: input.platform,
     productAppId,
   });
-  const requestedAppKeys = Array.from(new Set([appId, productAppId, appId || productAppId ? "" : appName].filter(Boolean)));
+  const requestedAppKeys = Array.from(
+    new Set(
+      [appId, productAppId, appId || productAppId ? "" : appName].filter(
+        Boolean,
+      ),
+    ),
+  );
 
-  return rows.map((record): DeviceTarget => ({
-    appIdentifier: record.appIdentifier,
-    appId: record.appId,
-    bundleId: record.bundleId,
-    deviceId: record.deviceId,
-    firebaseProjectId: record.firebaseProjectId,
-    fcmToken: record.fcmToken,
-    id: record.id,
-    locale: record.locale,
-    packageName: record.packageName,
-    productAppId: record.productAppId,
-  })).filter((device) => {
-    if (!device.id || !device.deviceId || !device.fcmToken) return false;
-    const deviceAppKeys = [
-      normalizeAppId(device.appId),
-      normalizeAppId(device.productAppId),
-    ].filter(Boolean);
-    if (requestedAppKeys.length && deviceAppKeys.length) {
-      return deviceAppKeys.some((deviceKey) => requestedAppKeys.includes(deviceKey));
-    }
-    if (requestedAppIdentifier && device.appIdentifier === requestedAppIdentifier) return true;
-    if (packageName && device.packageName === packageName) return true;
-    if (bundleId && device.bundleId === bundleId) return true;
-    return !requestedAppKeys.length && !packageName && !bundleId;
-  });
+  return rows
+    .map((record): DeviceTarget => ({
+      appIdentifier: record.appIdentifier,
+      appId: record.appId,
+      bundleId: record.bundleId,
+      deviceId: record.deviceId,
+      firebaseProjectId: record.firebaseProjectId,
+      fcmToken: record.fcmToken,
+      id: record.id,
+      locale: record.locale,
+      packageName: record.packageName,
+      productAppId: record.productAppId,
+    }))
+    .filter((device) => {
+      if (!device.id || !device.deviceId || !device.fcmToken) return false;
+      const deviceAppKeys = [
+        normalizeAppId(device.appId),
+        normalizeAppId(device.productAppId),
+      ].filter(Boolean);
+      if (requestedAppKeys.length && deviceAppKeys.length) {
+        return deviceAppKeys.some((deviceKey) =>
+          requestedAppKeys.includes(deviceKey),
+        );
+      }
+      if (
+        requestedAppIdentifier &&
+        device.appIdentifier === requestedAppIdentifier
+      )
+        return true;
+      if (packageName && device.packageName === packageName) return true;
+      if (bundleId && device.bundleId === bundleId) return true;
+      return !requestedAppKeys.length && !packageName && !bundleId;
+    });
 }
 
 function localeForDevice(device: DeviceTarget, locales: LocaleNotification[]) {
   const code = clean(device.locale).split(/[-_]/)[0].toLowerCase();
-  return locales.find((locale) => locale.topicCode === code)
-    ?? locales.find((locale) => locale.topicCode === "en")
-    ?? locales[0];
+  return (
+    locales.find((locale) => locale.topicCode === code) ??
+    locales.find((locale) => locale.topicCode === "en") ??
+    locales[0]
+  );
 }
 
 function failedResult(input: {
@@ -971,7 +1103,11 @@ async function writeEvents(input: {
   const rows = input.results.map((result) => ({
     deviceId: result.deviceId,
     deviceTokenId: result.deviceTokenId,
-    errorCode: result.ok ? null : result.invalidToken ? "fcm_token_invalid" : result.fcmErrorCode ?? `fcm_http_${result.status}`,
+    errorCode: result.ok
+      ? null
+      : result.invalidToken
+        ? "fcm_token_invalid"
+        : (result.fcmErrorCode ?? `fcm_http_${result.status}`),
     errorDetail: result.error,
     eventType: result.ok ? "fcm_sent" : "fcm_failed",
     jobId: input.jobId,
@@ -1005,14 +1141,20 @@ async function markInvalidDeviceTokens(input: {
   platform: MobilePlatform;
   results: SendResult[];
 }) {
-  const invalidDeviceTokenIds = Array.from(new Set(input.results
-    .filter((result) => result.invalidToken && result.deviceTokenId)
-    .map((result) => result.deviceTokenId!)
-  ));
+  const invalidDeviceTokenIds = Array.from(
+    new Set(
+      input.results
+        .filter((result) => result.invalidToken && result.deviceTokenId)
+        .map((result) => result.deviceTokenId!),
+    ),
+  );
 
   if (!invalidDeviceTokenIds.length) return;
 
-  for (const tokenIdBatch of chunks(invalidDeviceTokenIds, DB_WRITE_BATCH_SIZE)) {
+  for (const tokenIdBatch of chunks(
+    invalidDeviceTokenIds,
+    DB_WRITE_BATCH_SIZE,
+  )) {
     await prisma.deviceToken.updateMany({
       where: {
         id: { in: tokenIdBatch },
@@ -1037,27 +1179,39 @@ async function createNotificationJobForLocalSend(input: {
   targetType: TargetType;
   topicBase: string;
 }) {
-  const appName = clean(input.payload.appName) || clean(input.payload.productAppId) || input.topicBase || "unknown_app";
-  const appId = normalizeAppId(input.payload.appId) || normalizeAppId(input.payload.productAppId) || null;
+  const appName =
+    clean(input.payload.appName) ||
+    clean(input.payload.productAppId) ||
+    input.topicBase ||
+    "unknown_app";
+  const appId =
+    normalizeAppId(input.payload.appId) ||
+    normalizeAppId(input.payload.productAppId) ||
+    null;
   const firstLocale = primaryLocale(input.locales);
 
   return prisma.notificationJob.create({
     data: {
       appId,
       appName,
-      bundleId: input.platform === "ios" ? clean(input.payload.bundleId) || null : null,
+      bundleId:
+        input.platform === "ios" ? clean(input.payload.bundleId) || null : null,
       credentialRef: clean(input.payload.credentialRef) || null,
       dataPayload: input.dataPayload as Prisma.InputJsonValue,
       imageUrl: input.imageUrl || null,
       localePayload: input.locales as unknown as Prisma.InputJsonValue,
       message: firstLocale?.body ?? null,
-      packageName: input.platform === "android" ? clean(input.payload.packageName) || null : null,
+      packageName:
+        input.platform === "android"
+          ? clean(input.payload.packageName) || null
+          : null,
       platform: input.platform,
       requestedBy: input.actorEmail,
       scheduleId: clean(input.payload.scheduleId) || null,
       status: "sending",
       storeAccountName: clean(input.payload.storeAccountName) || null,
-      storePlatform: input.platform === "android" ? "google_play" : "apple_app_store",
+      storePlatform:
+        input.platform === "android" ? "google_play" : "apple_app_store",
       storeProfileId: clean(input.payload.storeProfileId) || null,
       targetType: input.targetType,
       targetValues: input.initialTargetValues,
@@ -1083,19 +1237,25 @@ async function updateNotificationJobAfterLocalSend(input: {
     where: { id: input.jobId },
     data: {
       appId: input.resolvedPayload
-        ? normalizeAppId(input.resolvedPayload.appId) || normalizeAppId(input.resolvedPayload.productAppId) || null
+        ? normalizeAppId(input.resolvedPayload.appId) ||
+          normalizeAppId(input.resolvedPayload.productAppId) ||
+          null
         : undefined,
       appName: input.resolvedPayload
-        ? clean(input.resolvedPayload.appName) || clean(input.resolvedPayload.productAppId) || "unknown_app"
+        ? clean(input.resolvedPayload.appName) ||
+          clean(input.resolvedPayload.productAppId) ||
+          "unknown_app"
         : undefined,
-      bundleId: input.resolvedPayload && input.platform === "ios"
-        ? clean(input.resolvedPayload.bundleId) || null
-        : undefined,
+      bundleId:
+        input.resolvedPayload && input.platform === "ios"
+          ? clean(input.resolvedPayload.bundleId) || null
+          : undefined,
       credentialRef: input.credentialRef ?? null,
       errorCount: input.errorCount,
-      packageName: input.resolvedPayload && input.platform === "android"
-        ? clean(input.resolvedPayload.packageName) || null
-        : undefined,
+      packageName:
+        input.resolvedPayload && input.platform === "android"
+          ? clean(input.resolvedPayload.packageName) || null
+          : undefined,
       projectId: input.projectId ?? null,
       sentAt: new Date(),
       sentCount: input.sentCount,
@@ -1126,45 +1286,55 @@ export async function sendNotificationPayloadLocal(
   const deviceTokenIds = stringArray(payload.deviceTokenIds);
   const deviceIds = stringArray(payload.deviceIds);
   const deviceTargetValues = deviceTokenIds.length ? deviceTokenIds : deviceIds;
-  const targetValueKind = deviceTokenIds.length ? "device_token_id" : "device_id";
+  const targetValueKind = deviceTokenIds.length
+    ? "device_token_id"
+    : "device_id";
   const topicBase = topicSegment(
-    clean(payload.topicBase)
-    || appId
-    || clean(payload.appName)
-    || clean(payload.productAppId)
-    || (platform === "android" ? clean(payload.packageName) : clean(payload.bundleId))
-    || "notification",
+    clean(payload.topicBase) ||
+      appId ||
+      clean(payload.appName) ||
+      clean(payload.productAppId) ||
+      (platform === "android"
+        ? clean(payload.packageName)
+        : clean(payload.bundleId)) ||
+      "notification",
   );
-  const initialTargetValues = targetType === "device"
-    ? deviceTargetValues
-    : locales.map((locale) => `${topicBase}-${locale.topicCode}`);
+  const initialTargetValues =
+    targetType === "device"
+      ? deviceTargetValues
+      : locales.map((locale) => `${topicBase}-${locale.topicCode}`);
   const queuedJobId = clean(payload.jobId);
 
-  if (targetType === "device" && !deviceTargetValues.length) throw new Error("device_targets_required");
-  if (targetType === "topic" && !topicBase) throw new Error("topic_base_required");
+  if (targetType === "device" && !deviceTargetValues.length)
+    throw new Error("device_targets_required");
+  if (targetType === "topic" && !topicBase)
+    throw new Error("topic_base_required");
 
   const createdJob = queuedJobId
     ? null
     : await createNotificationJobForLocalSend({
-      actorEmail,
-      dataPayload,
-      imageUrl,
-      initialTargetValues,
-      locales,
-      payload,
-      platform,
-      targetType,
-      topicBase,
-    });
+        actorEmail,
+        dataPayload,
+        imageUrl,
+        initialTargetValues,
+        locales,
+        payload,
+        platform,
+        targetType,
+        topicBase,
+      });
   const jobId = queuedJobId || createdJob?.id || "";
 
   try {
     const config = await resolveCachedFirebaseConfig(payload);
     const serviceAccount = config.credential.serviceAccount;
-    const projectId = stringValue(serviceAccount.project_id) ?? config.credential.projectId;
-    const clientEmail = stringValue(serviceAccount.client_email) ?? config.credential.clientEmail;
+    const projectId =
+      stringValue(serviceAccount.project_id) ?? config.credential.projectId;
+    const clientEmail =
+      stringValue(serviceAccount.client_email) ?? config.credential.clientEmail;
 
-    if (!projectId) throw new Error("Firebase service account must include project_id");
+    if (!projectId)
+      throw new Error("Firebase service account must include project_id");
 
     const resolvedPayload = {
       ...payload,
@@ -1172,8 +1342,24 @@ export async function sendNotificationPayloadLocal(
       appName: config.app?.appName ?? payload.appName,
       bundleId: config.app?.bundleId ?? payload.bundleId,
       packageName: config.app?.packageName ?? payload.packageName,
-      storeAccountName: config.app?.storeAccountName ?? payload.storeAccountName,
+      storeAccountName:
+        config.app?.storeAccountName ?? payload.storeAccountName,
       storeProfileId: config.app?.storeProfileId ?? payload.storeProfileId,
+    };
+    const providerContext: StoreProviderEndpointContext = {
+      appId: resolvedPayload.appId,
+      appIdentifier:
+        platform === "android"
+          ? resolvedPayload.packageName
+          : resolvedPayload.bundleId,
+      bundleId: resolvedPayload.bundleId,
+      firebaseProjectId: projectId,
+      packageName: resolvedPayload.packageName,
+      platform,
+      productAppId: resolvedPayload.productAppId,
+      projectId,
+      storeAccountName: resolvedPayload.storeAccountName,
+      storeProfileId: resolvedPayload.storeProfileId,
     };
     const deliveryData = {
       ...baseFcmData,
@@ -1182,29 +1368,38 @@ export async function sendNotificationPayloadLocal(
       notificationJobId: jobId,
       notificationPlatform: platform,
     };
-    const accessToken = await googleAccessToken(serviceAccount);
-    const endpoint = `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`;
+    const accessToken = await googleAccessToken(
+      serviceAccount,
+      providerContext,
+    );
+    const endpoint = rewriteStoreProviderUrl(
+      "firebaseFcm",
+      `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`,
+      providerContext,
+    );
     const results: SendResult[] = [];
 
     if (targetType === "topic") {
       for (const locale of locales) {
-        results.push(await sendFcm({
-          accessToken,
-          body: locale.body,
-          clientEmail,
-          data: {
-            ...deliveryData,
-            notificationLocale: locale.topicCode,
-          },
-          endpoint,
-          imageUrl,
-          platform,
-          projectId,
-          targetType,
-          targetValue: `${topicBase}-${locale.topicCode}`,
-          title: locale.title,
-          topicCode: locale.topicCode,
-        }));
+        results.push(
+          await sendFcm({
+            accessToken,
+            body: locale.body,
+            clientEmail,
+            data: {
+              ...deliveryData,
+              notificationLocale: locale.topicCode,
+            },
+            endpoint,
+            imageUrl,
+            platform,
+            projectId,
+            targetType,
+            targetValue: `${topicBase}-${locale.topicCode}`,
+            title: locale.title,
+            topicCode: locale.topicCode,
+          }),
+        );
       }
     } else {
       const devices = await getDeviceTargets({
@@ -1217,59 +1412,72 @@ export async function sendNotificationPayloadLocal(
         platform,
         productAppId: resolvedPayload.productAppId,
       });
-      const devicesByTarget = new Map(devices.map((device) => [deviceTokenIds.length ? device.id : device.deviceId, device]));
+      const devicesByTarget = new Map(
+        devices.map((device) => [
+          deviceTokenIds.length ? device.id : device.deviceId,
+          device,
+        ]),
+      );
 
-      results.push(...await mapWithConcurrency(deviceTargetValues, fcmSendConcurrency(), async (targetValue) => {
-        const device = devicesByTarget.get(targetValue);
-        if (!device) {
-          logSendFailure("No active FCM token found for requested device", {
-            appId: normalizeAppId(resolvedPayload.appId) || appId || null,
-            bundleId: clean(resolvedPayload.bundleId) || null,
-            deviceId: targetValueKind === "device_id" ? targetValue : null,
-            deviceTokenId: targetValueKind === "device_token_id" ? targetValue : null,
-            packageName: clean(resolvedPayload.packageName) || null,
-            platform,
-            targetType,
-            targetValueKind,
-          });
+      results.push(
+        ...(await mapWithConcurrency(
+          deviceTargetValues,
+          fcmSendConcurrency(),
+          async (targetValue) => {
+            const device = devicesByTarget.get(targetValue);
+            if (!device) {
+              logSendFailure("No active FCM token found for requested device", {
+                appId: normalizeAppId(resolvedPayload.appId) || appId || null,
+                bundleId: clean(resolvedPayload.bundleId) || null,
+                deviceId: targetValueKind === "device_id" ? targetValue : null,
+                deviceTokenId:
+                  targetValueKind === "device_token_id" ? targetValue : null,
+                packageName: clean(resolvedPayload.packageName) || null,
+                platform,
+                targetType,
+                targetValueKind,
+              });
 
-          return failedResult({
-            deviceId: targetValueKind === "device_id" ? targetValue : null,
-            deviceTokenId: targetValueKind === "device_token_id" ? targetValue : null,
-            error: `No active ${platform} FCM token found for ${targetValueKind} ${targetValue}`,
-            status: 404,
-            targetType,
-            targetValue,
-          });
-        }
+              return failedResult({
+                deviceId: targetValueKind === "device_id" ? targetValue : null,
+                deviceTokenId:
+                  targetValueKind === "device_token_id" ? targetValue : null,
+                error: `No active ${platform} FCM token found for ${targetValueKind} ${targetValue}`,
+                status: 404,
+                targetType,
+                targetValue,
+              });
+            }
 
-        const locale = localeForDevice(device, locales);
-        return sendFcm({
-          accessToken,
-          body: locale.body,
-          clientEmail,
-          data: {
-            ...deliveryData,
-            notificationLocale: locale.topicCode,
+            const locale = localeForDevice(device, locales);
+            return sendFcm({
+              accessToken,
+              body: locale.body,
+              clientEmail,
+              data: {
+                ...deliveryData,
+                notificationLocale: locale.topicCode,
+              },
+              deviceAppId: device.appId,
+              deviceAppIdentifier: device.appIdentifier,
+              deviceBundleId: device.bundleId,
+              deviceFirebaseProjectId: device.firebaseProjectId,
+              deviceId: device.deviceId,
+              devicePackageName: device.packageName,
+              deviceProductAppId: device.productAppId,
+              deviceTokenId: device.id,
+              endpoint,
+              imageUrl,
+              platform,
+              projectId,
+              targetType,
+              targetValue: device.fcmToken,
+              title: locale.title,
+              topicCode: locale.topicCode,
+            });
           },
-          deviceAppId: device.appId,
-          deviceAppIdentifier: device.appIdentifier,
-          deviceBundleId: device.bundleId,
-          deviceFirebaseProjectId: device.firebaseProjectId,
-          deviceId: device.deviceId,
-          devicePackageName: device.packageName,
-          deviceProductAppId: device.productAppId,
-          deviceTokenId: device.id,
-          endpoint,
-          imageUrl,
-          platform,
-          projectId,
-          targetType,
-          targetValue: device.fcmToken,
-          title: locale.title,
-          topicCode: locale.topicCode,
-        });
-      }));
+        )),
+      );
     }
 
     const sentCount = results.filter((result) => result.ok).length;
@@ -1297,7 +1505,10 @@ export async function sendNotificationPayloadLocal(
             invalidToken: result.invalidToken,
             status: result.status,
             targetType: result.targetType,
-            targetValue: result.targetType === "device" ? result.deviceId ?? "fcm-token-redacted" : result.targetValue,
+            targetValue:
+              result.targetType === "device"
+                ? (result.deviceId ?? "fcm-token-redacted")
+                : result.targetValue,
             topicCode: result.topicCode,
           })),
         jobId,
@@ -1312,15 +1523,18 @@ export async function sendNotificationPayloadLocal(
     await markInvalidDeviceTokens({ platform, results });
     const updatedJob = createdJob
       ? await updateNotificationJobAfterLocalSend({
-        credentialRef: config.credential.credentialRef,
-        errorCount,
-        jobId,
-        platform,
-        projectId,
-        resolvedPayload,
-        sentCount,
-        targetValues: targetType === "device" ? initialTargetValues : results.map((result) => result.targetValue),
-      })
+          credentialRef: config.credential.credentialRef,
+          errorCount,
+          jobId,
+          platform,
+          projectId,
+          resolvedPayload,
+          sentCount,
+          targetValues:
+            targetType === "device"
+              ? initialTargetValues
+              : results.map((result) => result.targetValue),
+        })
       : null;
 
     return {
@@ -1335,7 +1549,10 @@ export async function sendNotificationPayloadLocal(
       topicBase,
     };
   } catch (error) {
-    const failureMessage = error instanceof Error ? error.message : "Unknown notification send error";
+    const failureMessage =
+      error instanceof Error
+        ? error.message
+        : "Unknown notification send error";
     logSendFailure("Notification batch failed before FCM send completed", {
       appId,
       error: errorForLog(error),
@@ -1346,11 +1563,14 @@ export async function sendNotificationPayloadLocal(
       topicBase,
     });
 
-    const failedTargets = deviceTargetValues.length ? deviceTargetValues : [topicBase];
+    const failedTargets = deviceTargetValues.length
+      ? deviceTargetValues
+      : [topicBase];
     const results = failedTargets.map((targetValue) =>
       failedResult({
         deviceId: targetValueKind === "device_id" ? targetValue : null,
-        deviceTokenId: targetValueKind === "device_token_id" ? targetValue : null,
+        deviceTokenId:
+          targetValueKind === "device_token_id" ? targetValue : null,
         error: failureMessage,
         targetType,
         targetValue,
@@ -1359,14 +1579,14 @@ export async function sendNotificationPayloadLocal(
     await writeEvents({ jobId, platform, results });
     const updatedJob = createdJob
       ? await updateNotificationJobAfterLocalSend({
-        credentialRef: clean(payload.credentialRef) || null,
-        errorCount: results.length,
-        jobId,
-        platform,
-        projectId: null,
-        sentCount: 0,
-        targetValues: initialTargetValues,
-      })
+          credentialRef: clean(payload.credentialRef) || null,
+          errorCount: results.length,
+          jobId,
+          platform,
+          projectId: null,
+          sentCount: 0,
+          targetValues: initialTargetValues,
+        })
       : null;
 
     return {
