@@ -298,18 +298,158 @@ function renewalStatusMeta(status: "enabled" | "disabled" | null) {
   return null;
 }
 
-function twoHourCheckMeta(check: IosIapTwoHourCheck | null) {
+type TwoHourBadgeMeta = {
+  className: string;
+  label: string;
+  title: string;
+};
+
+type ProviderDeliveryMeta = {
+  message: string | null;
+  provider: "Adjust" | "Firebase";
+  skipped: boolean;
+  status: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function cleanText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function providerDeliveryMeta(
+  rawContext: unknown,
+  provider: "adjust" | "ga4",
+): ProviderDeliveryMeta | null {
+  const context = isRecord(rawContext) ? rawContext : {};
+  const delivery = isRecord(context.delivery) ? context.delivery : {};
+  const deliveryState = isRecord(delivery[provider])
+    ? delivery[provider]
+    : null;
+  const legacyState = isRecord(context[provider]) ? context[provider] : null;
+  const state = deliveryState ?? legacyState;
+  if (!state) return null;
+
+  const result = isRecord(state.result) ? state.result : state;
+  const responseStatus = Number(result.responseStatus ?? result.status);
+  const status =
+    cleanText(state.status) ||
+    (Number.isFinite(responseStatus) &&
+    responseStatus >= 200 &&
+    responseStatus < 300
+      ? "delivered"
+      : "");
+  const message =
+    cleanText(state.message) ||
+    cleanText(result.responseBody) ||
+    cleanText(result.error) ||
+    null;
+
+  return {
+    message,
+    provider: provider === "ga4" ? "Firebase" : "Adjust",
+    skipped: Boolean(result.skipped),
+    status,
+  };
+}
+
+function providerStatusBadge(meta: ProviderDeliveryMeta): TwoHourBadgeMeta {
+  if (meta.skipped) {
+    return {
+      className: "border-slate-200 bg-slate-50 text-slate-600",
+      label: "Skipped",
+      title: meta.message ?? `${meta.provider} delivery was skipped.`,
+    };
+  }
+
+  if (meta.status === "delivered") {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Sent",
+      title: `${meta.provider} delivery completed.`,
+    };
+  }
+
+  if (meta.status === "retryable_error") {
+    return {
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      label: "Retrying",
+      title: meta.message ?? `${meta.provider} delivery will retry.`,
+    };
+  }
+
+  return {
+    className: "border-rose-200 bg-rose-50 text-rose-700",
+    label: "Failed",
+    title: meta.message ?? `${meta.provider} delivery failed.`,
+  };
+}
+
+function twoHourMutedBadge(label: string, title: string): TwoHourBadgeMeta {
+  return {
+    className: "border-slate-200 bg-slate-50 text-slate-600",
+    label,
+    title,
+  };
+}
+
+function twoHourCheckStatusBadge(
+  check: IosIapTwoHourCheck | null,
+  options?: { expectsCheck?: boolean },
+): TwoHourBadgeMeta {
   if (!check) {
-    return null;
+    if (!options?.expectsCheck) {
+      return twoHourMutedBadge(
+        "-",
+        "2-hour checks only apply to iOS free-trial transactions.",
+      );
+    }
+
+    return twoHourMutedBadge(
+      "Not scheduled",
+      "No ios_iap_two_hour_checks row exists for this transaction. Webhook-only records usually do not include app_instance_id or device identifiers, so Firebase/Adjust cannot be sent.",
+    );
   }
 
   const status = check.status.toLowerCase();
+  const ga4 = providerDeliveryMeta(check.raw_context, "ga4");
+  const adjust = providerDeliveryMeta(check.raw_context, "adjust");
+  const providerBadges = [
+    ga4 ??
+      (check.renewed === true && check.ga4_sent_at
+        ? ({
+            message: null,
+            provider: "Firebase",
+            skipped: false,
+            status: "delivered",
+          } satisfies ProviderDeliveryMeta)
+        : null),
+    adjust,
+  ].filter((item): item is ProviderDeliveryMeta => Boolean(item));
+  const failedProviders = providerBadges.filter(
+    (item) =>
+      item.status &&
+      item.status !== "delivered" &&
+      item.status !== "retryable_error" &&
+      !item.skipped,
+  );
+
   if (status === "sent") {
+    if (check.renewed === null) {
+      return {
+        className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        label: "Checked",
+        title: "2-hour check completed.",
+      };
+    }
+
     return {
       className: check.renewed
         ? "border-emerald-200 bg-emerald-50 text-emerald-700"
         : "border-rose-200 bg-rose-50 text-rose-700",
-      label: check.renewed ? "Retained at 2h" : "Cancelled by 2h",
+      label: check.renewed ? "Passed" : "Cancelled",
       title: check.renewed
         ? "No cancellation signal was found after 2 hours. This is a prediction signal, not a paid renewal."
         : "A cancellation signal was found within the 2-hour observation window.",
@@ -317,34 +457,142 @@ function twoHourCheckMeta(check: IosIapTwoHourCheck | null) {
   }
 
   if (status === "failed") {
+    if (failedProviders.length >= 2) {
+      return {
+        className: "border-rose-200 bg-rose-50 text-rose-700",
+        label: "Failed",
+        title: check.last_error ?? "All 2-hour provider deliveries failed.",
+      };
+    }
+
+    if (providerBadges.length) {
+      return {
+        className: "border-amber-200 bg-amber-50 text-amber-700",
+        label: "Partial",
+        title:
+          check.last_error ??
+          "2-hour check completed with a provider-specific issue.",
+      };
+    }
+
     return {
       className: "border-rose-200 bg-rose-50 text-rose-700",
-      label: "2h check failed",
-      title: check.last_error ?? "GA4 2-hour check failed",
+      label: "Failed",
+      title: check.last_error ?? "2-hour check failed before provider delivery.",
     };
   }
 
   if (status === "processing") {
     return {
       className: "border-blue-200 bg-blue-50 text-blue-700",
-      label: "Checking 2h signal",
-      title: "GA4 2-hour check is processing",
+      label: "Checking",
+      title: "2-hour check is processing.",
     };
   }
 
   if (status === "retrying") {
     return {
       className: "border-amber-200 bg-amber-50 text-amber-700",
-      label: "Retrying 2h check",
-      title: check.last_error ?? "GA4 2-hour check will retry",
+      label: "Retrying",
+      title: check.last_error ?? "2-hour check will retry.",
     };
   }
 
   return {
     className: "border-slate-200 bg-slate-50 text-slate-600",
-    label: "2h check pending",
+    label: "Pending",
     title: `The retention signal will be evaluated at ${formatDate(check.check_at)}.`,
   };
+}
+
+function providerFailureLikely(
+  check: IosIapTwoHourCheck,
+  provider: "adjust" | "ga4",
+) {
+  const message = `${check.last_error ?? ""} ${
+    isRecord(check.raw_context) ? cleanText(check.raw_context.error) : ""
+  }`.toLowerCase();
+  return provider === "ga4"
+    ? /ga4|firebase|measurement|api_secret|app_instance/.test(message)
+    : /adjust|adid|idfa|idfv/.test(message);
+}
+
+function providerColumnStatusBadge(
+  check: IosIapTwoHourCheck | null,
+  provider: "adjust" | "ga4",
+  options?: { expectsCheck?: boolean },
+): TwoHourBadgeMeta {
+  const providerLabel = provider === "ga4" ? "Firebase" : "Adjust";
+
+  if (!check) {
+    if (!options?.expectsCheck) {
+      return twoHourMutedBadge(
+        "-",
+        `${providerLabel} delivery only applies when a 2-hour check exists.`,
+      );
+    }
+
+    return twoHourMutedBadge(
+      "Not scheduled",
+      `No 2-hour check row exists, so ${providerLabel} was not attempted.`,
+    );
+  }
+
+  const meta = providerDeliveryMeta(check.raw_context, provider);
+  if (meta) return providerStatusBadge(meta);
+
+  if (provider === "ga4" && check.renewed === true && check.ga4_sent_at) {
+    return providerStatusBadge({
+      message: null,
+      provider: "Firebase",
+      skipped: false,
+      status: "delivered",
+    });
+  }
+
+  const status = check.status.toLowerCase();
+  if (check.renewed === false) {
+    return twoHourMutedBadge(
+      "Not sent",
+      `${providerLabel} was not sent because the 2-hour check found a cancellation signal.`,
+    );
+  }
+
+  if (status === "pending") {
+    return twoHourMutedBadge(
+      "Pending",
+      `${providerLabel} will be evaluated when the 2-hour check runs.`,
+    );
+  }
+
+  if (status === "processing") {
+    return {
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      label: "Checking",
+      title: `${providerLabel} delivery is being evaluated.`,
+    };
+  }
+
+  if (status === "retrying") {
+    return {
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      label: "Retrying",
+      title: check.last_error ?? `${providerLabel} delivery will retry.`,
+    };
+  }
+
+  if (status === "failed" && providerFailureLikely(check, provider)) {
+    return {
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      label: "Failed",
+      title: check.last_error ?? `${providerLabel} delivery failed.`,
+    };
+  }
+
+  return twoHourMutedBadge(
+    "No data",
+    `${providerLabel} delivery status was not recorded for this check.`,
+  );
 }
 
 function sourceMeta(source: string | null) {
@@ -379,8 +627,9 @@ function sourceMeta(source: string | null) {
 
   return {
     className: "border-slate-200 bg-slate-50 text-slate-600",
-    label: "Legacy API",
-    title: "Saved before source tracking was added, likely from verify-ios/API",
+    label: "Legacy source",
+    title:
+      "Saved before source tracking was added. This does not guarantee the mobile verify API provided app_instance_id or attribution identifiers.",
   };
 }
 
@@ -1548,6 +1797,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 <th className="px-4 py-3">Transaction / Order</th>
                 <th className="px-4 py-3">Product Info</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">2h Check</th>
+                <th className="px-4 py-3">Firebase</th>
+                <th className="px-4 py-3">Adjust</th>
                 <th className="px-4 py-3">
                   <button
                     type="button"
@@ -1589,6 +1841,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                           <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
                         </td>
                         <td className="px-4 py-3.5">
+                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                        </td>
+                        <td className="px-4 py-3.5">
                           <div className="h-4 w-24 animate-pulse rounded bg-muted" />
                         </td>
                         <td className="px-4 py-3.5">
@@ -1625,7 +1886,22 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                       ? (twoHourCheckByTransactionId.get(tx.transaction_id) ??
                         null)
                       : null;
-                    const twoHourMeta = twoHourCheckMeta(twoHourCheck);
+                    const expectsTwoHourCheck =
+                      isIosTransaction(tx) && transactionIsFreeTrial(tx);
+                    const twoHourStatus = twoHourCheckStatusBadge(
+                      twoHourCheck,
+                      { expectsCheck: expectsTwoHourCheck },
+                    );
+                    const firebaseStatus = providerColumnStatusBadge(
+                      twoHourCheck,
+                      "ga4",
+                      { expectsCheck: expectsTwoHourCheck },
+                    );
+                    const adjustStatus = providerColumnStatusBadge(
+                      twoHourCheck,
+                      "adjust",
+                      { expectsCheck: expectsTwoHourCheck },
+                    );
                     return (
                       <tr
                         key={tx.id}
@@ -1706,14 +1982,6 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                                 {renewal.label}
                               </span>
                             ) : null}
-                            {twoHourMeta ? (
-                              <span
-                                className={`inline-flex items-center border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourMeta.className}`}
-                                title={twoHourMeta.title}
-                              >
-                                {twoHourMeta.label}
-                              </span>
-                            ) : null}
                             {renewalDate ? (
                               <div className="text-[10px] text-muted-foreground">
                                 Renews: {formatDate(renewalDate)}
@@ -1726,6 +1994,30 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               </div>
                             ) : null}
                           </div>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span
+                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourStatus.className}`}
+                            title={twoHourStatus.title}
+                          >
+                            {twoHourStatus.label}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span
+                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${firebaseStatus.className}`}
+                            title={firebaseStatus.title}
+                          >
+                            {firebaseStatus.label}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span
+                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${adjustStatus.className}`}
+                            title={adjustStatus.title}
+                          >
+                            {adjustStatus.label}
+                          </span>
                         </td>
                         <td className="px-4 py-3.5">
                           <div className="font-semibold">
@@ -1773,7 +2065,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   })}
               {!tableLoading && !visible.length && (
                 <TableEmptyState
-                  colSpan={6}
+                  colSpan={9}
                   icon={CreditCard}
                   title="No transactions found"
                   description="Try changing your filters."
