@@ -259,6 +259,7 @@ export async function handleAdminNotificationHistoryEventsGet(request: Request) 
       {
         notificationEvents: data.notificationEvents,
         notificationJobs: data.notificationJobs,
+        deviceTokens: data.deviceTokens,
       },
     );
   } catch (error) {

@@ -12,6 +12,10 @@ import {
   type IosIapTwoHourCheckRecord,
 } from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
 import { getIosStoreMappingGa4Config } from "@/lib/server/repositories/ios/store-mapping.repository";
+import {
+  rewriteStoreProviderUrl,
+  type StoreProviderEndpointContext,
+} from "@/lib/server/outbound/store-provider-endpoints";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -64,6 +68,19 @@ type TwoHourRevenue = {
 type IosStoreMappingTwoHourConfig = Awaited<
   ReturnType<typeof getIosStoreMappingGa4Config>
 >;
+
+function iosTwoHourProviderContext(
+  check: IosIapTwoHourCheckRecord,
+  mappingConfig?: IosStoreMappingTwoHourConfig,
+): StoreProviderEndpointContext {
+  return {
+    appIdentifier: check.bundleId,
+    bundleId: check.bundleId,
+    firebaseAppId: mappingConfig?.firebaseAppId ?? check.firebaseAppId,
+    platform: "ios",
+    storeProfileId: check.storeProfileId,
+  };
+}
 
 const DEFAULT_BATCH_LIMIT = 25;
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -348,10 +365,8 @@ function resolveAdjustConfig(
   return {
     appToken,
     authToken:
-      firstEnv(
-        "IOS_IAP_2HOUR_ADJUST_AUTH_TOKEN",
-        "ADJUST_S2S_AUTH_TOKEN",
-      ) || null,
+      firstEnv("IOS_IAP_2HOUR_ADJUST_AUTH_TOKEN", "ADJUST_S2S_AUTH_TOKEN") ||
+      null,
     eventToken,
   };
 }
@@ -428,18 +443,25 @@ function measurementEndpoint() {
 
 function eventParams(params: Record<string, Ga4EventParamValue>) {
   return Object.fromEntries(
-    Object.entries(params).filter(([, value]) => value !== null && value !== ""),
+    Object.entries(params).filter(
+      ([, value]) => value !== null && value !== "",
+    ),
   );
 }
 
-function scaledMoneyValue(value: bigint | number | string | null | undefined, scale: number) {
+function scaledMoneyValue(
+  value: bigint | number | string | null | undefined,
+  scale: number,
+) {
   if (value === null || value === undefined) return null;
   const numeric = typeof value === "bigint" ? Number(value) : Number(value);
   if (!Number.isFinite(numeric)) return null;
   return numeric / scale;
 }
 
-function revenueFromTransaction(transaction: IosIapRenewalEvidenceTransaction | null) {
+function revenueFromTransaction(
+  transaction: IosIapRenewalEvidenceTransaction | null,
+) {
   if (!transaction) {
     return {
       currency: null,
@@ -455,24 +477,29 @@ function revenueFromTransaction(transaction: IosIapRenewalEvidenceTransaction | 
 
   return {
     currency: clean(transaction.currency) || null,
-    source: revenueValue !== null
-      ? "revenue_micros"
-      : priceValue !== null
-        ? "price_milliunits"
-        : "missing_price",
+    source:
+      revenueValue !== null
+        ? "revenue_micros"
+        : priceValue !== null
+          ? "price_milliunits"
+          : "missing_price",
     transactionId: transaction.transactionId,
     value,
   };
 }
 
-function transactionRevenueValue(transaction: IosIapRenewalEvidenceTransaction) {
+function transactionRevenueValue(
+  transaction: IosIapRenewalEvidenceTransaction,
+) {
   const revenueValue = scaledMoneyValue(transaction.revenueMicros, 1_000_000);
   const priceValue = scaledMoneyValue(transaction.priceMilliunits, 1000);
   return revenueValue ?? priceValue ?? 0;
 }
 
 function hasRevenueField(transaction: IosIapRenewalEvidenceTransaction) {
-  return transaction.revenueMicros !== null || transaction.priceMilliunits !== null;
+  return (
+    transaction.revenueMicros !== null || transaction.priceMilliunits !== null
+  );
 }
 
 function hasPositiveRevenue(transaction: IosIapRenewalEvidenceTransaction) {
@@ -483,17 +510,20 @@ function revenueTransactionForCheck(
   check: IosIapTwoHourCheckRecord,
   transactions: IosIapRenewalEvidenceTransaction[],
 ) {
-  const exactTransaction = transactions.find((transaction) =>
-    transaction.transactionId === check.transactionId
+  const exactTransaction = transactions.find(
+    (transaction) => transaction.transactionId === check.transactionId,
   );
   const sameOriginalTransactions = check.originalTransactionId
-    ? transactions.filter((transaction) =>
-        transaction.originalTransactionId === check.originalTransactionId
+    ? transactions.filter(
+        (transaction) =>
+          transaction.originalTransactionId === check.originalTransactionId,
       )
     : [];
 
   return (
-    (exactTransaction && hasPositiveRevenue(exactTransaction) ? exactTransaction : null) ||
+    (exactTransaction && hasPositiveRevenue(exactTransaction)
+      ? exactTransaction
+      : null) ||
     sameOriginalTransactions.find(hasPositiveRevenue) ||
     transactions.find(hasPositiveRevenue) ||
     exactTransaction ||
@@ -541,9 +571,8 @@ function purchaseRevenueEvent(
   check: IosIapTwoHourCheckRecord,
   revenue: TwoHourRevenue,
 ): Ga4EventPayload {
-  const value = Number.isFinite(revenue.value) && revenue.value > 0
-    ? revenue.value
-    : 0;
+  const value =
+    Number.isFinite(revenue.value) && revenue.value > 0 ? revenue.value : 0;
 
   return {
     name: "purchase",
@@ -570,13 +599,18 @@ async function sendGa4PurchaseTwoHourEvent(
   mappingConfig?: IosStoreMappingTwoHourConfig,
 ) {
   const config = await resolveGa4Config(check, mappingConfig);
-  const url = new URL(measurementEndpoint());
+  const isValidationOnly = boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY");
+  const url = new URL(
+    rewriteStoreProviderUrl(
+      isValidationOnly ? "ga4DebugMeasurement" : "ga4Measurement",
+      measurementEndpoint(),
+      iosTwoHourProviderContext(check, mappingConfig),
+    ),
+  );
   url.searchParams.set("firebase_app_id", config.firebaseAppId);
   url.searchParams.set("api_secret", config.apiSecret);
 
-  const isDebug =
-    boolEnv("IOS_IAP_2HOUR_GA4_DEBUG_MODE") ||
-    boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY");
+  const isDebug = boolEnv("IOS_IAP_2HOUR_GA4_DEBUG_MODE") || isValidationOnly;
 
   const baseEventName =
     clean(process.env.IOS_IAP_2HOUR_GA4_EVENT_NAME) ||
@@ -649,8 +683,7 @@ async function sendGa4PurchaseTwoHourEvent(
 
   if (!response.ok) {
     throw new Error(
-      responseText ||
-        `ga4_measurement_protocol_failed_http_${response.status}`,
+      responseText || `ga4_measurement_protocol_failed_http_${response.status}`,
     );
   }
 
@@ -661,7 +694,7 @@ async function sendGa4PurchaseTwoHourEvent(
     purchaseRevenueEventNames: purchaseRevenueEvents.map((event) => event.name),
     responseBody: responseText || null,
     responseStatus: response.status,
-    validationOnly: boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY"),
+    validationOnly: isValidationOnly,
     debugLogs: {
       url: decodedUrl,
       payload: body,
@@ -669,8 +702,8 @@ async function sendGa4PurchaseTwoHourEvent(
         status: response.status,
         statusText: response.statusText,
         body: responseText || null,
-      }
-    }
+      },
+    },
   };
 }
 
@@ -753,7 +786,12 @@ async function sendAdjustPurchaseTwoHourEvent(
     headers.authorization = `Bearer ${config.authToken}`;
   }
 
-  const response = await fetch(adjustEndpoint(), {
+  const endpoint = rewriteStoreProviderUrl(
+    "adjust",
+    adjustEndpoint(),
+    iosTwoHourProviderContext(check, mappingConfig),
+  );
+  const response = await fetch(endpoint, {
     body: params.toString(),
     headers,
     method: "POST",
@@ -762,7 +800,7 @@ async function sendAdjustPurchaseTwoHourEvent(
   const result = {
     appTokenConfigured: true,
     deviceIdType: deviceId.key,
-    endpoint: adjustEndpoint(),
+    endpoint,
     environment: adjustEnvironment(check.environment),
     eventTokenConfigured: true,
     hasAuthToken: Boolean(config.authToken),
@@ -772,9 +810,7 @@ async function sendAdjustPurchaseTwoHourEvent(
   };
 
   if (!response.ok) {
-    const message =
-      responseText ||
-      `adjust_s2s_failed_http_${response.status}`;
+    const message = responseText || `adjust_s2s_failed_http_${response.status}`;
 
     if (adjustStrictMode()) {
       throw new Error(message);
@@ -798,10 +834,7 @@ function errorMessage(error: unknown) {
 }
 
 function retryDelayMs(attempts: number) {
-  return Math.min(
-    DEFAULT_RETRY_DELAY_MS * Math.max(attempts, 1),
-    30 * 60_000,
-  );
+  return Math.min(DEFAULT_RETRY_DELAY_MS * Math.max(attempts, 1), 30 * 60_000);
 }
 
 function finalFailure(error: unknown) {
@@ -820,14 +853,12 @@ export async function runIosIapTwoHourGa4Checks(options?: {
   limit?: number;
   maxAttempts?: number;
 }) {
-  const limit = options?.limit ?? positiveIntEnv(
-    "IOS_IAP_2HOUR_CHECK_LIMIT",
-    DEFAULT_BATCH_LIMIT,
-  );
-  const maxAttempts = options?.maxAttempts ?? positiveIntEnv(
-    "IOS_IAP_2HOUR_CHECK_MAX_ATTEMPTS",
-    DEFAULT_MAX_ATTEMPTS,
-  );
+  const limit =
+    options?.limit ??
+    positiveIntEnv("IOS_IAP_2HOUR_CHECK_LIMIT", DEFAULT_BATCH_LIMIT);
+  const maxAttempts =
+    options?.maxAttempts ??
+    positiveIntEnv("IOS_IAP_2HOUR_CHECK_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS);
 
   if (limit <= 0) {
     return {
@@ -894,8 +925,7 @@ export async function runIosIapTwoHourGa4Checks(options?: {
         ga4Result: ga4Result, // Thêm ga4Result vào đây để handler nhận được log
       });
     } catch (error) {
-      const shouldFail =
-        finalFailure(error) || check.attempts >= maxAttempts;
+      const shouldFail = finalFailure(error) || check.attempts >= maxAttempts;
       const nextStatus = shouldFail ? "failed" : "retrying";
       await markIosIapTwoHourCheckFailed(check.id, {
         checkAt: shouldFail

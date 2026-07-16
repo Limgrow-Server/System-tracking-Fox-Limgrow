@@ -16,7 +16,7 @@ import {
   getActiveDeviceTokenCountsForApps,
   getDeviceTokenStatsForApps,
   getDeviceTokenPageForApps,
-  getDeviceTokenSummariesForDeviceIds,
+  getDeviceTokensForEventReferences,
   getDeviceTokenSummaryPageForApps,
   getNotificationEventPageForJob,
   getNotificationEventsForJobs,
@@ -585,12 +585,14 @@ export async function getNotificationHistoryDetailPageData(
     })
     : { data: [], total: 0 };
   const deliveryPage = paginatedResult(eventResult.data, eventResult.total, pagination);
-  const deviceTokens = await getDeviceTokenSummariesForDeviceIds(
-    deliveryPage.data
+  const deviceTokens = await getDeviceTokensForEventReferences({
+    deviceIds: deliveryPage.data
       .flatMap((event) => [event.device_id, event.target_value])
       .filter((value): value is string => Boolean(value)),
-    Math.max(deliveryPage.data.length * 2, DEFAULT_HISTORY_EVENT_PAGE_SIZE),
-  );
+    deviceTokenIds: deliveryPage.data
+      .map((event) => event.device_token_id)
+      .filter((value): value is string => Boolean(value)),
+  }, Math.max(deliveryPage.data.length * 3, DEFAULT_HISTORY_EVENT_PAGE_SIZE));
 
   return scopedNotificationsData(
     session,

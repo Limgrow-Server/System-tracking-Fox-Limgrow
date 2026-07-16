@@ -8,7 +8,12 @@ import type {
   ReviewSyncState,
 } from "@prisma/client";
 
-import { ApiError, badRequest, conflict, notFound } from "@/lib/server/api/errors";
+import {
+  ApiError,
+  badRequest,
+  conflict,
+  notFound,
+} from "@/lib/server/api/errors";
 import { getCredentialVaultSecret } from "@/lib/server/repositories/vault/secret.repository";
 import {
   getActiveAndroidCredentialForStoreProfile,
@@ -54,7 +59,10 @@ import {
   type ReviewAppCardRecord,
   type ReviewReplyTemplateRecord,
 } from "@/lib/server/repositories/reviews/review.repository";
-import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
+import {
+  paginatedResult,
+  type PaginationQuery,
+} from "@/lib/server/api/pagination";
 import { valuesMatchSearch } from "@/lib/search";
 import {
   appleAppStoreConnectToken,
@@ -62,6 +70,10 @@ import {
   resolveAppleAscCredential,
   throwAppleApiError,
 } from "@/lib/server/services/apple/app-store-connect";
+import {
+  rewriteStoreProviderUrl,
+  type StoreProviderEndpointContext,
+} from "@/lib/server/outbound/store-provider-endpoints";
 import { reviewFetchScheduleDto } from "@/lib/server/services/reviews/review-fetch-schedule.service";
 import {
   cleanText,
@@ -104,8 +116,12 @@ type ReplyGroup = {
   _count: { _all: number };
 };
 
-type AndroidReviewMapping = Awaited<ReturnType<typeof getActiveAndroidReviewMappings>>[number];
-type IosReviewMapping = Awaited<ReturnType<typeof getActiveIosReviewMappings>>[number];
+type AndroidReviewMapping = Awaited<
+  ReturnType<typeof getActiveAndroidReviewMappings>
+>[number];
+type IosReviewMapping = Awaited<
+  ReturnType<typeof getActiveIosReviewMappings>
+>[number];
 type AndroidReviewMappingSummary = Awaited<
   ReturnType<typeof getActiveAndroidReviewMappingSummaries>
 >[number];
@@ -162,7 +178,6 @@ function jsonNumber(value: Prisma.JsonValue | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-
 function deviceMetadataDto(
   deviceMetadata: Prisma.JsonValue | null | undefined,
 ): ReviewDeviceMetadataDto | null {
@@ -204,7 +219,9 @@ function ratingSummary(groups: RatingGroup[]) {
 }
 
 function replyCountByMapping(groups: ReplyGroup[]) {
-  return new Map(groups.map((group) => [group.storeMappingId, group._count._all]));
+  return new Map(
+    groups.map((group) => [group.storeMappingId, group._count._all]),
+  );
 }
 
 function reviewAppCard(
@@ -290,7 +307,9 @@ function androidReviewAppScope(
   };
 }
 
-function iosReviewAppScope(mapping: IosReviewMappingSummary): ReviewAppCardScope {
+function iosReviewAppScope(
+  mapping: IosReviewMappingSummary,
+): ReviewAppCardScope {
   return {
     appName: mapping.appName,
     identifier: mapping.bundleId,
@@ -305,7 +324,9 @@ function iosReviewAppScope(mapping: IosReviewMappingSummary): ReviewAppCardScope
 function sortReviewAppsByName<T extends Pick<ReviewAppCard, "appName">>(
   apps: T[],
 ) {
-  return [...apps].sort((left, right) => left.appName.localeCompare(right.appName));
+  return [...apps].sort((left, right) =>
+    left.appName.localeCompare(right.appName),
+  );
 }
 
 function minimalReviewAppCard(scope: ReviewAppCardScope): ReviewAppCard {
@@ -351,12 +372,14 @@ function reviewCommentsFilters(options?: ReviewCommentsPageOptions) {
 }
 
 function reviewCommentsPagination(options?: ReviewCommentsPageOptions) {
-  return options?.reviewPagination ?? {
-    page: 1,
-    pageSize: 10,
-    skip: 0,
-    take: 10,
-  };
+  return (
+    options?.reviewPagination ?? {
+      page: 1,
+      pageSize: 10,
+      skip: 0,
+      take: 10,
+    }
+  );
 }
 
 function reviewCommentsPageResult<TReview>(
@@ -556,7 +579,9 @@ function reviewAppCardFromRecord(record: ReviewAppCardRecord): ReviewAppCard {
     identifier: record.identifier,
     lastErrorMessage: record.lastErrorMessage,
     lastFetchedAt: iso(record.lastFetchedAt),
-    lastSyncStatus: record.lastSyncStatus ? enumText(record.lastSyncStatus) : null,
+    lastSyncStatus: record.lastSyncStatus
+      ? enumText(record.lastSyncStatus)
+      : null,
     mappingId: record.mappingId,
     pendingReplyCount: Math.max(dbNumber(record.pendingReplyCount), 0),
     platform: record.platform,
@@ -651,7 +676,9 @@ export async function getReviewAppCards(): Promise<ReviewAppCard[]> {
     ...androidMappings.map((mapping) =>
       reviewAppCard(
         mapping,
-        androidRatingGroups.filter((group) => group.storeMappingId === mapping.id),
+        androidRatingGroups.filter(
+          (group) => group.storeMappingId === mapping.id,
+        ),
         androidReplyCounts,
       ),
     ),
@@ -665,12 +692,14 @@ export async function getReviewAppCards(): Promise<ReviewAppCard[]> {
   ].sort((left, right) => left.appName.localeCompare(right.appName));
 }
 
-export async function getReviewAppCardsPage(options: PaginationQuery & {
-  canAccess?: (app: ReviewAppCardScope) => boolean;
-  platform?: string;
-  search?: string;
-  storeProfileId?: string;
-}) {
+export async function getReviewAppCardsPage(
+  options: PaginationQuery & {
+    canAccess?: (app: ReviewAppCardScope) => boolean;
+    platform?: string;
+    search?: string;
+    storeProfileId?: string;
+  },
+) {
   const platform =
     options.platform === "android" || options.platform === "ios"
       ? options.platform
@@ -703,11 +732,13 @@ export async function getReviewAppCardsPage(options: PaginationQuery & {
   };
 }
 
-export async function getPaginatedReviewAppCards(options: PaginationQuery & {
-  platform?: string;
-  search?: string;
-  storeProfileId?: string;
-}) {
+export async function getPaginatedReviewAppCards(
+  options: PaginationQuery & {
+    platform?: string;
+    search?: string;
+    storeProfileId?: string;
+  },
+) {
   const platform =
     options.platform === "android" || options.platform === "ios"
       ? options.platform
@@ -769,11 +800,10 @@ export function filterReviewAppCards<T extends ReviewAppCardScope>(
 
   return apps.filter((app) => {
     const matchesPlatform = !platform || app.platform === platform;
-    const matchesSearch = valuesMatchSearch([
-      app.appName,
-      app.identifier,
-      app.storeAccountName,
-    ], search);
+    const matchesSearch = valuesMatchSearch(
+      [app.appName, app.identifier, app.storeAccountName],
+      search,
+    );
     const matchesStore =
       !filters.storeProfileId ||
       filters.storeProfileId === "all" ||
@@ -794,7 +824,9 @@ export function paginateReviewAppCards<T extends ReviewAppCard>(
   );
 }
 
-function androidReviewDto(review: Omit<AndroidStoreReview, "rawReview">): StoreReviewDto {
+function androidReviewDto(
+  review: Omit<AndroidStoreReview, "rawReview">,
+): StoreReviewDto {
   return {
     appVersionCode: review.appVersionCode,
     appVersionName: review.appVersionName,
@@ -820,7 +852,9 @@ function androidReviewDto(review: Omit<AndroidStoreReview, "rawReview">): StoreR
   };
 }
 
-function iosReviewDto(review: Omit<IosStoreReview, "rawReview">): StoreReviewDto {
+function iosReviewDto(
+  review: Omit<IosStoreReview, "rawReview">,
+): StoreReviewDto {
   return {
     appVersionCode: null,
     appVersionName: review.appVersion,
@@ -844,7 +878,9 @@ function iosReviewDto(review: Omit<IosStoreReview, "rawReview">): StoreReviewDto
   };
 }
 
-function syncStateDto(state: ReviewSyncState | null): ReviewSyncStateDto | null {
+function syncStateDto(
+  state: ReviewSyncState | null,
+): ReviewSyncStateDto | null {
   if (!state) return null;
 
   return {
@@ -883,7 +919,9 @@ function fetchRunDto(run: ReviewFetchRun): ReviewFetchRunDto {
   };
 }
 
-function buildRatingBucketsFromGroups(groups: RatingGroup[]): ReviewRatingBucket[] {
+function buildRatingBucketsFromGroups(
+  groups: RatingGroup[],
+): ReviewRatingBucket[] {
   const total = Math.max(
     groups.reduce((sum, group) => sum + group._count._all, 0),
     1,
@@ -995,7 +1033,11 @@ async function getIosReviewAppDetail(
     });
     const [reviews, reviewTotal] = reviewsPage;
     const reviewDtos = reviews.map(iosReviewDto);
-    const paginatedReviews = paginatedResult(reviewDtos, reviewTotal, reviewPagination);
+    const paginatedReviews = paginatedResult(
+      reviewDtos,
+      reviewTotal,
+      reviewPagination,
+    );
 
     return {
       app: minimalReviewAppCard(iosReviewAppScope(mapping)),
@@ -1046,9 +1088,17 @@ async function getIosReviewAppDetail(
     getLatestIosReviewForMapping(mappingId),
   ]);
   const [reviews, reviewTotal] = reviewsPage;
-  const app = iosReviewAppCard(mapping, ratingGroups, replyCountByMapping(replyGroups));
+  const app = iosReviewAppCard(
+    mapping,
+    ratingGroups,
+    replyCountByMapping(replyGroups),
+  );
   const reviewDtos = reviews.map(iosReviewDto);
-  const paginatedReviews = paginatedResult(reviewDtos, reviewTotal, reviewPagination);
+  const paginatedReviews = paginatedResult(
+    reviewDtos,
+    reviewTotal,
+    reviewPagination,
+  );
 
   return {
     app,
@@ -1083,7 +1133,11 @@ async function getIosReviewAppDetail(
     stats: buildReviewStatsFromGroups(
       app,
       ratingGroups,
-      iso(latestReview?.reviewUpdatedAt ?? latestReview?.reviewCreatedAt ?? latestReview?.fetchedAt),
+      iso(
+        latestReview?.reviewUpdatedAt ??
+          latestReview?.reviewCreatedAt ??
+          latestReview?.fetchedAt,
+      ),
     ),
     syncState: syncStateDto(mapping.reviewTarget?.syncState ?? null),
   };
@@ -1125,7 +1179,11 @@ export async function getReviewAppDetail(
     });
     const [reviews, reviewTotal] = reviewsPage;
     const reviewDtos = reviews.map(androidReviewDto);
-    const paginatedReviews = paginatedResult(reviewDtos, reviewTotal, reviewPagination);
+    const paginatedReviews = paginatedResult(
+      reviewDtos,
+      reviewTotal,
+      reviewPagination,
+    );
 
     return {
       app: minimalReviewAppCard(androidReviewAppScope(mapping)),
@@ -1176,14 +1234,22 @@ export async function getReviewAppDetail(
     getLatestAndroidReviewForMapping(mappingId),
   ]);
   const [reviews, reviewTotal] = reviewsPage;
-  const app = reviewAppCard(mapping, ratingGroups, replyCountByMapping(replyGroups));
+  const app = reviewAppCard(
+    mapping,
+    ratingGroups,
+    replyCountByMapping(replyGroups),
+  );
   const reviewDtos = reviews.map(androidReviewDto);
   const stats = buildReviewStatsFromGroups(
     app,
     ratingGroups,
     iso(latestReview?.userCommentUpdatedAt ?? latestReview?.fetchedAt),
   );
-  const paginatedReviews = paginatedResult(reviewDtos, reviewTotal, reviewPagination);
+  const paginatedReviews = paginatedResult(
+    reviewDtos,
+    reviewTotal,
+    reviewPagination,
+  );
 
   return {
     app,
@@ -1244,14 +1310,16 @@ export async function getReplyConfigPageData(): Promise<ReplyConfigBasePageData>
       storeMappingId: app.mappingId,
     })),
   );
-  const templatesByMappingId: ReplyConfigBasePageData["templatesByMappingId"] = {};
+  const templatesByMappingId: ReplyConfigBasePageData["templatesByMappingId"] =
+    {};
 
   for (const app of apps) {
     templatesByMappingId[app.mappingId] = RATINGS.map((rating) =>
       templateDto(
         templates.find(
           (template) =>
-            template.storeMappingId === app.mappingId && template.rating === rating,
+            template.storeMappingId === app.mappingId &&
+            template.rating === rating,
         ) ?? null,
         app.mappingId,
         rating,
@@ -1410,9 +1478,7 @@ function normalizeStoreInfoPayload(payload: SaveReplyStoreInfoPayload) {
   };
 }
 
-export async function saveReplyStoreInfo(
-  payload: SaveReplyStoreInfoPayload,
-) {
+export async function saveReplyStoreInfo(payload: SaveReplyStoreInfoPayload) {
   const normalized = normalizeStoreInfoPayload(payload);
   const store = await updateReviewStoreTargetReplyInfo(
     normalized.platform,
@@ -1486,7 +1552,10 @@ function timestampToDate(value: unknown) {
   const nanos = Number(timestamp.nanos ?? 0);
 
   if (!Number.isFinite(seconds)) return null;
-  return new Date(seconds * 1000 + Math.floor((Number.isFinite(nanos) ? nanos : 0) / 1_000_000));
+  return new Date(
+    seconds * 1000 +
+      Math.floor((Number.isFinite(nanos) ? nanos : 0) / 1_000_000),
+  );
 }
 
 function recordValue(value: unknown) {
@@ -1505,18 +1574,29 @@ function googleErrorText(value: unknown) {
   return "";
 }
 
-function throwGooglePlayReplyError(status: number, body: Record<string, unknown>): never {
+function throwGooglePlayReplyError(
+  status: number,
+  body: Record<string, unknown>,
+): never {
   const error = googleError(body);
   const providerStatus = googleErrorText(error.status);
   const providerCode = googleErrorText(error.code);
 
-  if (status === 404 || providerStatus === "NOT_FOUND" || providerCode === "404") {
+  if (
+    status === 404 ||
+    providerStatus === "NOT_FOUND" ||
+    providerCode === "404"
+  ) {
     throw conflict(
       "Google Play could not find this review ID. The review may have been deleted, removed, or become unavailable to the API.",
     );
   }
 
-  if (status === 403 || providerStatus === "PERMISSION_DENIED" || providerCode === "403") {
+  if (
+    status === 403 ||
+    providerStatus === "PERMISSION_DENIED" ||
+    providerCode === "403"
+  ) {
     throw new ApiError(
       "Google Play credential is not allowed to reply to this review.",
       502,
@@ -1535,12 +1615,17 @@ function throwGooglePlayReplyError(status: number, body: Record<string, unknown>
 async function replyToGooglePlayReview(input: {
   accessToken: string;
   packageName: string;
+  providerContext: StoreProviderEndpointContext;
   replyText: string;
   reviewId: string;
 }) {
-  const url = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(
-    input.packageName,
-  )}/reviews/${encodeURIComponent(input.reviewId)}:reply`;
+  const url = rewriteStoreProviderUrl(
+    "androidPublisher",
+    `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(
+      input.packageName,
+    )}/reviews/${encodeURIComponent(input.reviewId)}:reply`,
+    input.providerContext,
+  );
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -1564,11 +1649,16 @@ async function replyToGooglePlayReview(input: {
 
 async function replyToAppStoreReview(input: {
   jwt: string;
+  providerContext: StoreProviderEndpointContext;
   replyText: string;
   reviewId: string;
 }) {
   const response = await fetch(
-    "https://api.appstoreconnect.apple.com/v1/customerReviewResponses",
+    rewriteStoreProviderUrl(
+      "appStoreConnect",
+      "https://api.appstoreconnect.apple.com/v1/customerReviewResponses",
+      input.providerContext,
+    ),
     {
       method: "POST",
       headers: {
@@ -1637,9 +1727,7 @@ function appleResponseId(body: unknown) {
   return typeof id === "string" && id.trim() ? id : null;
 }
 
-export async function sendAndroidReviewReply(
-  payload: SendReviewReplyPayload,
-) {
+export async function sendAndroidReviewReply(payload: SendReviewReplyPayload) {
   const { reviewId, storeMappingId } = normalizeSendReplyPayload(payload);
   const review = await getAndroidReviewForReply(storeMappingId, reviewId);
   if (!review) throw notFound("Android review was not found.");
@@ -1659,14 +1747,17 @@ export async function sendAndroidReviewReply(
   }
 
   const storeProfile = review.storeMapping.storeProfile;
-  const replyText = renderReplyText(template.replyText, replyTemplateContext({
-    appName: review.storeMapping.appName,
-    authorName: review.authorName,
-    contactEmail: storeProfile.contactEmail,
-    storeName: storeProfile.storeAccountName,
-    supportPhone: storeProfile.supportPhone,
-    websiteUrl: storeProfile.websiteUrl,
-  }));
+  const replyText = renderReplyText(
+    template.replyText,
+    replyTemplateContext({
+      appName: review.storeMapping.appName,
+      authorName: review.authorName,
+      contactEmail: storeProfile.contactEmail,
+      storeName: storeProfile.storeAccountName,
+      supportPhone: storeProfile.supportPhone,
+      websiteUrl: storeProfile.websiteUrl,
+    }),
+  );
   const credential = await getActiveAndroidCredentialForStoreProfile(
     review.storeMapping.storeProfileId,
   );
@@ -1680,10 +1771,22 @@ export async function sendAndroidReviewReply(
     throw badRequest("Android service-account credential is invalid.");
   }
 
-  const accessToken = await googleServiceAccountAccessToken(serviceAccount);
+  const providerContext: StoreProviderEndpointContext = {
+    appIdentifier: review.storeMapping.packageName,
+    packageName: review.storeMapping.packageName,
+    platform: "android",
+    storeAccountName: storeProfile.storeAccountName,
+    storeProfileId: review.storeMapping.storeProfileId,
+  };
+  const accessToken = await googleServiceAccountAccessToken(
+    serviceAccount,
+    undefined,
+    providerContext,
+  );
   const googleResponse = await replyToGooglePlayReview({
     accessToken,
     packageName: review.storeMapping.packageName,
+    providerContext,
     replyText,
     reviewId,
   });
@@ -1711,9 +1814,7 @@ export async function sendAndroidReviewReply(
   };
 }
 
-export async function sendIosReviewReply(
-  payload: SendReviewReplyPayload,
-) {
+export async function sendIosReviewReply(payload: SendReviewReplyPayload) {
   const { reviewId, storeMappingId } = normalizeSendReplyPayload(payload);
   const review = await getIosReviewForReply(storeMappingId, reviewId);
   if (!review) throw notFound("iOS review was not found.");
@@ -1756,8 +1857,17 @@ export async function sendIosReviewReply(
 
   const appleCredential = await resolveAppleAscCredential(credential);
   const jwt = await appleAppStoreConnectToken(appleCredential);
+  const providerContext: StoreProviderEndpointContext = {
+    appId: mapping.appId,
+    appIdentifier: mapping.bundleId,
+    bundleId: mapping.bundleId,
+    platform: "ios",
+    storeAccountName: mapping.storeAccountName,
+    storeProfileId: mapping.storeProfileId,
+  };
   const appleResponse = await replyToAppStoreReview({
     jwt,
+    providerContext,
     replyText,
     reviewId,
   });
@@ -1794,4 +1904,3 @@ export async function getRawReview(mappingId: string, reviewId: string) {
   }
   return getRawIosReview(mappingId, reviewId);
 }
-

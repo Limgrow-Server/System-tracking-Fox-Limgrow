@@ -10,6 +10,10 @@ import {
 
 import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
+  rewriteStoreProviderUrl,
+  type StoreProviderEndpointContext,
+} from "@/lib/server/outbound/store-provider-endpoints";
+import {
   appleAppStoreConnectToken,
   parseAppleRateLimit,
   readAppleJson,
@@ -91,7 +95,12 @@ function isUuid(value: string) {
   );
 }
 
-function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
+function boundedInteger(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(Math.trunc(parsed), min), max);
@@ -159,10 +168,7 @@ function sameTime(left: Date | null, right: Date | null) {
   return (left?.getTime() ?? null) === (right?.getTime() ?? null);
 }
 
-function normalizeDateRange(input: {
-  fromDate: unknown;
-  toDate: unknown;
-}) {
+function normalizeDateRange(input: { fromDate: unknown; toDate: unknown }) {
   const from = parseIsoDate(input.fromDate);
   const to = parseIsoDate(input.toDate);
 
@@ -209,7 +215,7 @@ function responseForReview(
   const responseRelationship = objectValue(relationships?.response);
   const responseData = objectValue(responseRelationship?.data);
   const responseId = stringValue(responseData?.id);
-  return responseId ? responses.get(responseId) ?? null : null;
+  return responseId ? (responses.get(responseId) ?? null) : null;
 }
 
 function normalizeReview(
@@ -264,7 +270,10 @@ function reviewChanged(
 
   return (
     !sameTime(review.row.reviewUpdatedAt, existing.reviewUpdatedAt) ||
-    !sameTime(review.developerReplyUpdatedAt, existing.developerReplyUpdatedAt) ||
+    !sameTime(
+      review.developerReplyUpdatedAt,
+      existing.developerReplyUpdatedAt,
+    ) ||
     review.row.rating !== existing.rating ||
     review.row.reviewText !== existing.reviewText ||
     review.row.title !== existing.title ||
@@ -298,15 +307,21 @@ async function listAppStoreReviews(input: {
   appStoreId: string;
   maxResults: number;
   nextPageUrl: string;
+  providerContext: StoreProviderEndpointContext;
   token: string;
 }) {
-  const url = input.nextPageUrl
-    ? new URL(input.nextPageUrl)
-    : new URL(
-        `https://api.appstoreconnect.apple.com/v1/apps/${encodeURIComponent(
-          input.appStoreId,
-        )}/customerReviews`,
-      );
+  const originalUrl = input.nextPageUrl
+    ? input.nextPageUrl
+    : `https://api.appstoreconnect.apple.com/v1/apps/${encodeURIComponent(
+        input.appStoreId,
+      )}/customerReviews`;
+  const url = new URL(
+    rewriteStoreProviderUrl(
+      "appStoreConnect",
+      originalUrl,
+      input.providerContext,
+    ),
+  );
 
   if (!input.nextPageUrl) {
     url.searchParams.set("include", "response");
@@ -396,10 +411,7 @@ async function executeIosStoreReviewFetch(
     throw badRequest("iOS app mapping must be active before fetching reviews.");
   }
 
-  const appStoreId = firstAppleAppStoreId(
-    mapping.appleAppId,
-    mapping.appLink,
-  );
+  const appStoreId = firstAppleAppStoreId(mapping.appleAppId, mapping.appLink);
   if (!appStoreId) {
     throw badRequest(
       "Apple App Store app id or App Store URL is required before fetching iOS reviews.",
@@ -414,6 +426,14 @@ async function executeIosStoreReviewFetch(
     await getActiveIosCredentialForStoreProfile(mapping.storeProfileId),
   );
   const token = await appleAppStoreConnectToken(credential);
+  const providerContext: StoreProviderEndpointContext = {
+    appIdentifier: mapping.bundleId,
+    bundleId: mapping.bundleId,
+    platform: "ios",
+    storeAccountName:
+      mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
+    storeProfileId: mapping.storeProfileId,
+  };
   const startedAt = run?.startedAt ?? new Date();
   const lockedBy = run?.lockedBy ?? crypto.randomUUID();
   let context: FetchRunContext | null = null;
@@ -467,6 +487,7 @@ async function executeIosStoreReviewFetch(
         appStoreId,
         maxResults: normalized.maxResults,
         nextPageUrl: pageUrl,
+        providerContext,
         token,
       });
 
@@ -481,7 +502,9 @@ async function executeIosStoreReviewFetch(
       const normalizedReviews = arrayValue(body.data)
         .map((review) => objectValue(review))
         .filter((review): review is Record<string, unknown> => Boolean(review))
-        .map((review) => normalizeReview(review, mapping.id, fetchedAt, responses))
+        .map((review) =>
+          normalizeReview(review, mapping.id, fetchedAt, responses),
+        )
         .filter((review): review is NormalizedIosReview => Boolean(review));
       const matchingReviews = normalizedReviews.filter((review) =>
         reviewMatchesDateRange(review, normalized.dateRange),

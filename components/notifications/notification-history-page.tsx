@@ -84,6 +84,7 @@ type HistoryJobsResponse = {
 
 type HistoryEventsResponse = {
   data?: NotificationEvent[];
+  deviceTokens?: DeviceToken[];
   error?: string;
   notificationEvents?: NotificationEvent[];
   notificationJobs?: NotificationJob[];
@@ -125,7 +126,7 @@ function tokenForEvent(
   tokensById: Map<string, DeviceToken>,
   tokensByDeviceId: Map<string, DeviceToken[]>
 ) {
-  const tokenId = metadataString(event, "deviceTokenId");
+  const tokenId = event.device_token_id ?? metadataString(event, "deviceTokenId");
   if (tokenId) {
     const token = tokensById.get(tokenId);
     if (token) return token;
@@ -383,6 +384,7 @@ export function NotificationHistoryPage({
   const [notificationEvents, setNotificationEvents] = useState(
     data.notificationEvents,
   );
+  const [deviceTokens, setDeviceTokens] = useState(data.deviceTokens);
   const [deliveryEvents, setDeliveryEvents] = useState(
     data.notificationDeliveryEvents.length
       ? data.notificationDeliveryEvents
@@ -435,16 +437,16 @@ export function NotificationHistoryPage({
   const historyDetailControlAction = historyDetailJob && canManageNotifications
     ? notificationJobControlAction(historyDetailJob)
     : null;
-  const deviceTokensById = useMemo(() => new Map(data.deviceTokens.map((token) => [token.id, token])), [data.deviceTokens]);
+  const deviceTokensById = useMemo(() => new Map(deviceTokens.map((token) => [token.id, token])), [deviceTokens]);
   const deviceTokensByDeviceId = useMemo(() => {
     const byDeviceId = new Map<string, DeviceToken[]>();
-    data.deviceTokens.forEach((token) => {
+    deviceTokens.forEach((token) => {
       const current = byDeviceId.get(token.device_id) ?? [];
       current.push(token);
       byDeviceId.set(token.device_id, current);
     });
     return byDeviceId;
-  }, [data.deviceTokens]);
+  }, [deviceTokens]);
   const historyContentRows = useMemo(
     () => historyDetailJob
       ? localePayloadForRows(localeRowsFromPayload(historyDetailJob.locale_payload, historyDetailJob.title ?? "", historyDetailJob.message ?? ""))
@@ -472,7 +474,7 @@ export function NotificationHistoryPage({
         event,
         events: [event],
         fcmErrorCode: metadataString(event, "fcmErrorCode"),
-        fcmToken: metadataString(event, "fcmToken") ?? token?.fcm_token ?? null,
+        fcmToken: (metadataString(event, "fcmToken") ?? token?.fcm_token) || null,
         invalidToken: metadata.invalidToken === true,
         metadata,
         status: eventDeliveryStatus(event),
@@ -559,6 +561,7 @@ export function NotificationHistoryPage({
       }
 
       setDeliveryEvents(payload.data);
+      if (payload.deviceTokens) setDeviceTokens(payload.deviceTokens);
       if (payload.notificationEvents) setNotificationEvents(payload.notificationEvents);
       if (payload.notificationJobs) setNotificationJobs(payload.notificationJobs);
       setDeliveryPagination({
