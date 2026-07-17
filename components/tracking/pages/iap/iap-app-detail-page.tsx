@@ -13,6 +13,7 @@ import {
   ChevronRight,
   CreditCard,
   FileJson,
+  RotateCcw,
   Smartphone,
   X,
 } from "lucide-react";
@@ -116,6 +117,15 @@ type IapTransactionReceiptResponse = {
   success?: boolean;
   error?: string;
   rawReceipt?: unknown;
+};
+
+type IapTwoHourRetryResponse = {
+  check?: {
+    error?: string;
+    status: string;
+  } | null;
+  error?: string;
+  ok?: boolean;
 };
 
 const IAP_TRANSACTION_SKELETON_COUNT = 8;
@@ -511,7 +521,8 @@ function twoHourCheckStatusBadge(
     return {
       className: "border-rose-200 bg-rose-50 text-rose-700",
       label: "Failed",
-      title: check.last_error ?? "2-hour check failed before provider delivery.",
+      title:
+        check.last_error ?? "2-hour check failed before provider delivery.",
     };
   }
 
@@ -626,6 +637,10 @@ function providerColumnStatusBadge(
     "No data",
     `${providerLabel} delivery status was not recorded for this check.`,
   );
+}
+
+function canRetryTwoHourCheck(check: IosIapTwoHourCheck | null) {
+  return Boolean(check && ["failed", "retrying"].includes(check.status));
 }
 
 function sourceMeta(source: string | null) {
@@ -1055,6 +1070,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
   const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
+  const [twoHourRetryingId, setTwoHourRetryingId] = useState<string | null>(
+    null,
+  );
   const latestViewRef = useRef({
     filterAdjustStatus: data.filters.adjustStatus,
     filterEnvironment: data.filters.environment,
@@ -1425,6 +1443,45 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       );
     } finally {
       setReceiptLoadingId(null);
+    }
+  }
+
+  async function retryTwoHourDelivery(check: IosIapTwoHourCheck) {
+    setTwoHourRetryingId(check.transaction_id);
+
+    try {
+      const response = await fetch("/api/admin/iap/two-hour-retry", {
+        body: JSON.stringify({
+          mappingId: app.mappingId,
+          transactionId: check.transaction_id,
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      });
+      const payload = (await response.json()) as IapTwoHourRetryResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "Retry IAP 2-hour delivery failed.");
+      }
+
+      if (payload.check?.status === "sent") {
+        void showToast("success", "2-hour delivery sent successfully.");
+      } else {
+        void showToast(
+          "warning",
+          payload.check?.error ?? "Retry completed with a delivery error.",
+        );
+      }
+      await loadTransactionsPage(transactionPagination.page);
+    } catch (error) {
+      void showToast(
+        "error",
+        error instanceof Error
+          ? error.message
+          : "Retry IAP 2-hour delivery failed.",
+      );
+    } finally {
+      setTwoHourRetryingId(null);
     }
   }
 
@@ -2007,7 +2064,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   </button>
                 </th>
                 <th className="px-4 py-3">Purchase time</th>
-                <th className="px-4 py-3">Receipt</th>
+                <th className="min-w-[168px] px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y border-b bg-background">
@@ -2236,23 +2293,60 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             </div>
                           ) : null}
                         </td>
-                        <td className="px-4 py-3.5">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1.5 px-2.5"
-                            disabled={receiptLoadingId === tx.id}
-                            onClick={() => void inspectTransactionReceipt(tx)}
-                          >
-                            {receiptLoadingId === tx.id ? (
-                              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                            ) : (
-                              <FileJson size={13} />
-                            )}
-                            <span>
-                              {receiptLoadingId === tx.id ? "Loading" : "JSON"}
-                            </span>
-                          </Button>
+                        <td className="min-w-[168px] px-4 py-3.5">
+                          <div className="flex items-center gap-2">
+                            {isIos && canRetryTwoHourCheck(twoHourCheck) ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 gap-1.5 px-2.5"
+                                disabled={
+                                  twoHourRetryingId ===
+                                  twoHourCheck?.transaction_id
+                                }
+                                title="Retry failed Firebase or Adjust delivery now"
+                                onClick={() =>
+                                  twoHourCheck
+                                    ? void retryTwoHourDelivery(twoHourCheck)
+                                    : undefined
+                                }
+                              >
+                                <RotateCcw
+                                  size={13}
+                                  className={
+                                    twoHourRetryingId ===
+                                    twoHourCheck?.transaction_id
+                                      ? "animate-spin"
+                                      : undefined
+                                  }
+                                />
+                                <span>
+                                  {twoHourRetryingId ===
+                                  twoHourCheck?.transaction_id
+                                    ? "Retrying"
+                                    : "Retry"}
+                                </span>
+                              </Button>
+                            ) : null}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 gap-1.5 px-2.5"
+                              disabled={receiptLoadingId === tx.id}
+                              onClick={() => void inspectTransactionReceipt(tx)}
+                            >
+                              {receiptLoadingId === tx.id ? (
+                                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                              ) : (
+                                <FileJson size={13} />
+                              )}
+                              <span>
+                                {receiptLoadingId === tx.id
+                                  ? "Loading"
+                                  : "JSON"}
+                              </span>
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );
