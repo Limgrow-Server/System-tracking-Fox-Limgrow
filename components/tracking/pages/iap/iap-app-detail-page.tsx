@@ -13,6 +13,7 @@ import {
   ChevronRight,
   CreditCard,
   FileJson,
+  RotateCcw,
   Smartphone,
   X,
 } from "lucide-react";
@@ -118,8 +119,50 @@ type IapTransactionReceiptResponse = {
   rawReceipt?: unknown;
 };
 
+type IapTwoHourRetryResponse = {
+  check?: {
+    error?: string;
+    status: string;
+  } | null;
+  error?: string;
+  ok?: boolean;
+};
+
 const IAP_TRANSACTION_SKELETON_COUNT = 8;
 const IAP_REALTIME_REFRESH_DELAY_MS = 650;
+const IAP_TWO_HOUR_FILTER_OPTIONS = [
+  { label: "All 2h", value: "all" },
+  { label: "2h Passed", value: "passed" },
+  { label: "2h Cancelled", value: "cancelled" },
+  { label: "2h Checked", value: "checked" },
+  { label: "2h Failed", value: "failed" },
+  { label: "2h Checking", value: "processing" },
+  { label: "2h Retrying", value: "retrying" },
+  { label: "2h Pending", value: "pending" },
+  { label: "No 2h row", value: "not_scheduled" },
+  { label: "Not applicable", value: "not_applicable" },
+];
+const IAP_FIREBASE_FILTER_OPTIONS = [
+  { label: "All Firebase", value: "all" },
+  { label: "Firebase Sent", value: "sent" },
+  { label: "Firebase Failed", value: "failed" },
+  { label: "Firebase Retrying", value: "retrying" },
+  { label: "Firebase Pending", value: "pending" },
+  { label: "Firebase Not sent", value: "not_sent" },
+  { label: "Firebase No row", value: "not_scheduled" },
+  { label: "Firebase No data", value: "no_data" },
+];
+const IAP_ADJUST_FILTER_OPTIONS = [
+  { label: "All Adjust", value: "all" },
+  { label: "Adjust Sent", value: "sent" },
+  { label: "Adjust Skipped", value: "skipped" },
+  { label: "Adjust Failed", value: "failed" },
+  { label: "Adjust Retrying", value: "retrying" },
+  { label: "Adjust Pending", value: "pending" },
+  { label: "Adjust Not sent", value: "not_sent" },
+  { label: "Adjust No row", value: "not_scheduled" },
+  { label: "Adjust No data", value: "no_data" },
+];
 
 function formatRevenue(
   micros: number | string | null,
@@ -478,7 +521,8 @@ function twoHourCheckStatusBadge(
     return {
       className: "border-rose-200 bg-rose-50 text-rose-700",
       label: "Failed",
-      title: check.last_error ?? "2-hour check failed before provider delivery.",
+      title:
+        check.last_error ?? "2-hour check failed before provider delivery.",
     };
   }
 
@@ -593,6 +637,10 @@ function providerColumnStatusBadge(
     "No data",
     `${providerLabel} delivery status was not recorded for this check.`,
   );
+}
+
+function canRetryTwoHourCheck(check: IosIapTwoHourCheck | null) {
+  return Boolean(check && ["failed", "retrying"].includes(check.status));
 }
 
 function sourceMeta(source: string | null) {
@@ -993,8 +1041,17 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [filterEnvironment, setFilterEnvironment] = useState<string>(
     data.filters.environment,
   );
+  const [filterAdjustStatus, setFilterAdjustStatus] = useState<string>(
+    data.filters.adjustStatus,
+  );
+  const [filterFirebaseStatus, setFilterFirebaseStatus] = useState<string>(
+    data.filters.firebaseStatus,
+  );
   const [filterState, setFilterState] = useState<string>(data.filters.state);
   const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
+  const [filterTwoHourStatus, setFilterTwoHourStatus] = useState<string>(
+    data.filters.twoHourStatus,
+  );
   const [filterTrial, setFilterTrial] = useState<string>(data.filters.trial);
   const [filterPurchaseDateFrom, setFilterPurchaseDateFrom] = useState<string>(
     data.filters.purchaseDateFrom,
@@ -1013,12 +1070,18 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
   const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
+  const [twoHourRetryingId, setTwoHourRetryingId] = useState<string | null>(
+    null,
+  );
   const latestViewRef = useRef({
+    filterAdjustStatus: data.filters.adjustStatus,
     filterEnvironment: data.filters.environment,
+    filterFirebaseStatus: data.filters.firebaseStatus,
     filterKind: data.filters.kind,
     filterPurchaseDateFrom: data.filters.purchaseDateFrom,
     filterPurchaseDateTo: data.filters.purchaseDateTo,
     filterState: data.filters.state,
+    filterTwoHourStatus: data.filters.twoHourStatus,
     filterTrial: data.filters.trial,
     page: data.transactionPagination.page,
     revenueGranularity: data.filters.revenueGranularity,
@@ -1033,11 +1096,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   async function loadTransactionsPage(
     page: number,
     overrides?: {
+      filterAdjustStatus?: string;
       filterEnvironment?: string;
+      filterFirebaseStatus?: string;
       filterKind?: string;
       filterPurchaseDateFrom?: string;
       filterPurchaseDateTo?: string;
       filterState?: string;
+      filterTwoHourStatus?: string;
       filterTrial?: string;
       revenueGranularity?: IapRevenueGranularity;
       revenueSort?: string;
@@ -1046,10 +1112,16 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       silent?: boolean;
     },
   ) {
+    const nextFilterAdjustStatus =
+      overrides?.filterAdjustStatus ?? filterAdjustStatus;
     const nextFilterEnvironment =
       overrides?.filterEnvironment ?? filterEnvironment;
+    const nextFilterFirebaseStatus =
+      overrides?.filterFirebaseStatus ?? filterFirebaseStatus;
     const nextFilterState = overrides?.filterState ?? filterState;
     const nextFilterKind = overrides?.filterKind ?? filterKind;
+    const nextFilterTwoHourStatus =
+      overrides?.filterTwoHourStatus ?? filterTwoHourStatus;
     const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
     const nextFilterPurchaseDateFrom =
       overrides?.filterPurchaseDateFrom ?? filterPurchaseDateFrom;
@@ -1073,6 +1145,15 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
     if (isIos && nextFilterTrial !== "all") {
       params.set("trial", nextFilterTrial);
+    }
+    if (isIos && nextFilterTwoHourStatus !== "all") {
+      params.set("twoHourStatus", nextFilterTwoHourStatus);
+    }
+    if (isIos && nextFilterFirebaseStatus !== "all") {
+      params.set("firebaseStatus", nextFilterFirebaseStatus);
+    }
+    if (isIos && nextFilterAdjustStatus !== "all") {
+      params.set("adjustStatus", nextFilterAdjustStatus);
     }
     if (nextFilterPurchaseDateFrom) {
       params.set("purchaseDateFrom", nextFilterPurchaseDateFrom);
@@ -1365,24 +1446,69 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     }
   }
 
+  async function retryTwoHourDelivery(check: IosIapTwoHourCheck) {
+    setTwoHourRetryingId(check.transaction_id);
+
+    try {
+      const response = await fetch("/api/admin/iap/two-hour-retry", {
+        body: JSON.stringify({
+          mappingId: app.mappingId,
+          transactionId: check.transaction_id,
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      });
+      const payload = (await response.json()) as IapTwoHourRetryResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "Retry IAP 2-hour delivery failed.");
+      }
+
+      if (payload.check?.status === "sent") {
+        void showToast("success", "2-hour delivery sent successfully.");
+      } else {
+        void showToast(
+          "warning",
+          payload.check?.error ?? "Retry completed with a delivery error.",
+        );
+      }
+      await loadTransactionsPage(transactionPagination.page);
+    } catch (error) {
+      void showToast(
+        "error",
+        error instanceof Error
+          ? error.message
+          : "Retry IAP 2-hour delivery failed.",
+      );
+    } finally {
+      setTwoHourRetryingId(null);
+    }
+  }
+
   useEffect(() => {
     latestViewRef.current = {
+      filterAdjustStatus,
       filterEnvironment,
+      filterFirebaseStatus,
       filterKind,
       filterPurchaseDateFrom,
       filterPurchaseDateTo,
       filterState,
+      filterTwoHourStatus,
       filterTrial,
       page: transactionPagination.page,
       revenueGranularity,
       revenueSort,
     };
   }, [
+    filterAdjustStatus,
     filterEnvironment,
+    filterFirebaseStatus,
     filterKind,
     filterPurchaseDateFrom,
     filterPurchaseDateTo,
     filterState,
+    filterTwoHourStatus,
     filterTrial,
     revenueGranularity,
     revenueSort,
@@ -1406,10 +1532,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           latest.page,
           {
             filterEnvironment: latest.filterEnvironment,
+            filterAdjustStatus: latest.filterAdjustStatus,
+            filterFirebaseStatus: latest.filterFirebaseStatus,
             filterKind: latest.filterKind,
             filterPurchaseDateFrom: latest.filterPurchaseDateFrom,
             filterPurchaseDateTo: latest.filterPurchaseDateTo,
             filterState: latest.filterState,
+            filterTwoHourStatus: latest.filterTwoHourStatus,
             filterTrial: latest.filterTrial,
             revenueGranularity: latest.revenueGranularity,
             revenueSort: latest.revenueSort,
@@ -1577,6 +1706,44 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       currency: "VND",
     }).format(n);
   const fmtNum = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
+  const defaultPurchaseDate = dateInputValue(new Date());
+  const hasCustomPurchaseDate =
+    filterPurchaseDateFrom !== defaultPurchaseDate ||
+    filterPurchaseDateTo !== defaultPurchaseDate;
+  const hasActiveTransactionFilters =
+    hasCustomPurchaseDate ||
+    filterState !== "all" ||
+    (isTestApp && filterEnvironment !== "production") ||
+    (!isIos && filterKind !== "all") ||
+    (isIos &&
+      (filterTrial !== "all" ||
+        filterTwoHourStatus !== "all" ||
+        filterFirebaseStatus !== "all" ||
+        filterAdjustStatus !== "all"));
+
+  function resetTransactionFilters() {
+    setFilterEnvironment("production");
+    setFilterKind("all");
+    setFilterTrial("all");
+    setFilterState("all");
+    setFilterTwoHourStatus("all");
+    setFilterFirebaseStatus("all");
+    setFilterAdjustStatus("all");
+    setFilterPurchaseDateFrom(defaultPurchaseDate);
+    setFilterPurchaseDateTo(defaultPurchaseDate);
+    void loadTransactionsPage(1, {
+      filterAdjustStatus: "all",
+      filterEnvironment: "production",
+      filterFirebaseStatus: "all",
+      filterKind: "all",
+      filterPurchaseDateFrom: defaultPurchaseDate,
+      filterPurchaseDateTo: defaultPurchaseDate,
+      filterState: "all",
+      filterTwoHourStatus: "all",
+      filterTrial: "all",
+    });
+  }
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-muted/10 p-4 sm:p-6 gap-6">
       {/* Breadcrumb */}
@@ -1787,6 +1954,78 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 ))}
               </SelectContent>
             </Select>
+            {isIos ? (
+              <>
+                <Select
+                  value={filterTwoHourStatus}
+                  onValueChange={(v) => {
+                    setFilterTwoHourStatus(v);
+                    void loadTransactionsPage(1, { filterTwoHourStatus: v });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[150px]">
+                    <SelectValue placeholder="2h Check" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_TWO_HOUR_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filterFirebaseStatus}
+                  onValueChange={(v) => {
+                    setFilterFirebaseStatus(v);
+                    void loadTransactionsPage(1, {
+                      filterFirebaseStatus: v,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[165px]">
+                    <SelectValue placeholder="Firebase" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_FIREBASE_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filterAdjustStatus}
+                  onValueChange={(v) => {
+                    setFilterAdjustStatus(v);
+                    void loadTransactionsPage(1, { filterAdjustStatus: v });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[155px]">
+                    <SelectValue placeholder="Adjust" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_ADJUST_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            ) : null}
+            {hasActiveTransactionFilters ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 bg-background px-2.5"
+                onClick={resetTransactionFilters}
+              >
+                <X size={13} />
+                Reset
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -1797,9 +2036,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 <th className="px-4 py-3">Transaction / Order</th>
                 <th className="px-4 py-3">Product Info</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">2h Check</th>
-                <th className="px-4 py-3">Firebase</th>
-                <th className="px-4 py-3">Adjust</th>
+                {isIos ? (
+                  <>
+                    <th className="px-4 py-3">2h Check</th>
+                    <th className="px-4 py-3">Firebase</th>
+                    <th className="px-4 py-3">Adjust</th>
+                  </>
+                ) : null}
                 <th className="px-4 py-3">
                   <button
                     type="button"
@@ -1821,7 +2064,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   </button>
                 </th>
                 <th className="px-4 py-3">Purchase time</th>
-                <th className="px-4 py-3">Receipt</th>
+                <th className="min-w-[168px] px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y border-b bg-background">
@@ -1840,15 +2083,19 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                         <td className="px-4 py-3.5">
                           <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
                         </td>
-                        <td className="px-4 py-3.5">
-                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                        </td>
+                        {isIos ? (
+                          <>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                          </>
+                        ) : null}
                         <td className="px-4 py-3.5">
                           <div className="h-4 w-24 animate-pulse rounded bg-muted" />
                         </td>
@@ -1995,30 +2242,34 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-4 py-3.5">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourStatus.className}`}
-                            title={twoHourStatus.title}
-                          >
-                            {twoHourStatus.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${firebaseStatus.className}`}
-                            title={firebaseStatus.title}
-                          >
-                            {firebaseStatus.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${adjustStatus.className}`}
-                            title={adjustStatus.title}
-                          >
-                            {adjustStatus.label}
-                          </span>
-                        </td>
+                        {isIos ? (
+                          <>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourStatus.className}`}
+                                title={twoHourStatus.title}
+                              >
+                                {twoHourStatus.label}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${firebaseStatus.className}`}
+                                title={firebaseStatus.title}
+                              >
+                                {firebaseStatus.label}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${adjustStatus.className}`}
+                                title={adjustStatus.title}
+                              >
+                                {adjustStatus.label}
+                              </span>
+                            </td>
+                          </>
+                        ) : null}
                         <td className="px-4 py-3.5">
                           <div className="font-semibold">
                             {formatRevenue(revenue, currency)}
@@ -2042,30 +2293,67 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             </div>
                           ) : null}
                         </td>
-                        <td className="px-4 py-3.5">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1.5 px-2.5"
-                            disabled={receiptLoadingId === tx.id}
-                            onClick={() => void inspectTransactionReceipt(tx)}
-                          >
-                            {receiptLoadingId === tx.id ? (
-                              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                            ) : (
-                              <FileJson size={13} />
-                            )}
-                            <span>
-                              {receiptLoadingId === tx.id ? "Loading" : "JSON"}
-                            </span>
-                          </Button>
+                        <td className="min-w-[168px] px-4 py-3.5">
+                          <div className="flex items-center gap-2">
+                            {isIos && canRetryTwoHourCheck(twoHourCheck) ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 gap-1.5 px-2.5"
+                                disabled={
+                                  twoHourRetryingId ===
+                                  twoHourCheck?.transaction_id
+                                }
+                                title="Retry failed Firebase or Adjust delivery now"
+                                onClick={() =>
+                                  twoHourCheck
+                                    ? void retryTwoHourDelivery(twoHourCheck)
+                                    : undefined
+                                }
+                              >
+                                <RotateCcw
+                                  size={13}
+                                  className={
+                                    twoHourRetryingId ===
+                                    twoHourCheck?.transaction_id
+                                      ? "animate-spin"
+                                      : undefined
+                                  }
+                                />
+                                <span>
+                                  {twoHourRetryingId ===
+                                  twoHourCheck?.transaction_id
+                                    ? "Retrying"
+                                    : "Retry"}
+                                </span>
+                              </Button>
+                            ) : null}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 gap-1.5 px-2.5"
+                              disabled={receiptLoadingId === tx.id}
+                              onClick={() => void inspectTransactionReceipt(tx)}
+                            >
+                              {receiptLoadingId === tx.id ? (
+                                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                              ) : (
+                                <FileJson size={13} />
+                              )}
+                              <span>
+                                {receiptLoadingId === tx.id
+                                  ? "Loading"
+                                  : "JSON"}
+                              </span>
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );
                   })}
               {!tableLoading && !visible.length && (
                 <TableEmptyState
-                  colSpan={9}
+                  colSpan={isIos ? 9 : 6}
                   icon={CreditCard}
                   title="No transactions found"
                   description="Try changing your filters."

@@ -17,10 +17,8 @@ import {
   getIosMappingById,
   getIosTransactionStatesByBundleId,
   getIosTransactionsByBundleIdMetrics,
-  getIosTransactionsByBundleIdPage,
   getIosTransactionsListPageByMappingId,
 } from "@/lib/server/repositories/iap/iap-app.repository";
-import { getIosIapTwoHourChecksForTransactions } from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
 import {
   paginatedResult,
   type PaginatedResult,
@@ -228,7 +226,9 @@ export async function getPaginatedIapAppCards(
 }
 
 type IapTransactionPageOptions = PaginationQuery & {
+  adjustStatus?: string;
   environment?: string;
+  firebaseStatus?: string;
   includeContext?: boolean;
   knownTotal?: number;
   kind?: string;
@@ -237,6 +237,7 @@ type IapTransactionPageOptions = PaginationQuery & {
   revenueGranularity?: string;
   revenueSort?: string;
   state?: string;
+  twoHourStatus?: string;
   trial?: string;
 };
 
@@ -266,17 +267,6 @@ function emptyIapAppMetrics(): IapAppMetrics {
     totalCount: 0,
     totalRevenue: 0,
   };
-}
-
-async function getIosTwoHourChecksForVisibleTransactions(
-  transactions: Array<{ transactionId: string }>,
-) {
-  const transactionIds = transactions
-    .map((transaction) => transaction.transactionId)
-    .filter(Boolean);
-  const checks = await getIosIapTwoHourChecksForTransactions(transactionIds);
-
-  return checks.map(iosIapTwoHourCheckToTracking);
 }
 
 export async function getIapAppTransactionsPage(
@@ -423,16 +413,16 @@ export async function getIapAppTransactionsPage(
     };
 
     const loadTransactionPage = () =>
-      getIosTransactionsByBundleIdPage(
-        mapping.bundleId,
-        mapping.storeProfileId,
-        {
-          ...scopedOptions,
-          includeTotal: includeContext || options.knownTotal === undefined,
-        },
-      );
+      getIosTransactionsListPageByMappingId(mappingId, {
+        ...scopedOptions,
+        includeTotal: includeContext || options.knownTotal === undefined,
+      });
 
-    const [[rawTransactions, total], metrics, transactionStates] =
+    const [
+      { total, transactions: rawTransactions, twoHourChecks },
+      metrics,
+      transactionStates,
+    ] =
       await Promise.all([
         loadTransactionPage(),
         getIosTransactionsByBundleIdMetrics(
@@ -458,8 +448,7 @@ export async function getIapAppTransactionsPage(
         total ?? 0,
         options,
       ),
-      twoHourChecks:
-        await getIosTwoHourChecksForVisibleTransactions(rawTransactions),
+      twoHourChecks: twoHourChecks.map(iosIapTwoHourCheckToTracking),
     };
   }
 
@@ -518,12 +507,15 @@ export async function getIapAppDetail(
     environment?: string;
     includeContext?: boolean;
     includeTrialAnalytics?: boolean;
+    adjustStatus?: string;
+    firebaseStatus?: string;
     kind?: string;
     purchaseDateFrom?: string;
     purchaseDateTo?: string;
     revenueGranularity?: IapRevenueGranularity;
     revenueSort?: string;
     state?: string;
+    twoHourStatus?: string;
     trial?: string;
   },
 ): Promise<{
@@ -675,11 +667,7 @@ export async function getIapAppDetail(
     };
 
     const loadTransactionPage = () =>
-      getIosTransactionsByBundleIdPage(
-        mapping.bundleId,
-        mapping.storeProfileId,
-        scopedOptions,
-      );
+      getIosTransactionsListPageByMappingId(mappingId, scopedOptions);
 
     const trialAnalyticsPromise =
       options.includeTrialAnalytics === false
@@ -689,7 +677,11 @@ export async function getIapAppDetail(
             mapping.storeProfileId,
           );
     const [
-      [rawTransactions, total],
+      {
+        total,
+        transactions: rawTransactions,
+        twoHourChecks,
+      },
       metrics,
       transactionStates,
       trialAnalytics,
@@ -720,8 +712,7 @@ export async function getIapAppDetail(
         total ?? 0,
         options,
       ),
-      twoHourChecks:
-        await getIosTwoHourChecksForVisibleTransactions(rawTransactions),
+      twoHourChecks: twoHourChecks.map(iosIapTwoHourCheckToTracking),
     };
   }
 

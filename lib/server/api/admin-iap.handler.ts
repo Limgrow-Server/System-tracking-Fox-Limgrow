@@ -94,7 +94,9 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
 
     const detail = await getIapAppTransactionsPage(mappingId, platform, {
       ...pagination,
+      adjustStatus: clean(url.searchParams.get("adjustStatus")) || "all",
       environment: clean(url.searchParams.get("environment")) || "production",
+      firebaseStatus: clean(url.searchParams.get("firebaseStatus")) || "all",
       includeContext: clean(url.searchParams.get("context")) !== "false",
       knownTotal: optionalPositiveInt(url.searchParams.get("knownTotal")),
       kind: clean(url.searchParams.get("kind")) || "all",
@@ -103,6 +105,7 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
       revenueGranularity: clean(url.searchParams.get("revenueGranularity")),
       revenueSort: clean(url.searchParams.get("revenueSort")),
       state: clean(url.searchParams.get("state")) || "all",
+      twoHourStatus: clean(url.searchParams.get("twoHourStatus")) || "all",
       trial: clean(url.searchParams.get("trial")) || "all",
     });
 

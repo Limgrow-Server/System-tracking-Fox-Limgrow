@@ -11,7 +11,9 @@ import type {
 const IAP_TRANSACTION_PAGE_SIZE = 10;
 
 type IapAppDetailOptions = {
+  adjustStatus?: string;
   environment?: string;
+  firebaseStatus?: string;
   kind?: string;
   page?: number;
   purchaseDateFrom?: string;
@@ -19,6 +21,7 @@ type IapAppDetailOptions = {
   revenueGranularity?: string;
   revenueSort?: string;
   state?: string;
+  twoHourStatus?: string;
   trial?: string;
 };
 
@@ -37,6 +40,22 @@ function revenueGranularity(value: string | undefined): IapRevenueGranularity {
     : "month";
 }
 
+function todayInputDate(timeZone = "Asia/Ho_Chi_Minh") {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone,
+    year: "numeric",
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 export async function getIapAppDetailPageData(
   mappingId: string,
   platform: string,
@@ -44,11 +63,14 @@ export async function getIapAppDetailPageData(
   options?: IapAppDetailOptions,
 ): Promise<IapAppDetailPageData | null> {
   const page = pageNumber(options?.page);
+  const adjustStatus = clean(options?.adjustStatus) || "all";
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
   const environment = clean(options?.environment) || "production";
-  const purchaseDateFrom = clean(options?.purchaseDateFrom);
-  const purchaseDateTo = clean(options?.purchaseDateTo);
+  const firebaseStatus = clean(options?.firebaseStatus) || "all";
+  const defaultPurchaseDate = todayInputDate();
+  const purchaseDateFrom = clean(options?.purchaseDateFrom) || defaultPurchaseDate;
+  const purchaseDateTo = clean(options?.purchaseDateTo) || defaultPurchaseDate;
   const selectedRevenueGranularity = revenueGranularity(
     options?.revenueGranularity,
   );
@@ -57,6 +79,7 @@ export async function getIapAppDetailPageData(
     clean(options?.revenueSort) === "desc"
       ? clean(options?.revenueSort)
       : "none";
+  const twoHourStatus = clean(options?.twoHourStatus) || "all";
   const trial = clean(options?.trial) || "all";
   const {
     appCard,
@@ -66,7 +89,9 @@ export async function getIapAppDetailPageData(
     trialAnalytics,
     twoHourChecks,
   } = await getIapAppDetail(mappingId, platform, {
+    adjustStatus,
     environment,
+    firebaseStatus,
     includeContext: false,
     includeTrialAnalytics: false,
     kind,
@@ -79,6 +104,7 @@ export async function getIapAppDetailPageData(
     skip: (page - 1) * IAP_TRANSACTION_PAGE_SIZE,
     state,
     take: IAP_TRANSACTION_PAGE_SIZE,
+    twoHourStatus,
     trial,
   });
   if (!canAccessIapApp(session, appCard)) return null;
@@ -86,13 +112,16 @@ export async function getIapAppDetailPageData(
   return {
     app: appCard,
     filters: {
+      adjustStatus,
       environment,
+      firebaseStatus,
       kind,
       purchaseDateFrom,
       purchaseDateTo,
       revenueGranularity: selectedRevenueGranularity,
       revenueSort,
       state,
+      twoHourStatus,
       trial,
     },
     trialAnalytics,

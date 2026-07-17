@@ -908,7 +908,9 @@ export async function getAndroidTransactionStatesByPackageAndProfile(
 }
 
 type IosTransactionPageOptions = {
+  adjustStatus?: string;
   environment?: string;
+  firebaseStatus?: string;
   includeTotal?: boolean;
   page: number;
   pageSize: number;
@@ -919,6 +921,7 @@ type IosTransactionPageOptions = {
   skip: number;
   state?: string;
   take: number;
+  twoHourStatus?: string;
   trial?: string;
 };
 
@@ -1000,6 +1003,173 @@ function iosFreeTrialWhere(): Prisma.IosIapTransactionWhereInput {
   };
 }
 
+function iosFreeTrialSqlCondition() {
+  return Prisma.sql`(
+    t.is_trial = true
+    OR lower(t.offer_discount_type) = 'free_trial'
+    OR (t.offer_type = 1 AND t.price_milliunits = 0 AND t.revenue_micros = 0)
+  )`;
+}
+
+function iosTwoHourExistsSql(condition: Prisma.Sql = Prisma.sql`true`) {
+  return Prisma.sql`EXISTS (
+    SELECT 1
+    FROM public.ios_iap_two_hour_checks c
+    WHERE c.transaction_id = t.transaction_id
+      AND ${condition}
+  )`;
+}
+
+function iosTwoHourMissingSql() {
+  return Prisma.sql`NOT EXISTS (
+    SELECT 1
+    FROM public.ios_iap_two_hour_checks c
+    WHERE c.transaction_id = t.transaction_id
+  )`;
+}
+
+function providerStatusSql(provider: "adjust" | "ga4") {
+  return Prisma.sql`lower(coalesce(
+    jsonb_extract_path_text(c.raw_context::jsonb, 'delivery', ${provider}, 'status'),
+    jsonb_extract_path_text(c.raw_context::jsonb, ${provider}, 'status'),
+    ''
+  ))`;
+}
+
+function providerResponseStatusSql(
+  provider: "adjust" | "ga4",
+  section: "delivery" | "legacy",
+) {
+  const value =
+    section === "delivery"
+      ? Prisma.sql`jsonb_extract_path_text(c.raw_context::jsonb, 'delivery', ${provider}, 'result', 'responseStatus')`
+      : Prisma.sql`jsonb_extract_path_text(c.raw_context::jsonb, ${provider}, 'responseStatus')`;
+
+  return Prisma.sql`(
+    CASE
+      WHEN ${value} ~ '^[0-9]+$' THEN (${value})::int BETWEEN 200 AND 299
+      ELSE false
+    END
+  )`;
+}
+
+function providerDeliveredSql(provider: "adjust" | "ga4") {
+  return Prisma.sql`(
+    ${providerStatusSql(provider)} = 'delivered'
+    OR ${providerResponseStatusSql(provider, "delivery")}
+    OR ${providerResponseStatusSql(provider, "legacy")}
+    ${
+      provider === "ga4"
+        ? Prisma.sql`OR (c.renewed = true AND c.ga4_sent_at IS NOT NULL)`
+        : Prisma.empty
+    }
+  )`;
+}
+
+function providerSkippedSql(provider: "adjust" | "ga4") {
+  return Prisma.sql`(
+    jsonb_extract_path_text(c.raw_context::jsonb, 'delivery', ${provider}, 'result', 'skipped') = 'true'
+    OR jsonb_extract_path_text(c.raw_context::jsonb, ${provider}, 'result', 'skipped') = 'true'
+    OR jsonb_extract_path_text(c.raw_context::jsonb, ${provider}, 'skipped') = 'true'
+  )`;
+}
+
+function providerRetryingSql(provider: "adjust" | "ga4") {
+  return Prisma.sql`${providerStatusSql(provider)} = 'retryable_error'`;
+}
+
+function providerFailedSql(provider: "adjust" | "ga4") {
+  return Prisma.sql`(
+    ${providerStatusSql(provider)} IN ('failed', 'error', 'validation_failed')
+    OR (
+      ${providerStatusSql(provider)} NOT IN ('delivered', 'retryable_error')
+      AND (
+        nullif(jsonb_extract_path_text(c.raw_context::jsonb, 'delivery', ${provider}, 'message'), '') IS NOT NULL
+        OR nullif(jsonb_extract_path_text(c.raw_context::jsonb, 'delivery', ${provider}, 'result', 'error'), '') IS NOT NULL
+        OR nullif(jsonb_extract_path_text(c.raw_context::jsonb, ${provider}, 'error'), '') IS NOT NULL
+        OR ${
+          provider === "ga4"
+            ? Prisma.sql`coalesce(c.last_error, '') ~* '(ga4|firebase|measurement|api_secret|app_instance)'`
+            : Prisma.sql`coalesce(c.last_error, '') ~* '(adjust|adid|idfa|idfv)'`
+        }
+      )
+    )
+  )`;
+}
+
+function providerNoDataSql(provider: "adjust" | "ga4") {
+  return Prisma.sql`(
+    lower(coalesce(c.status, '')) NOT IN ('pending', 'processing')
+    AND c.renewed IS DISTINCT FROM false
+    AND NOT ${providerDeliveredSql(provider)}
+    AND NOT ${providerSkippedSql(provider)}
+    AND NOT ${providerRetryingSql(provider)}
+    AND NOT ${providerFailedSql(provider)}
+  )`;
+}
+
+function iosTwoHourStatusSql(status: string | undefined) {
+  switch (status?.trim().toLowerCase()) {
+    case "passed":
+      return iosTwoHourExistsSql(
+        Prisma.sql`lower(c.status) = 'sent' AND c.renewed = true`,
+      );
+    case "cancelled":
+      return iosTwoHourExistsSql(
+        Prisma.sql`lower(c.status) = 'sent' AND c.renewed = false`,
+      );
+    case "checked":
+      return iosTwoHourExistsSql(
+        Prisma.sql`lower(c.status) = 'sent' AND c.renewed IS NULL`,
+      );
+    case "failed":
+      return iosTwoHourExistsSql(Prisma.sql`lower(c.status) = 'failed'`);
+    case "processing":
+    case "checking":
+      return iosTwoHourExistsSql(Prisma.sql`lower(c.status) = 'processing'`);
+    case "retrying":
+      return iosTwoHourExistsSql(Prisma.sql`lower(c.status) = 'retrying'`);
+    case "pending":
+      return iosTwoHourExistsSql(Prisma.sql`lower(c.status) = 'pending'`);
+    case "not_scheduled":
+      return Prisma.sql`${iosTwoHourMissingSql()} AND ${iosFreeTrialSqlCondition()}`;
+    case "not_applicable":
+      return Prisma.sql`${iosTwoHourMissingSql()} AND NOT ${iosFreeTrialSqlCondition()}`;
+    default:
+      return null;
+  }
+}
+
+function iosProviderStatusSql(
+  provider: "adjust" | "ga4",
+  status: string | undefined,
+) {
+  switch (status?.trim().toLowerCase()) {
+    case "sent":
+      return iosTwoHourExistsSql(providerDeliveredSql(provider));
+    case "skipped":
+      return iosTwoHourExistsSql(providerSkippedSql(provider));
+    case "failed":
+      return iosTwoHourExistsSql(providerFailedSql(provider));
+    case "retrying":
+      return iosTwoHourExistsSql(
+        Prisma.sql`${providerRetryingSql(provider)} OR lower(c.status) = 'retrying'`,
+      );
+    case "pending":
+      return iosTwoHourExistsSql(
+        Prisma.sql`lower(c.status) IN ('pending', 'processing')`,
+      );
+    case "not_sent":
+      return iosTwoHourExistsSql(Prisma.sql`c.renewed = false`);
+    case "not_scheduled":
+      return Prisma.sql`${iosTwoHourMissingSql()} AND ${iosFreeTrialSqlCondition()}`;
+    case "no_data":
+      return iosTwoHourExistsSql(providerNoDataSql(provider));
+    default:
+      return null;
+  }
+}
+
 function iosTransactionWhere(
   bundleId: string,
   storeProfileId?: string,
@@ -1074,15 +1244,14 @@ function iosTransactionSqlConditions(
   }
   const state = options.state?.trim();
   const trial = options.trial?.trim();
+  const twoHourStatus = iosTwoHourStatusSql(options.twoHourStatus);
+  const firebaseStatus = iosProviderStatusSql("ga4", options.firebaseStatus);
+  const adjustStatus = iosProviderStatusSql("adjust", options.adjustStatus);
   const purchaseDate = purchaseDateRange(
     options.purchaseDateFrom,
     options.purchaseDateTo,
   );
-  const freeTrialCondition = Prisma.sql`(
-    t.is_trial = true
-    OR lower(t.offer_discount_type) = 'free_trial'
-    OR (t.offer_type = 1 AND t.price_milliunits = 0 AND t.revenue_micros = 0)
-  )`;
+  const freeTrialCondition = iosFreeTrialSqlCondition();
 
   if (state && state !== "all") {
     conditions.push(Prisma.sql`lower(t.state) = ${state.toLowerCase()}`);
@@ -1102,6 +1271,18 @@ function iosTransactionSqlConditions(
 
   if (purchaseDate?.end) {
     conditions.push(Prisma.sql`t.purchase_date < ${purchaseDate.end}`);
+  }
+
+  if (twoHourStatus) {
+    conditions.push(twoHourStatus);
+  }
+
+  if (firebaseStatus) {
+    conditions.push(firebaseStatus);
+  }
+
+  if (adjustStatus) {
+    conditions.push(adjustStatus);
   }
 
   return conditions;

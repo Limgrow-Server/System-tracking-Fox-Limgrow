@@ -18,7 +18,9 @@ export default async function IapAppDetailRoutePage({
 }: {
   params: Promise<{ mappingId: string }>;
   searchParams: Promise<{
+    adjustStatus?: string | string[];
     environment?: string | string[];
+    firebaseStatus?: string | string[];
     kind?: string | string[];
     page?: string | string[];
     platform?: string | string[];
@@ -27,6 +29,7 @@ export default async function IapAppDetailRoutePage({
     revenueGranularity?: string | string[];
     revenueSort?: string | string[];
     state?: string | string[];
+    twoHourStatus?: string | string[];
     trial?: string | string[];
   }>;
 }) {
@@ -41,7 +44,9 @@ export default async function IapAppDetailRoutePage({
   }
 
   const data = await getIapAppDetailPageData(mappingId, platform, session, {
+    adjustStatus: single(query.adjustStatus),
     environment: single(query.environment),
+    firebaseStatus: single(query.firebaseStatus),
     kind: single(query.kind),
     page: pageNumber(query.page),
     purchaseDateFrom: single(query.purchaseDateFrom),
@@ -49,6 +54,7 @@ export default async function IapAppDetailRoutePage({
     revenueGranularity: single(query.revenueGranularity),
     revenueSort: single(query.revenueSort),
     state: single(query.state),
+    twoHourStatus: single(query.twoHourStatus),
     trial: single(query.trial),
   });
   if (!data) notFound();

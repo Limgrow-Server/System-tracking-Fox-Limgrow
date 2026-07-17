@@ -2,7 +2,6 @@
 
 import Image from "next/image";
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   LockKeyhole,
@@ -19,7 +18,6 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 
 export function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
@@ -41,11 +39,9 @@ export function LoginPage() {
       }
 
       void showToast("success", payload.message ?? "Signed in.");
-      router.replace("/dashboard");
-      router.refresh();
+      window.location.replace("/dashboard");
     } catch (error) {
       void showToast("error", error instanceof Error ? error.message : "Login failed.");
-    } finally {
       setPending(false);
     }
   }
