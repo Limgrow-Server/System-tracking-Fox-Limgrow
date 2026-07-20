@@ -95,6 +95,8 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
     const detail = await getIapAppTransactionsPage(mappingId, platform, {
       ...pagination,
       adjustStatus: clean(url.searchParams.get("adjustStatus")) || "all",
+      conversionStatus:
+        clean(url.searchParams.get("conversionStatus")) || "all",
       environment: clean(url.searchParams.get("environment")) || "production",
       firebaseStatus: clean(url.searchParams.get("firebaseStatus")) || "all",
       includeContext: clean(url.searchParams.get("context")) !== "false",

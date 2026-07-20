@@ -19,6 +19,7 @@ export default async function IapAppDetailRoutePage({
   params: Promise<{ mappingId: string }>;
   searchParams: Promise<{
     adjustStatus?: string | string[];
+    conversionStatus?: string | string[];
     environment?: string | string[];
     firebaseStatus?: string | string[];
     kind?: string | string[];
@@ -45,6 +46,7 @@ export default async function IapAppDetailRoutePage({
 
   const data = await getIapAppDetailPageData(mappingId, platform, session, {
     adjustStatus: single(query.adjustStatus),
+    conversionStatus: single(query.conversionStatus),
     environment: single(query.environment),
     firebaseStatus: single(query.firebaseStatus),
     kind: single(query.kind),

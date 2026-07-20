@@ -192,6 +192,7 @@ export type IapAppDetailPageData = {
   filters: {
     environment: string;
     adjustStatus: string;
+    conversionStatus: string;
     firebaseStatus: string;
     kind: string;
     purchaseDateFrom: string;

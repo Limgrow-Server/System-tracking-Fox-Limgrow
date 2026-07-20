@@ -909,6 +909,7 @@ export async function getAndroidTransactionStatesByPackageAndProfile(
 
 type IosTransactionPageOptions = {
   adjustStatus?: string;
+  conversionStatus?: string;
   environment?: string;
   firebaseStatus?: string;
   includeTotal?: boolean;
@@ -1011,6 +1012,93 @@ function iosFreeTrialSqlCondition() {
     OR lower(t.offer_discount_type) = 'free_trial'
     OR (t.offer_type = 1 AND t.price_milliunits = 0 AND t.revenue_micros = 0)
   )`;
+}
+
+function iosPaidContinuationExistsSql() {
+  return Prisma.sql`EXISTS (
+    SELECT 1
+    FROM public.ios_iap_transactions paid_tx
+    WHERE paid_tx.transaction_id <> t.transaction_id
+      AND paid_tx.original_transaction_id = coalesce(
+        t.original_transaction_id,
+        t.transaction_id
+      )
+      AND paid_tx.bundle_id IS NOT DISTINCT FROM t.bundle_id
+      AND paid_tx.store_profile_id IS NOT DISTINCT FROM t.store_profile_id
+      AND paid_tx.environment = t.environment
+      AND NOT (
+        coalesce(paid_tx.is_trial, false)
+        OR coalesce(lower(paid_tx.offer_discount_type) = 'free_trial', false)
+        OR (
+          paid_tx.offer_type = 1
+          AND coalesce(paid_tx.price_milliunits, 0) = 0
+          AND coalesce(paid_tx.revenue_micros, 0) = 0
+        )
+      )
+      AND greatest(
+        coalesce(paid_tx.revenue_micros, 0),
+        coalesce(paid_tx.price_milliunits, 0) * 1000
+      ) > 0
+      AND paid_tx.purchase_date >= coalesce(t.expires_date, t.purchase_date)
+  )`;
+}
+
+function iosRenewalInfoValueSql(field: string) {
+  return Prisma.sql`coalesce(
+    (
+      SELECT e.decoded_payload::jsonb -> 'decodedRenewalInfo' ->> ${field}
+      FROM public.ios_iap_notification_events e
+      WHERE e.status = 'processed'
+        AND jsonb_typeof(
+          e.decoded_payload::jsonb -> 'decodedRenewalInfo'
+        ) = 'object'
+        AND (
+          e.transaction_id = t.transaction_id
+          OR (
+            t.original_transaction_id IS NOT NULL
+            AND e.original_transaction_id = t.original_transaction_id
+          )
+        )
+      ORDER BY e.received_at DESC
+      LIMIT 1
+    ),
+    t.raw_receipt::jsonb -> 'decodedRenewalInfo' ->> ${field}
+  )`;
+}
+
+function iosTrialConversionStatusSql(status: string | undefined) {
+  const normalized = status?.trim().toLowerCase();
+  if (!normalized || normalized === "all") return null;
+
+  const trial = iosFreeTrialSqlCondition();
+  const paid = iosPaidContinuationExistsSql();
+  const expired = Prisma.sql`t.expires_date IS NOT NULL AND t.expires_date <= now()`;
+  const grace = Prisma.sql`coalesce(
+    nullif(${iosRenewalInfoValueSql("gracePeriodExpiresDate")}, '')::numeric,
+    0
+  ) > extract(epoch FROM now()) * 1000`;
+  const retry = Prisma.sql`lower(coalesce(
+    ${iosRenewalInfoValueSql("isInBillingRetryPeriod")},
+    'false'
+  )) = 'true'`;
+
+  if (normalized === "trial_active") {
+    return Prisma.sql`${trial} AND t.expires_date > now() AND NOT ${paid}`;
+  }
+  if (normalized === "converted_to_paid") {
+    return Prisma.sql`${trial} AND ${paid}`;
+  }
+  if (normalized === "grace_period") {
+    return Prisma.sql`${trial} AND ${expired} AND NOT ${paid} AND ${grace}`;
+  }
+  if (normalized === "billing_retry") {
+    return Prisma.sql`${trial} AND ${expired} AND NOT ${paid} AND NOT ${grace} AND ${retry}`;
+  }
+  if (normalized === "not_converted") {
+    return Prisma.sql`${trial} AND ${expired} AND NOT ${paid} AND NOT ${grace} AND NOT ${retry}`;
+  }
+
+  return null;
 }
 
 function iosTwoHourExistsSql(condition: Prisma.Sql = Prisma.sql`true`) {
@@ -1246,6 +1334,9 @@ function iosTransactionSqlConditions(
   }
   const state = options.state?.trim();
   const trial = options.trial?.trim();
+  const conversionStatus = iosTrialConversionStatusSql(
+    options.conversionStatus,
+  );
   const twoHourStatus = iosTwoHourStatusSql(options.twoHourStatus);
   const firebaseStatus = iosProviderStatusSql("ga4", options.firebaseStatus);
   const adjustStatus = iosProviderStatusSql("adjust", options.adjustStatus);
@@ -1265,6 +1356,10 @@ function iosTransactionSqlConditions(
 
   if (trial === "non_trial") {
     conditions.push(Prisma.sql`NOT ${freeTrialCondition}`);
+  }
+
+  if (conversionStatus) {
+    conditions.push(conversionStatus);
   }
 
   if (purchaseDate?.start) {

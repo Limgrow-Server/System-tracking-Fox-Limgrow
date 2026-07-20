@@ -227,6 +227,7 @@ export async function getPaginatedIapAppCards(
 
 type IapTransactionPageOptions = PaginationQuery & {
   adjustStatus?: string;
+  conversionStatus?: string;
   environment?: string;
   firebaseStatus?: string;
   includeContext?: boolean;
@@ -504,6 +505,7 @@ export async function getIapAppDetail(
   mappingId: string,
   platform: string,
   options: PaginationQuery & {
+    conversionStatus?: string;
     environment?: string;
     includeContext?: boolean;
     includeTrialAnalytics?: boolean;
@@ -723,6 +725,7 @@ export async function getIapAppContext(
   mappingId: string,
   platform: string,
   options: {
+    conversionStatus?: string;
     environment?: string;
     kind?: string;
     revenueGranularity?: string;
