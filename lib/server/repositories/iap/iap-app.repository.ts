@@ -926,6 +926,8 @@ type IosTransactionPageOptions = {
 };
 
 type IosTransactionListPageRow = {
+  paidContinuationPurchaseDate: Date | null;
+  paidContinuationTransactionId: string | null;
   checkAdjustAdid: string | null;
   checkAppInstanceId: string | null;
   checkAttempts: number | null;
@@ -1341,6 +1343,8 @@ function iosTransactionFromListPageRow(
     offerDiscountType: row.txOfferDiscountType,
     offerPeriod: row.txOfferPeriod,
     originalTransactionId: row.txOriginalTransactionId,
+    paidContinuationPurchaseDate: row.paidContinuationPurchaseDate,
+    paidContinuationTransactionId: row.paidContinuationTransactionId,
     priceMilliunits: row.txPriceMilliunits,
     productId: row.txProductId,
     purchaseDate: row.txPurchaseDate,
@@ -1507,6 +1511,8 @@ export async function getIosTransactionsListPageByMappingId(
           t.raw_receipt::jsonb ? 'signedTransactionInfo' AS "txHasSignedTransactionInfo",
           t.verified_at AS "txVerifiedAt",
           t.created_at AS "txCreatedAt",
+          paid.purchase_date AS "paidContinuationPurchaseDate",
+          paid.transaction_id AS "paidContinuationTransactionId",
           c.id AS "checkId",
           c.store_profile_id AS "checkStoreProfileId",
           c.transaction_id AS "checkTransactionId",
@@ -1534,6 +1540,37 @@ export async function getIosTransactionsListPageByMappingId(
         FROM mapping m
         CROSS JOIN transaction_total total
         LEFT JOIN paged_transactions t ON true
+        LEFT JOIN LATERAL (
+          SELECT
+            paid_tx.transaction_id,
+            paid_tx.purchase_date
+          FROM public.ios_iap_transactions paid_tx
+          WHERE ${iosFreeTrialSqlCondition()}
+            AND paid_tx.transaction_id <> t.transaction_id
+            AND paid_tx.original_transaction_id = coalesce(
+              t.original_transaction_id,
+              t.transaction_id
+            )
+            AND paid_tx.bundle_id IS NOT DISTINCT FROM t.bundle_id
+            AND paid_tx.store_profile_id IS NOT DISTINCT FROM t.store_profile_id
+            AND paid_tx.environment = t.environment
+            AND NOT (
+              coalesce(paid_tx.is_trial, false)
+              OR coalesce(lower(paid_tx.offer_discount_type) = 'free_trial', false)
+              OR (
+                paid_tx.offer_type = 1
+                AND coalesce(paid_tx.price_milliunits, 0) = 0
+                AND coalesce(paid_tx.revenue_micros, 0) = 0
+              )
+            )
+            AND greatest(
+              coalesce(paid_tx.revenue_micros, 0),
+              coalesce(paid_tx.price_milliunits, 0) * 1000
+            ) > 0
+            AND paid_tx.purchase_date >= coalesce(t.expires_date, t.purchase_date)
+          ORDER BY paid_tx.purchase_date ASC, paid_tx.verified_at ASC
+          LIMIT 1
+        ) paid ON true
         LEFT JOIN public.ios_iap_two_hour_checks c ON c.transaction_id = t.transaction_id
         ${orderBy}
       `);
