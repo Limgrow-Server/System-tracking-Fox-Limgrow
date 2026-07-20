@@ -341,6 +341,50 @@ function renewalStatusMeta(status: "enabled" | "disabled" | null) {
   return null;
 }
 
+function trialConversionStatusMeta(transaction: IosIapTransactionSummary) {
+  const paidTransactionSuffix = transaction.paid_transaction_id
+    ? ` Paid transaction: ${transaction.paid_transaction_id}.`
+    : "";
+
+  switch (transaction.trial_conversion_status) {
+    case "trial_active":
+      return {
+        className: "border-blue-200 bg-blue-50 text-blue-700",
+        label: "Trial active",
+        title: "The free trial has not expired yet.",
+      };
+    case "grace_period":
+      return {
+        className: "border-amber-200 bg-amber-50 text-amber-700",
+        label: "Grace period",
+        title:
+          "The trial expired, but Apple still grants access during the billing grace period.",
+      };
+    case "billing_retry":
+      return {
+        className: "border-amber-200 bg-amber-50 text-amber-700",
+        label: "Billing retry",
+        title:
+          "The trial expired and payment failed. Apple is retrying billing; no paid renewal is confirmed yet.",
+      };
+    case "converted_to_paid":
+      return {
+        className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        label: "Converted to paid",
+        title: `A paid transaction was recorded after the free trial.${paidTransactionSuffix}`,
+      };
+    case "not_converted":
+      return {
+        className: "border-rose-200 bg-rose-50 text-rose-700",
+        label: "Not converted",
+        title:
+          "The free trial expired and no paid continuation transaction has been recorded.",
+      };
+    default:
+      return null;
+  }
+}
+
 type TwoHourBadgeMeta = {
   className: string;
   label: string;
@@ -2127,6 +2171,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                     const renewal = renewalStatusMeta(
                       transactionRenewalStatus(tx),
                     );
+                    const trialConversion = isIosTransaction(tx)
+                      ? trialConversionStatusMeta(tx)
+                      : null;
                     const renewalDate = transactionRenewalDate(tx);
                     const renewalProductId = transactionRenewalProductId(tx);
                     const twoHourCheck = isIosTransaction(tx)
@@ -2216,6 +2263,23 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             <span title="Transaction state reported by the store.">
                               <StatusBadge status={tx.state || "UNKNOWN"} />
                             </span>
+                            {trialConversion ? (
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${trialConversion.className}`}
+                                title={trialConversion.title}
+                              >
+                                {trialConversion.label}
+                              </span>
+                            ) : null}
+                            {isIosTransaction(tx) &&
+                            tx.paid_transaction_id ? (
+                              <div
+                                className="max-w-[180px] truncate font-mono text-[10px] text-muted-foreground"
+                                title={tx.paid_transaction_id}
+                              >
+                                Paid TX: {tx.paid_transaction_id}
+                              </div>
+                            ) : null}
                             {isTest && (
                               <span className="inline-flex items-center border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none bg-orange-50 border-orange-300 text-orange-700">
                                 Sandbox

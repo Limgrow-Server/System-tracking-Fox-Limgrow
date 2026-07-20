@@ -121,6 +121,15 @@ export type IosIapTransactionSummary = {
   renewal_date: string | null;
   renewal_product_id: string | null;
   renewal_status: "enabled" | "disabled" | null;
+  trial_conversion_status:
+    | "trial_active"
+    | "grace_period"
+    | "billing_retry"
+    | "converted_to_paid"
+    | "not_converted"
+    | null;
+  paid_transaction_id: string | null;
+  paid_purchase_date: string | null;
   raw_receipt: unknown | null;
   verified_at: string;
   created_at: string;

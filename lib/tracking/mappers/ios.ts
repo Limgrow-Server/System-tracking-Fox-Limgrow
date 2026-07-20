@@ -38,6 +38,8 @@ export type IosIapTransactionSummaryRecord = Pick<
   | "userId"
   | "verifiedAt"
 > & {
+  paidContinuationPurchaseDate?: Date | null;
+  paidContinuationTransactionId?: string | null;
   rawReceipt?: IosIapTransaction["rawReceipt"] | null;
 };
 
@@ -103,6 +105,33 @@ function iosIapRenewalStatus(rawReceipt: unknown) {
   if (subtype === "AUTO_RENEW_DISABLED") return "disabled" as const;
 
   return null;
+}
+
+function iosTrialConversionStatus(transaction: IosIapTransactionSummaryRecord) {
+  const isTrial =
+    transaction.isTrial === true ||
+    transaction.offerDiscountType?.trim().toLowerCase() === "free_trial";
+  if (!isTrial) return null;
+
+  if (transaction.paidContinuationTransactionId) {
+    return "converted_to_paid" as const;
+  }
+
+  const expiresAt = transaction.expiresDate?.getTime() ?? null;
+  if (expiresAt !== null && expiresAt > Date.now()) {
+    return "trial_active" as const;
+  }
+
+  const renewalInfo = iosIapRenewalInfo(transaction.rawReceipt);
+  const gracePeriodExpiresAt = numberValue(renewalInfo?.gracePeriodExpiresDate);
+  if (gracePeriodExpiresAt !== null && gracePeriodExpiresAt > Date.now()) {
+    return "grace_period" as const;
+  }
+  if (renewalInfo?.isInBillingRetryPeriod === true) {
+    return "billing_retry" as const;
+  }
+
+  return "not_converted" as const;
 }
 
 export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): StoreMapping {
@@ -193,6 +222,9 @@ export function iosIapTransactionToSummary(
         ? renewalInfo.autoRenewProductId
         : null,
     renewal_status: iosIapRenewalStatus(transaction.rawReceipt),
+    trial_conversion_status: iosTrialConversionStatus(transaction),
+    paid_transaction_id: transaction.paidContinuationTransactionId ?? null,
+    paid_purchase_date: iso(transaction.paidContinuationPurchaseDate),
     raw_receipt: options?.includeRawReceipt ? transaction.rawReceipt : null,
     verified_at: transaction.verifiedAt.toISOString(),
     created_at: transaction.createdAt.toISOString(),
