@@ -12,6 +12,7 @@ const IAP_TRANSACTION_PAGE_SIZE = 10;
 
 type IapAppDetailOptions = {
   adjustStatus?: string;
+  conversionStatus?: string;
   environment?: string;
   firebaseStatus?: string;
   kind?: string;
@@ -64,6 +65,7 @@ export async function getIapAppDetailPageData(
 ): Promise<IapAppDetailPageData | null> {
   const page = pageNumber(options?.page);
   const adjustStatus = clean(options?.adjustStatus) || "all";
+  const conversionStatus = clean(options?.conversionStatus) || "all";
   const state = clean(options?.state) || "all";
   const kind = clean(options?.kind) || "all";
   const environment = clean(options?.environment) || "production";
@@ -90,6 +92,7 @@ export async function getIapAppDetailPageData(
     twoHourChecks,
   } = await getIapAppDetail(mappingId, platform, {
     adjustStatus,
+    conversionStatus,
     environment,
     firebaseStatus,
     includeContext: false,
@@ -113,6 +116,7 @@ export async function getIapAppDetailPageData(
     app: appCard,
     filters: {
       adjustStatus,
+      conversionStatus,
       environment,
       firebaseStatus,
       kind,

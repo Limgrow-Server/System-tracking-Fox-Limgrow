@@ -133,7 +133,7 @@ const IAP_REALTIME_REFRESH_DELAY_MS = 650;
 const IAP_TWO_HOUR_FILTER_OPTIONS = [
   { label: "All 2h", value: "all" },
   { label: "2h Passed", value: "passed" },
-  { label: "2h Cancelled", value: "cancelled" },
+  { label: "Auto-renew off", value: "cancelled" },
   { label: "2h Checked", value: "checked" },
   { label: "2h Failed", value: "failed" },
   { label: "2h Checking", value: "processing" },
@@ -141,6 +141,14 @@ const IAP_TWO_HOUR_FILTER_OPTIONS = [
   { label: "2h Pending", value: "pending" },
   { label: "No 2h row", value: "not_scheduled" },
   { label: "Not applicable", value: "not_applicable" },
+];
+const IAP_CONVERSION_FILTER_OPTIONS = [
+  { label: "All conversion", value: "all" },
+  { label: "Trial active", value: "trial_active" },
+  { label: "Grace period", value: "grace_period" },
+  { label: "Billing retry", value: "billing_retry" },
+  { label: "Converted to paid", value: "converted_to_paid" },
+  { label: "Not converted", value: "not_converted" },
 ];
 const IAP_FIREBASE_FILTER_OPTIONS = [
   { label: "All Firebase", value: "all" },
@@ -536,10 +544,10 @@ function twoHourCheckStatusBadge(
       className: check.renewed
         ? "border-emerald-200 bg-emerald-50 text-emerald-700"
         : "border-rose-200 bg-rose-50 text-rose-700",
-      label: check.renewed ? "Passed" : "Cancelled",
+      label: check.renewed ? "Passed" : "Auto-renew off",
       title: check.renewed
         ? "No cancellation signal was found after 2 hours. This is a prediction signal, not a paid renewal."
-        : "A cancellation signal was found within the 2-hour observation window.",
+        : "Apple reported that auto-renew was disabled within the 2-hour observation window. Trial access remains valid until expiry.",
     };
   }
 
@@ -1088,6 +1096,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [filterAdjustStatus, setFilterAdjustStatus] = useState<string>(
     data.filters.adjustStatus,
   );
+  const [filterConversionStatus, setFilterConversionStatus] = useState<string>(
+    data.filters.conversionStatus,
+  );
   const [filterFirebaseStatus, setFilterFirebaseStatus] = useState<string>(
     data.filters.firebaseStatus,
   );
@@ -1119,6 +1130,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   );
   const latestViewRef = useRef({
     filterAdjustStatus: data.filters.adjustStatus,
+    filterConversionStatus: data.filters.conversionStatus,
     filterEnvironment: data.filters.environment,
     filterFirebaseStatus: data.filters.firebaseStatus,
     filterKind: data.filters.kind,
@@ -1141,6 +1153,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     page: number,
     overrides?: {
       filterAdjustStatus?: string;
+      filterConversionStatus?: string;
       filterEnvironment?: string;
       filterFirebaseStatus?: string;
       filterKind?: string;
@@ -1158,6 +1171,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   ) {
     const nextFilterAdjustStatus =
       overrides?.filterAdjustStatus ?? filterAdjustStatus;
+    const nextFilterConversionStatus =
+      overrides?.filterConversionStatus ?? filterConversionStatus;
     const nextFilterEnvironment =
       overrides?.filterEnvironment ?? filterEnvironment;
     const nextFilterFirebaseStatus =
@@ -1189,6 +1204,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
     if (isIos && nextFilterTrial !== "all") {
       params.set("trial", nextFilterTrial);
+    }
+    if (isIos && nextFilterConversionStatus !== "all") {
+      params.set("conversionStatus", nextFilterConversionStatus);
     }
     if (isIos && nextFilterTwoHourStatus !== "all") {
       params.set("twoHourStatus", nextFilterTwoHourStatus);
@@ -1532,6 +1550,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   useEffect(() => {
     latestViewRef.current = {
       filterAdjustStatus,
+      filterConversionStatus,
       filterEnvironment,
       filterFirebaseStatus,
       filterKind,
@@ -1546,6 +1565,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     };
   }, [
     filterAdjustStatus,
+    filterConversionStatus,
     filterEnvironment,
     filterFirebaseStatus,
     filterKind,
@@ -1577,6 +1597,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           {
             filterEnvironment: latest.filterEnvironment,
             filterAdjustStatus: latest.filterAdjustStatus,
+            filterConversionStatus: latest.filterConversionStatus,
             filterFirebaseStatus: latest.filterFirebaseStatus,
             filterKind: latest.filterKind,
             filterPurchaseDateFrom: latest.filterPurchaseDateFrom,
@@ -1761,6 +1782,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     (!isIos && filterKind !== "all") ||
     (isIos &&
       (filterTrial !== "all" ||
+        filterConversionStatus !== "all" ||
         filterTwoHourStatus !== "all" ||
         filterFirebaseStatus !== "all" ||
         filterAdjustStatus !== "all"));
@@ -1768,6 +1790,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   function resetTransactionFilters() {
     setFilterEnvironment("production");
     setFilterKind("all");
+    setFilterConversionStatus("all");
     setFilterTrial("all");
     setFilterState("all");
     setFilterTwoHourStatus("all");
@@ -1777,6 +1800,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     setFilterPurchaseDateTo(defaultPurchaseDate);
     void loadTransactionsPage(1, {
       filterAdjustStatus: "all",
+      filterConversionStatus: "all",
       filterEnvironment: "production",
       filterFirebaseStatus: "all",
       filterKind: "all",
@@ -1976,6 +2000,28 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   <SelectItem value="all">All Billing</SelectItem>
                   <SelectItem value="trial">Free Trial</SelectItem>
                   <SelectItem value="non_trial">Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            {isIos && (
+              <Select
+                value={filterConversionStatus}
+                onValueChange={(value) => {
+                  setFilterConversionStatus(value);
+                  void loadTransactionsPage(1, {
+                    filterConversionStatus: value,
+                  });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full bg-background sm:w-[180px]">
+                  <SelectValue placeholder="Conversion" />
+                </SelectTrigger>
+                <SelectContent>
+                  {IAP_CONVERSION_FILTER_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             )}
