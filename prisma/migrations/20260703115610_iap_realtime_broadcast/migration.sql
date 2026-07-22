@@ -94,9 +94,11 @@ GRANT EXECUTE ON FUNCTION public.can_listen_iap_detail_topic(uuid, text) TO auth
 DO $$
 BEGIN
   IF to_regclass('realtime.messages') IS NOT NULL THEN
-    ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
-
-    IF NOT EXISTS (
+    IF pg_has_role(
+      current_user,
+      (SELECT relowner FROM pg_class WHERE oid = 'realtime.messages'::regclass),
+      'USAGE'
+    ) AND NOT EXISTS (
       SELECT 1
       FROM pg_policies
       WHERE schemaname = 'realtime'
@@ -114,6 +116,12 @@ BEGIN
           (SELECT realtime.topic())
         )
       );
+    ELSIF NOT pg_has_role(
+      current_user,
+      (SELECT relowner FROM pg_class WHERE oid = 'realtime.messages'::regclass),
+      'USAGE'
+    ) THEN
+      RAISE NOTICE 'Skipping realtime.messages policy because role % is not the table owner', current_user;
     END IF;
   END IF;
 END $$;

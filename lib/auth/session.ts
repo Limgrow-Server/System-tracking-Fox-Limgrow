@@ -1,78 +1,67 @@
+import "server-only";
+
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 
-import { canAccessPath, type ConsoleSession, isStaffRole } from "@/lib/auth/rbac";
-import { normalizeEmail, prismaRoleToStaffRole, prismaStatusToTeamMemberStatus } from "@/lib/auth/team-members";
 import {
-  getTeamMemberByAuthUserOrEmail,
-  linkTeamMemberAuthUser,
-} from "@/lib/server/repositories/auth/team-member.repository";
-import { createClient } from "@/lib/supabase/server";
+  canAccessPath,
+  type ConsoleSession,
+  isStaffRole,
+} from "@/lib/auth/rbac";
 import type { StaffRole } from "@/lib/tracking/types";
 
-function cleanClaimString(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
+function apiBaseUrl() {
+  return (
+    process.env.SYSTEM_TRACKING_API_URL
+    || process.env.SYSTEM_TRACKING_FUNCTIONS_BASE_URL
+    || `http://127.0.0.1:${process.env.SYSTEM_TRACKING_API_PORT || "2156"}`
+  ).replace(/\/+$/, "");
 }
 
-// ── In-memory session cache (process-level, survives across requests) ──
-const sessionCache = new Map<string, { session: ConsoleSession; expiresAt: number }>();
-const SESSION_CACHE_TTL_MS = 30_000; // 30 seconds
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function consoleSession(value: unknown): ConsoleSession | null {
+  if (!value || typeof value !== "object") return null;
+  const session = value as Partial<ConsoleSession>;
+
+  if (
+    typeof session.authUserId !== "string"
+    || typeof session.memberId !== "string"
+    || typeof session.email !== "string"
+    || typeof session.name !== "string"
+    || !isStaffRole(session.role)
+    || session.status !== "active"
+    || typeof session.globalAccess !== "boolean"
+    || !stringArray(session.appScope)
+    || !stringArray(session.storeScope)
+  ) {
+    return null;
+  }
+
+  return session as ConsoleSession;
+}
 
 async function resolveConsoleSession(): Promise<ConsoleSession | null> {
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.getClaims();
-  const authUserId = cleanClaimString(data?.claims?.sub);
-  const email = normalizeEmail(data?.claims?.email);
+  const cookieHeader = (await cookies()).toString();
+  if (!cookieHeader) return null;
 
-  if (error || !authUserId || !email) {
+  try {
+    const response = await fetch(`${apiBaseUrl()}/api/auth/session`, {
+      cache: "no-store",
+      headers: { cookie: cookieHeader },
+    });
+
+    if (!response.ok) return null;
+
+    const payload = await response.json() as { session?: unknown };
+    return consoleSession(payload.session);
+  } catch (error) {
+    console.error("Console session API request failed", error);
     return null;
   }
-
-  // Fast path: return cached session if still valid
-  const cached = sessionCache.get(authUserId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.session;
-  }
-
-  const member = await getTeamMemberByAuthUserOrEmail({
-    authUserId,
-    email,
-  });
-
-  if (!member || (member.authUserId && member.authUserId !== authUserId)) {
-    return null;
-  }
-
-  const role = prismaRoleToStaffRole[member.role];
-  const status = prismaStatusToTeamMemberStatus[member.status];
-
-  if (status !== "active" || !isStaffRole(role)) {
-    return null;
-  }
-
-  const linkedMember =
-    member.authUserId === authUserId
-      ? member
-      : await linkTeamMemberAuthUser(member.id, authUserId);
-
-  const session: ConsoleSession = {
-    authUserId,
-    memberId: linkedMember.id,
-    email: linkedMember.email,
-    role,
-    name: linkedMember.name || linkedMember.email,
-    status: "active",
-    globalAccess: linkedMember.globalAccess,
-    appScope: linkedMember.appScope,
-    storeScope: linkedMember.storeScope,
-  };
-
-  sessionCache.set(authUserId, {
-    session,
-    expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
-  });
-
-  return session;
 }
 
 export const getConsoleSession = cache(resolveConsoleSession);
