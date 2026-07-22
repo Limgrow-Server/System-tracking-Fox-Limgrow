@@ -35,7 +35,7 @@ export default async function IapAppDetailRoutePage({
   }>;
 }) {
   const query = await searchParams;
-  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
+  await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
   const { mappingId } = await params;
   const platform = single(query.platform);
@@ -44,7 +44,7 @@ export default async function IapAppDetailRoutePage({
     notFound();
   }
 
-  const data = await getIapAppDetailPageData(mappingId, platform, session, {
+  const data = await getIapAppDetailPageData(mappingId, platform, {
     adjustStatus: single(query.adjustStatus),
     conversionStatus: single(query.conversionStatus),
     environment: single(query.environment),

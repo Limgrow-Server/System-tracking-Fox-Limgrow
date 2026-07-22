@@ -1,14 +1,25 @@
 import "server-only";
 
-import { canAccessIapApp } from "@/lib/auth/app-scope";
-import type { ConsoleSession } from "@/lib/auth/rbac";
-import { getIapAppDetail } from "@/lib/server/services/iap/iap-app.service";
+import { fetchSystemTrackingApi } from "@/lib/server-api";
 import type {
   IapAppDetailPageData,
   IapRevenueGranularity,
 } from "@/lib/tracking/page-data";
 
 const IAP_TRANSACTION_PAGE_SIZE = 10;
+
+const EMPTY_METRICS: IapAppDetailPageData["metrics"] = {
+  activeCount: 0,
+  canceledCount: 0,
+  latestTimestamp: 0,
+  last7Orders: 0,
+  last7Revenue: 0,
+  previous7Orders: 0,
+  previous7Revenue: 0,
+  revenueBuckets: [],
+  totalCount: 0,
+  totalRevenue: 0,
+};
 
 type IapAppDetailOptions = {
   adjustStatus?: string;
@@ -60,7 +71,6 @@ function todayInputDate(timeZone = "Asia/Ho_Chi_Minh") {
 export async function getIapAppDetailPageData(
   mappingId: string,
   platform: string,
-  session: ConsoleSession,
   options?: IapAppDetailOptions,
 ): Promise<IapAppDetailPageData | null> {
   const page = pageNumber(options?.page);
@@ -83,37 +93,48 @@ export async function getIapAppDetailPageData(
       : "none";
   const twoHourStatus = clean(options?.twoHourStatus) || "all";
   const trial = clean(options?.trial) || "all";
-  const {
-    appCard,
-    metrics,
-    transactions,
-    transactionStates,
-    trialAnalytics,
-    twoHourChecks,
-  } = await getIapAppDetail(mappingId, platform, {
+  const params = new URLSearchParams({
     adjustStatus,
+    context: "false",
     conversionStatus,
     environment,
     firebaseStatus,
-    includeContext: false,
-    includeTrialAnalytics: false,
     kind,
-    page,
-    pageSize: IAP_TRANSACTION_PAGE_SIZE,
+    mappingId,
+    page: String(page),
+    pageSize: String(IAP_TRANSACTION_PAGE_SIZE),
+    platform,
     purchaseDateFrom,
     purchaseDateTo,
     revenueGranularity: selectedRevenueGranularity,
     revenueSort,
-    skip: (page - 1) * IAP_TRANSACTION_PAGE_SIZE,
     state,
-    take: IAP_TRANSACTION_PAGE_SIZE,
     twoHourStatus,
     trial,
   });
-  if (!canAccessIapApp(session, appCard)) return null;
+  const response = await fetchSystemTrackingApi(
+    `/api/admin/iap/app-transactions?${params.toString()}`,
+  );
+  const payload = await response.json() as {
+    app?: IapAppDetailPageData["app"];
+    data?: IapAppDetailPageData["transactions"];
+    error?: string;
+    page?: number;
+    pageSize?: number;
+    success?: boolean;
+    total?: number;
+    totalPages?: number;
+    transactionStates?: string[];
+    twoHourChecks?: IapAppDetailPageData["twoHourChecks"];
+  };
+
+  if (response.status === 403 || response.status === 404) return null;
+  if (!response.ok || !payload.success || !payload.app || !Array.isArray(payload.data)) {
+    throw new Error(payload.error ?? "Load IAP app transactions failed.");
+  }
 
   return {
-    app: appCard,
+    app: payload.app,
     filters: {
       adjustStatus,
       conversionStatus,
@@ -128,17 +149,21 @@ export async function getIapAppDetailPageData(
       twoHourStatus,
       trial,
     },
-    trialAnalytics,
-    metrics,
+    trialAnalytics: null,
+    metrics: EMPTY_METRICS,
     metricsLoaded: false,
     transactionPagination: {
-      page: transactions.page,
-      pageSize: transactions.pageSize,
-      total: transactions.total,
-      totalPages: transactions.totalPages,
+      page: payload.page ?? page,
+      pageSize: payload.pageSize ?? IAP_TRANSACTION_PAGE_SIZE,
+      total: payload.total ?? payload.data.length,
+      totalPages: payload.totalPages ?? 1,
     },
-    transactionStates,
-    transactions: transactions.data,
-    twoHourChecks,
+    transactionStates: Array.isArray(payload.transactionStates)
+      ? payload.transactionStates
+      : [],
+    transactions: payload.data,
+    twoHourChecks: Array.isArray(payload.twoHourChecks)
+      ? payload.twoHourChecks
+      : [],
   };
 }
