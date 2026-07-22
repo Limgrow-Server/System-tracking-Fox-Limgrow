@@ -1,24 +1,35 @@
 import "server-only";
 
-import { getAndroidCredentialStoreOptions } from "@/lib/server/services/credentials/android-credential.service";
-import { getAndroidStoreMappingPageResult } from "@/lib/server/services/store-mappings/android-store-mapping.service";
+import { fetchSystemTrackingApi } from "@/lib/server-api";
 import type { StoreMappingPageData } from "@/lib/tracking/page-data";
 
 export async function getAndroidStoreMappingPageData(): Promise<StoreMappingPageData> {
-  const [storeMappingPage, storeOptions] = await Promise.all([
-    getAndroidStoreMappingPageResult({ page: 1, pageSize: 10, skip: 0, take: 10 }),
-    getAndroidCredentialStoreOptions(),
-  ]);
+  const response = await fetchSystemTrackingApi(
+    "/api/admin/store-mappings?platform=android&page=1&pageSize=10",
+  );
+  const payload = await response.json() as {
+    data?: StoreMappingPageData["storeMappings"];
+    error?: string;
+    page?: number;
+    pageSize?: number;
+    storeOptions?: StoreMappingPageData["storeOptions"];
+    success?: boolean;
+    total?: number;
+    totalPages?: number;
+  };
+  if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+    throw new Error(payload.error ?? "Load Android app mappings failed.");
+  }
 
   return {
     credentialSecrets: [],
     storeMappingPagination: {
-      page: storeMappingPage.page,
-      pageSize: storeMappingPage.pageSize,
-      total: storeMappingPage.total,
-      totalPages: storeMappingPage.totalPages,
+      page: payload.page ?? 1,
+      pageSize: payload.pageSize ?? 10,
+      total: payload.total ?? payload.data.length,
+      totalPages: payload.totalPages ?? 1,
     },
-    storeMappings: storeMappingPage.data,
-    storeOptions,
+    storeMappings: payload.data,
+    storeOptions: Array.isArray(payload.storeOptions) ? payload.storeOptions : [],
   };
 }
