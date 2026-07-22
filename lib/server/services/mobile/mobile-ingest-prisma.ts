@@ -48,7 +48,10 @@ export function mobileIngestPoolTimeoutSeconds() {
 
 function mobileIngestDatabaseUrl() {
   const explicitUrl = process.env.MOBILE_INGEST_DATABASE_URL?.trim();
-  const rawUrl = explicitUrl || process.env.DATABASE_URL?.trim();
+  const rawUrl = explicitUrl
+    || process.env.NOTIFICATION_DATABASE_URL?.trim()
+    || process.env.EVENT_TRACKING_DATABASE_URL?.trim()
+    || process.env.DATABASE_URL?.trim();
 
   if (!rawUrl) return rawUrl;
 

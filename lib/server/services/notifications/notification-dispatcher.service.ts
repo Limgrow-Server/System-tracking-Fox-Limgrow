@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "crypto";
 import type { NotificationSchedule, Prisma } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma as prisma } from "@/lib/prisma";
 import { sendNotificationPayloadLocal, type LocaleNotificationInput, type SendNotificationRequest } from "@/lib/server/services/notifications/local-notification-sender.service";
 
 const TITLE_MAX_LENGTH = 45;

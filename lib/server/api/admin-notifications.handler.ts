@@ -10,7 +10,7 @@ import {
   canAccessScopedRecord,
   notificationRecordFromPayload,
 } from "@/lib/auth/app-scope";
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma as prisma } from "@/lib/prisma";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";

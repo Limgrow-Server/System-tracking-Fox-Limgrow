@@ -9,7 +9,7 @@ import type {
 } from "@prisma/client";
 
 import type { ConsoleSession } from "@/lib/auth/rbac";
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma, prisma } from "@/lib/prisma";
 
 const ACTIVE_JOB_STATUSES: BackgroundJobStatus[] = ["QUEUED", "RUNNING"];
 const RECENT_JOB_AGE_MS = 48 * 60 * 60 * 1000;
@@ -248,7 +248,7 @@ async function hydrateNotificationJobs(jobs: BackgroundJob[]) {
   if (!sourceJobIds.length) return new Map<string, Partial<BackgroundJobTracking>>();
 
   const [notificationJobs, batchGroups] = await Promise.all([
-    prisma.notificationJob.findMany({
+    notificationPrisma.notificationJob.findMany({
       where: { id: { in: sourceJobIds } },
       select: {
         errorCount: true,
@@ -259,7 +259,7 @@ async function hydrateNotificationJobs(jobs: BackgroundJob[]) {
         updatedAt: true,
       },
     }),
-    prisma.notificationJobBatch.groupBy({
+    notificationPrisma.notificationJobBatch.groupBy({
       by: ["jobId", "status"],
       where: { jobId: { in: sourceJobIds } },
       _count: { _all: true },

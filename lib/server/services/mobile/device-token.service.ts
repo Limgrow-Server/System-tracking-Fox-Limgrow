@@ -4,7 +4,7 @@ import { createHash } from "crypto";
 
 import type { DeviceToken, Prisma } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma, prisma } from "@/lib/prisma";
 import { normalizeAppId } from "@/lib/tracking/identity";
 import { badRequest } from "@/lib/server/api/errors";
 import {
@@ -326,7 +326,8 @@ async function markReplacedDeviceTokens(
 export async function handleDeviceTokenRequest(
   payload: DeviceTokenRequest,
   expectedPlatform: MobilePlatform,
-  db: DeviceTokenPrisma = prisma,
+  db: DeviceTokenPrisma = notificationPrisma,
+  trackingDb: DeviceTokenPrisma = db === notificationPrisma ? prisma : db,
 ) {
   const action = payload.action ?? "register";
   const appId = requestAppId(payload);
@@ -395,7 +396,7 @@ export async function handleDeviceTokenRequest(
       storeAccountName: clean(payload.storeAccountName),
       storeProfileId: clean(payload.storeProfileId),
     },
-    db,
+    trackingDb,
   );
 
   if (action === "unregister" || action === "mark_invalid") {
