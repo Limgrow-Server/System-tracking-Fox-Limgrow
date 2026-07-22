@@ -21,9 +21,9 @@ export default async function IapRoutePage({
     store?: string | string[];
   }>;
 }) {
-  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
+  await requireConsoleSession(["Admin", "Dev", "Marketing"]);
   const params = await searchParams;
-  const data = await getIapAppGridPageData(session, {
+  const data = await getIapAppGridPageData({
     page: pageNumber(params.page),
     platform: single(params.platform),
     search: single(params.search),

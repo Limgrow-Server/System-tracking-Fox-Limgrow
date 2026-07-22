@@ -1,6 +1,5 @@
 import "server-only";
 
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 
@@ -9,15 +8,8 @@ import {
   type ConsoleSession,
   isStaffRole,
 } from "@/lib/auth/rbac";
+import { fetchSystemTrackingApi } from "@/lib/server-api";
 import type { StaffRole } from "@/lib/tracking/types";
-
-function apiBaseUrl() {
-  return (
-    process.env.SYSTEM_TRACKING_API_URL
-    || process.env.SYSTEM_TRACKING_FUNCTIONS_BASE_URL
-    || `http://127.0.0.1:${process.env.SYSTEM_TRACKING_API_PORT || "2156"}`
-  ).replace(/\/+$/, "");
-}
 
 function stringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -45,14 +37,8 @@ function consoleSession(value: unknown): ConsoleSession | null {
 }
 
 async function resolveConsoleSession(): Promise<ConsoleSession | null> {
-  const cookieHeader = (await cookies()).toString();
-  if (!cookieHeader) return null;
-
   try {
-    const response = await fetch(`${apiBaseUrl()}/api/auth/session`, {
-      cache: "no-store",
-      headers: { cookie: cookieHeader },
-    });
+    const response = await fetchSystemTrackingApi("/api/auth/session");
 
     if (!response.ok) return null;
 

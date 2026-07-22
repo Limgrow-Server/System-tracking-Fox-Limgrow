@@ -116,6 +116,7 @@ export async function handleAdminIapAppTransactionsGet(request: Request) {
     }
 
     return paginatedJson(detail.transactions, {
+      app: detail.appCard,
       metrics: detail.metrics,
       transactionStates: detail.transactionStates,
       twoHourChecks: detail.twoHourChecks ?? [],

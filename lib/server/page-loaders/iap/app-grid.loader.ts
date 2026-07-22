@@ -1,12 +1,6 @@
 import "server-only";
 
-import { canAccessIapApp, hasAllAppAccess } from "@/lib/auth/app-scope";
-import type { ConsoleSession } from "@/lib/auth/rbac";
-import {
-  getIapAppCardLists,
-  getIapAppCardsPage,
-  getPaginatedIapAppCards,
-} from "@/lib/server/services/iap/iap-app.service";
+import { fetchSystemTrackingApi } from "@/lib/server-api";
 import type { IapAppGridPageData } from "@/lib/tracking/page-data";
 
 const IAP_APP_PAGE_SIZE = 12;
@@ -23,7 +17,6 @@ function pageNumber(value: number | undefined) {
 }
 
 export async function getIapAppGridPageData(
-  session: ConsoleSession,
   options?: IapAppGridOptions,
 ): Promise<IapAppGridPageData> {
   const platform =
@@ -33,63 +26,46 @@ export async function getIapAppGridPageData(
   const search = options?.search?.trim() ?? "";
   const storeAccountName = options?.storeAccountName?.trim() ?? "";
   const page = pageNumber(options?.page);
-  const pagination = {
-    page,
-    pageSize: IAP_APP_PAGE_SIZE,
-    skip: (page - 1) * IAP_APP_PAGE_SIZE,
-    take: IAP_APP_PAGE_SIZE,
+  const params = new URLSearchParams({
+    page: String(page),
+    pageSize: String(IAP_APP_PAGE_SIZE),
+  });
+  if (platform !== "all") params.set("platform", platform);
+  if (search) params.set("search", search);
+  if (storeAccountName) params.set("store", storeAccountName);
+
+  const response = await fetchSystemTrackingApi(
+    `/api/admin/iap/apps?${params.toString()}`,
+  );
+  const payload = await response.json() as {
+    data?: IapAppGridPageData["apps"];
+    error?: string;
+    filters?: IapAppGridPageData["filters"];
+    page?: number;
+    pageSize?: number;
+    storeNames?: string[];
+    success?: boolean;
+    total?: number;
+    totalPages?: number;
   };
 
-  if (hasAllAppAccess(session)) {
-    const { appPage, storeNames } = await getPaginatedIapAppCards({
-      ...pagination,
-      platform,
-      search: search || undefined,
-      storeAccountName: storeAccountName || undefined,
-    });
-
-    return {
-      appPagination: {
-        page: appPage.page,
-        pageSize: appPage.pageSize,
-        total: appPage.total,
-        totalPages: appPage.totalPages,
-      },
-      apps: appPage.data,
-      filters: {
-        platform,
-        search,
-        storeAccountName,
-      },
-      storeNames,
-    };
+  if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+    throw new Error(payload.error ?? "Load IAP apps failed.");
   }
-
-  const { allApps, matchingApps } = await getIapAppCardLists({
-    platform,
-    search: search || undefined,
-    storeAccountName: storeAccountName || undefined,
-  });
-  const scopedApps = matchingApps.filter((app) => canAccessIapApp(session, app));
-  const appPage = getIapAppCardsPage(scopedApps, pagination);
-  const scopedStoreApps = allApps.filter((app) => canAccessIapApp(session, app));
-  const storeNames = Array.from(
-    new Set(scopedStoreApps.map((app) => app.storeAccountName)),
-  ).sort();
 
   return {
     appPagination: {
-      page: appPage.page,
-      pageSize: appPage.pageSize,
-      total: appPage.total,
-      totalPages: appPage.totalPages,
+      page: payload.page ?? page,
+      pageSize: payload.pageSize ?? IAP_APP_PAGE_SIZE,
+      total: payload.total ?? payload.data.length,
+      totalPages: payload.totalPages ?? 1,
     },
-    apps: appPage.data,
-    filters: {
+    apps: payload.data,
+    filters: payload.filters ?? {
       platform,
       search,
       storeAccountName,
     },
-    storeNames,
+    storeNames: Array.isArray(payload.storeNames) ? payload.storeNames : [],
   };
 }
