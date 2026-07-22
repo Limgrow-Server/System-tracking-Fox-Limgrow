@@ -1,23 +1,145 @@
 import { enumValue, iso } from "@/lib/tracking/mappers/shared";
 import type {
   CredentialSecretMetadata,
+  IosIapTwoHourCheck,
   IosIapTransactionSummary,
   StoreMapping,
 } from "@/lib/tracking/types";
 
-import type { IosCredential, IosIapTransaction, IosStoreMapping, IosStoreProfile } from "@prisma/client";
+import type { IosCredential, IosIapTransaction, IosStoreMapping } from "@prisma/client";
+import type { IosIapTwoHourCheckRecord } from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
 
-export type IosStoreMappingRecord = IosStoreMapping;
-export type IosCredentialRecord = IosCredential & {
-  storeProfile?: Pick<IosStoreProfile, "supabaseUserId"> | null;
+export type IosStoreMappingRecord = IosStoreMapping & {
+  storeProfile?: { storeAccountName: string } | null;
 };
+export type IosCredentialRecord = IosCredential;
+export type IosIapTransactionSummaryRecord = Pick<
+  IosIapTransaction,
+  | "billingPlanType"
+  | "bundleId"
+  | "createdAt"
+  | "currency"
+  | "environment"
+  | "expiresDate"
+  | "id"
+  | "isTrial"
+  | "offerDiscountType"
+  | "offerPeriod"
+  | "originalTransactionId"
+  | "priceMilliunits"
+  | "productId"
+  | "purchaseDate"
+  | "revenueMicros"
+  | "revocationDate"
+  | "state"
+  | "storefront"
+  | "transactionId"
+  | "transactionReason"
+  | "userId"
+  | "verifiedAt"
+> & {
+  paidContinuationPurchaseDate?: Date | null;
+  paidContinuationTransactionId?: string | null;
+  rawReceipt?: IosIapTransaction["rawReceipt"] | null;
+};
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function numberValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function dateFromMillis(value: unknown) {
+  const millis = numberValue(value);
+  if (millis === null) return null;
+  const date = new Date(millis);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function iosIapIngestionSource(rawReceipt: unknown) {
+  const receipt = jsonRecord(rawReceipt);
+  if (!receipt) return null;
+
+  if (typeof receipt.source === "string" && receipt.source.trim()) {
+    return receipt.source.trim();
+  }
+
+  if (jsonRecord(receipt.decodedNotification)) {
+    return "app_store_server_notification";
+  }
+
+  if (typeof receipt.signedTransactionInfo === "string") {
+    return "verify_ios_edge_function";
+  }
+
+  return null;
+}
+
+function iosIapRenewalInfo(rawReceipt: unknown) {
+  const receipt = jsonRecord(rawReceipt);
+  if (!receipt) return null;
+
+  return jsonRecord(receipt.decodedRenewalInfo);
+}
+
+function iosIapRenewalStatus(rawReceipt: unknown) {
+  const receipt = jsonRecord(rawReceipt);
+  const renewalInfo = iosIapRenewalInfo(rawReceipt);
+  const autoRenewStatus = numberValue(renewalInfo?.autoRenewStatus);
+
+  if (autoRenewStatus === 1) return "enabled" as const;
+  if (autoRenewStatus === 0) return "disabled" as const;
+
+  const subtype =
+    typeof receipt?.subtype === "string" ? receipt.subtype.toUpperCase() : "";
+  if (subtype === "AUTO_RENEW_ENABLED") return "enabled" as const;
+  if (subtype === "AUTO_RENEW_DISABLED") return "disabled" as const;
+
+  return null;
+}
+
+function iosTrialConversionStatus(transaction: IosIapTransactionSummaryRecord) {
+  const isTrial =
+    transaction.isTrial === true ||
+    transaction.offerDiscountType?.trim().toLowerCase() === "free_trial";
+  if (!isTrial) return null;
+
+  if (transaction.paidContinuationTransactionId) {
+    return "converted_to_paid" as const;
+  }
+
+  const expiresAt = transaction.expiresDate?.getTime() ?? null;
+  if (expiresAt !== null && expiresAt > Date.now()) {
+    return "trial_active" as const;
+  }
+
+  const renewalInfo = iosIapRenewalInfo(transaction.rawReceipt);
+  const gracePeriodExpiresAt = numberValue(renewalInfo?.gracePeriodExpiresDate);
+  if (gracePeriodExpiresAt !== null && gracePeriodExpiresAt > Date.now()) {
+    return "grace_period" as const;
+  }
+  if (renewalInfo?.isInBillingRetryPeriod === true) {
+    return "billing_retry" as const;
+  }
+
+  return "not_converted" as const;
+}
 
 export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): StoreMapping {
   return {
     id: mapping.id,
     store_profile_id: mapping.storeProfileId,
     store_platform: "apple_app_store",
-    store_account_name: mapping.storeAccountName,
+    store_account_name: mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
     app_id: mapping.appId,
     app_name: mapping.appName,
     app_icon_url: mapping.appIconUrl,
@@ -25,6 +147,12 @@ export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): Store
     platform: "ios",
     package_name: null,
     bundle_id: mapping.bundleId,
+    firebase_app_id: mapping.firebaseAppId,
+    firebase_analytics_api_secret_configured: Boolean(
+      mapping.firebaseAnalyticsApiSecret,
+    ),
+    adjust_app_token: mapping.adjustAppToken,
+    adjust_event_token: mapping.adjustEventToken,
     status: enumValue(mapping.status),
     created_at: mapping.createdAt.toISOString(),
     updated_at: mapping.updatedAt.toISOString(),
@@ -54,14 +182,17 @@ export function iosCredentialToMetadata(credential: IosCredentialRecord): Creden
     status: enumValue(credential.status) as CredentialSecretMetadata["status"],
     description: credential.description,
     last_used_at: iso(credential.lastUsedAt),
-    supabase_user_id: credential.storeProfile?.supabaseUserId ?? null,
-    supabase_user_email: null,
     created_at: credential.createdAt.toISOString(),
     updated_at: credential.updatedAt.toISOString(),
   };
 }
 
-export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosIapTransactionSummary {
+export function iosIapTransactionToSummary(
+  transaction: IosIapTransactionSummaryRecord,
+  options?: { includeRawReceipt?: boolean },
+): IosIapTransactionSummary {
+  const renewalInfo = iosIapRenewalInfo(transaction.rawReceipt);
+
   return {
     id: transaction.id,
     transaction_id: transaction.transactionId,
@@ -76,9 +207,53 @@ export function iosIapTransactionToSummary(transaction: IosIapTransaction): IosI
     price_milliunits: transaction.priceMilliunits?.toString() ?? null,
     currency: transaction.currency,
     is_trial: transaction.isTrial,
+    offer_discount_type: transaction.offerDiscountType,
+    offer_period: transaction.offerPeriod,
+    billing_plan_type: transaction.billingPlanType,
+    transaction_reason: transaction.transactionReason,
+    storefront: transaction.storefront,
+    revocation_date: iso(transaction.revocationDate),
     environment: transaction.environment,
-    raw_receipt: transaction.rawReceipt,
+    ingestion_source: iosIapIngestionSource(transaction.rawReceipt),
+    renewal_auto_renew_status: numberValue(renewalInfo?.autoRenewStatus),
+    renewal_date: dateFromMillis(renewalInfo?.renewalDate),
+    renewal_product_id:
+      typeof renewalInfo?.autoRenewProductId === "string"
+        ? renewalInfo.autoRenewProductId
+        : null,
+    renewal_status: iosIapRenewalStatus(transaction.rawReceipt),
+    trial_conversion_status: iosTrialConversionStatus(transaction),
+    paid_transaction_id: transaction.paidContinuationTransactionId ?? null,
+    paid_purchase_date: iso(transaction.paidContinuationPurchaseDate),
+    raw_receipt: options?.includeRawReceipt ? transaction.rawReceipt : null,
     verified_at: transaction.verifiedAt.toISOString(),
     created_at: transaction.createdAt.toISOString(),
+  };
+}
+
+export function iosIapTwoHourCheckToTracking(
+  check: IosIapTwoHourCheckRecord,
+): IosIapTwoHourCheck {
+  return {
+    id: check.id,
+    transaction_id: check.transactionId,
+    original_transaction_id: check.originalTransactionId,
+    user_id: check.userId,
+    bundle_id: check.bundleId,
+    product_id: check.productId,
+    environment: check.environment,
+    app_instance_id: check.appInstanceId,
+    firebase_app_id: check.firebaseAppId,
+    ga4_event_name: check.ga4EventName,
+    check_at: check.checkAt.toISOString(),
+    status: check.status,
+    renewed: check.renewed,
+    renewal_status: check.renewalStatus,
+    ga4_sent_at: iso(check.ga4SentAt),
+    attempts: check.attempts,
+    last_error: check.lastError,
+    raw_context: check.rawContext,
+    created_at: check.createdAt.toISOString(),
+    updated_at: check.updatedAt.toISOString(),
   };
 }

@@ -3,6 +3,30 @@ export type NumberLike = number | string | null;
 export type StaffRole = "Admin" | "Dev" | "Marketing";
 export type Platform = "google_play" | "apple_app_store";
 
+export type BackgroundJob = {
+  id: string;
+  app_id: string | null;
+  app_name: string | null;
+  created_at: string;
+  created_by: string;
+  description: string | null;
+  finished_at: string | null;
+  last_error: string | null;
+  metadata: unknown;
+  platform: string | null;
+  progress_current: number;
+  progress_total: number | null;
+  result_url: string | null;
+  source_job_id: string | null;
+  source_run_ids: string[];
+  started_at: string | null;
+  status: "queued" | "running" | "paused" | "succeeded" | "failed" | "partial";
+  store_account_name: string | null;
+  title: string;
+  type: "notification_send" | "review_fetch";
+  updated_at: string;
+};
+
 export type TeamMember = {
   id: string;
   auth_user_id: string | null;
@@ -32,6 +56,10 @@ export type StoreMapping = {
   platform: "android" | "ios";
   package_name: string | null;
   bundle_id: string | null;
+  firebase_app_id: string | null;
+  firebase_analytics_api_secret_configured: boolean;
+  adjust_app_token: string | null;
+  adjust_event_token: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -63,8 +91,6 @@ export type CredentialSecretMetadata = {
   status: "active" | "disabled";
   description: string | null;
   last_used_at: string | null;
-  supabase_user_id: string | null;
-  supabase_user_email: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -83,10 +109,53 @@ export type IosIapTransactionSummary = {
   price_milliunits: string | null;
   currency: string | null;
   is_trial: boolean | null;
+  offer_discount_type: string | null;
+  offer_period: string | null;
+  billing_plan_type: string | null;
+  transaction_reason: string | null;
+  storefront: string | null;
+  revocation_date: string | null;
   environment: string;
-  raw_receipt: unknown;
+  ingestion_source: string | null;
+  renewal_auto_renew_status: number | null;
+  renewal_date: string | null;
+  renewal_product_id: string | null;
+  renewal_status: "enabled" | "disabled" | null;
+  trial_conversion_status:
+    | "trial_active"
+    | "grace_period"
+    | "billing_retry"
+    | "converted_to_paid"
+    | "not_converted"
+    | null;
+  paid_transaction_id: string | null;
+  paid_purchase_date: string | null;
+  raw_receipt: unknown | null;
   verified_at: string;
   created_at: string;
+};
+
+export type IosIapTwoHourCheck = {
+  id: string;
+  transaction_id: string;
+  original_transaction_id: string | null;
+  user_id: string | null;
+  bundle_id: string;
+  product_id: string;
+  environment: string;
+  app_instance_id: string;
+  firebase_app_id: string | null;
+  ga4_event_name: string;
+  check_at: string;
+  status: string;
+  renewed: boolean | null;
+  renewal_status: string | null;
+  ga4_sent_at: string | null;
+  attempts: number;
+  last_error: string | null;
+  raw_context: unknown;
+  created_at: string;
+  updated_at: string;
 };
 
 export type NotificationJob = {
@@ -106,6 +175,10 @@ export type NotificationJob = {
   project_id: string | null;
   target_type: string;
   target_values: string[];
+  batch_done_count?: number;
+  batch_processed_target_count?: number;
+  batch_target_count?: number;
+  batch_total_count?: number;
   title: string | null;
   message: string | null;
   image_url: string | null;
@@ -163,6 +236,7 @@ export type NotificationEvent = {
   notification_id: string;
   job_id: string | null;
   event_type: string;
+  device_token_id: string | null;
   device_id: string | null;
   platform: "android" | "ios" | string | null;
   target_type: string | null;
@@ -183,16 +257,20 @@ export type DeviceToken = {
   platform: "android" | "ios" | string;
   firebase_app_id: string | null;
   firebase_project_id: string | null;
+  app_identifier: string | null;
+  fcm_token: string;
   app_version: string | null;
   os_version: string | null;
   locale: string | null;
   status: string;
   last_seen_at: string;
+  last_sent_at: string | null;
   store_platform: Platform | string | null;
   store_account_name: string | null;
   product_app_id: string | null;
   package_name: string | null;
   bundle_id: string | null;
+  device_type: string | null;
   device_model: string | null;
   device_manufacturer: string | null;
   created_at: string;

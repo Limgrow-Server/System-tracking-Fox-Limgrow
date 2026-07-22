@@ -3,6 +3,7 @@ import "server-only";
 import type { CredentialPurpose, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 
 type CredentialTargetInput = {
   credentialRef?: string;
@@ -11,10 +12,88 @@ type CredentialTargetInput = {
 
 export function getIosCredentials(take = 160) {
   return prisma.iosCredential.findMany({
-    include: { storeProfile: { select: { supabaseUserId: true } } },
     orderBy: { updatedAt: "desc" },
     take,
   });
+}
+
+export function getIosCredentialStoreRefs(take = 300) {
+  return prisma.iosCredential.findMany({
+    orderBy: { updatedAt: "desc" },
+    select: {
+      storeAccountName: true,
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+      storeProfileId: true,
+    },
+    take,
+  });
+}
+
+type IosCredentialGroupPageOptions = {
+  includeTotal?: boolean;
+  search?: string;
+  skip: number;
+  take: number;
+};
+
+function iosCredentialGroupWhere(options: IosCredentialGroupPageOptions): Prisma.IosStoreProfileWhereInput {
+  const where: Prisma.IosStoreProfileWhereInput = {
+    credentials: { some: {} },
+  };
+  const search = options.search?.trim();
+
+  if (search) {
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { storeAccountName: contains },
+        { issuerId: contains },
+        {
+          credentials: {
+            some: {
+              OR: [
+                { credentialRef: contains },
+                { keyId: contains },
+                { vaultSecretName: contains },
+                { storeAccountName: contains },
+              ],
+            },
+          },
+        },
+      ];
+    });
+  }
+
+  return where;
+}
+
+export function getIosCredentialGroupsPage(options: IosCredentialGroupPageOptions) {
+  const where = iosCredentialGroupWhere(options);
+  const rows = prisma.iosStoreProfile.findMany({
+    where,
+    include: {
+      credentials: {
+        orderBy: { updatedAt: "desc" },
+      },
+    },
+    orderBy: { updatedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
+
+  if (options.includeTotal === false) {
+    return rows.then((profiles) => [profiles, null] as const);
+  }
+
+  return prisma.$transaction([
+    rows,
+    prisma.iosStoreProfile.count({ where }),
+  ]);
 }
 
 export function getIosCredentialsByIds(ids: string[]) {

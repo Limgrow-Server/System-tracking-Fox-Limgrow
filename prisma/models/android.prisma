@@ -7,47 +7,55 @@ model AndroidStoreProfile {
   supportPhone     String?               @map("support_phone")
   websiteUrl       String?               @map("website_url")
   status           MappingStatus         @default(ACTIVE)
-  supabaseUserId   String?               @unique @map("supabase_user_id") @db.Uuid
   createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
   mappings         AndroidStoreMapping[]
   credentials      AndroidCredential[]
   iapTransactions  IapAndroid[]
+  reviewTarget     ReviewStoreTarget?
 
   @@index([status, storeAccountName], map: "android_store_profiles_status_name_idx")
   @@map("android_store_profiles")
 }
 
 model AndroidStoreMapping {
-  id               String                            @id @default(uuid()) @db.Uuid
-  storeProfileId   String                            @map("store_profile_id") @db.Uuid
-  storeAccountName String                            @map("store_account_name")
-  appId            String?                           @map("app_id")
-  appName          String                            @map("app_name")
-  appIconUrl       String?                           @map("app_icon_url")
-  appLink          String?                           @map("app_link")
-  packageName      String                            @map("package_name")
-  status           MappingStatus                     @default(ACTIVE)
-  createdAt        DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime                          @updatedAt @map("updated_at") @db.Timestamptz(6)
-  storeProfile     AndroidStoreProfile               @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
-  reviews          AndroidStoreReview[]
-  reviewSyncState  AndroidStoreReviewSyncState?
-  reviewFetchRuns  AndroidStoreReviewFetchRun[]
-  replyTemplates   AndroidStoreReviewReplyTemplate[]
+  id                  String                            @id @default(uuid()) @db.Uuid
+  storeProfileId      String                            @map("store_profile_id") @db.Uuid
+  storeAccountName    String                            @map("store_account_name")
+  appId               String?                           @map("app_id")
+  appName             String                            @map("app_name")
+  appIconUrl          String?                           @map("app_icon_url")
+  appLink             String?                           @map("app_link")
+  packageName         String                            @map("package_name")
+  adjustAppToken      String?                           @map("adjust_app_token")
+  adjustEventToken    String?                           @map("adjust_event_token")
+  status              MappingStatus                     @default(ACTIVE)
+  createdAt           DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime                          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile        AndroidStoreProfile               @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+  reviews             AndroidStoreReview[]
+  reviewSyncState     AndroidStoreReviewSyncState?
+  reviewFetchRuns     AndroidStoreReviewFetchRun[]
+  reviewFetchSchedule AndroidStoreReviewFetchSchedule?
+  replyTemplates      AndroidStoreReviewReplyTemplate[]
+  reviewTarget        ReviewAppTarget?
 
   @@unique([storeProfileId, appName], map: "android_store_mappings_profile_app_name_key")
   @@unique([storeProfileId, appId], map: "android_store_mappings_profile_app_id_key")
   @@unique([packageName], map: "android_store_mappings_package_key")
   @@index([appId, status], map: "android_store_mappings_app_id_status_idx")
   @@index([packageName, status], map: "android_store_mappings_package_status_idx")
+  @@index([status, appName, packageName, id], map: "android_store_mappings_status_app_name_package_idx")
+  @@index([storeProfileId, updatedAt(sort: Desc)], map: "android_store_mappings_profile_updated_idx")
   @@index([storeAccountName], map: "android_store_mappings_store_name_idx")
+  @@index([updatedAt(sort: Desc)], map: "android_store_mappings_updated_idx")
   @@map("android_store_mappings")
 }
 
 model AndroidStoreReview {
   id                      String              @id @default(uuid()) @db.Uuid
   storeMappingId          String              @map("store_mapping_id") @db.Uuid
+  reviewAppTargetId       String?             @map("review_app_target_id") @db.Uuid
   reviewId                String              @map("review_id")
   authorName              String?             @map("author_name")
   rating                  Int?
@@ -69,9 +77,11 @@ model AndroidStoreReview {
   createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt               DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
   storeMapping            AndroidStoreMapping @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  appTarget               ReviewAppTarget?    @relation(fields: [reviewAppTargetId], references: [id], onDelete: SetNull)
 
   @@unique([storeMappingId, reviewId], map: "android_store_reviews_mapping_review_key")
-  @@index([storeMappingId, userCommentUpdatedAt], map: "android_store_reviews_mapping_user_updated_idx")
+  @@index([reviewAppTargetId], map: "android_store_reviews_app_target_idx")
+  @@index([storeMappingId, userCommentUpdatedAt(sort: Desc), fetchedAt(sort: Desc)], map: "android_store_reviews_mapping_user_updated_idx")
   @@index([storeMappingId, rating], map: "android_store_reviews_mapping_rating_idx")
   @@index([developerReplyUpdatedAt], map: "android_store_reviews_reply_updated_idx")
   @@map("android_store_reviews")
@@ -101,26 +111,66 @@ model AndroidStoreReviewSyncState {
 }
 
 model AndroidStoreReviewFetchRun {
-  id              String               @id @default(uuid()) @db.Uuid
-  storeMappingId  String               @map("store_mapping_id") @db.Uuid
-  triggerType     ReviewFetchTrigger   @default(SCHEDULED) @map("trigger_type")
-  status          ReviewFetchRunStatus @default(RUNNING)
-  maxResults      Int                  @default(100) @map("max_results")
-  maxPages        Int                  @default(2) @map("max_pages")
-  pagesFetched    Int                  @default(0) @map("pages_fetched")
-  reviewsFetched  Int                  @default(0) @map("reviews_fetched")
-  reviewsUpserted Int                  @default(0) @map("reviews_upserted")
-  errorCode       String?              @map("error_code")
-  errorMessage    String?              @map("error_message") @db.Text
-  startedAt       DateTime             @default(now()) @map("started_at") @db.Timestamptz(6)
-  finishedAt      DateTime?            @map("finished_at") @db.Timestamptz(6)
-  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
-  storeMapping    AndroidStoreMapping  @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  id               String                           @id @default(uuid()) @db.Uuid
+  storeMappingId   String                           @map("store_mapping_id") @db.Uuid
+  sourceScheduleId String?                          @map("source_schedule_id") @db.Uuid
+  triggerType      ReviewFetchTrigger               @default(SCHEDULED) @map("trigger_type")
+  status           ReviewFetchRunStatus             @default(PENDING)
+  scanMode         ReviewFetchScanMode              @default(LIMITED) @map("scan_mode")
+  stopReason       ReviewFetchStopReason?           @map("stop_reason")
+  scheduledFor     DateTime?                        @map("scheduled_for") @db.Timestamptz(6)
+  nextAttemptAt    DateTime?                        @map("next_attempt_at") @db.Timestamptz(6)
+  attemptCount     Int                              @default(0) @map("attempt_count")
+  maxAttempts      Int                              @default(3) @map("max_attempts")
+  lockedAt         DateTime?                        @map("locked_at") @db.Timestamptz(6)
+  lockedBy         String?                          @map("locked_by")
+  maxResults       Int                              @default(100) @map("max_results")
+  requestCount     Int                              @default(0) @map("request_count")
+  nextPageToken    String?                          @map("next_page_token") @db.Text
+  pagesFetched     Int                              @default(0) @map("pages_fetched")
+  reviewsFetched   Int                              @default(0) @map("reviews_fetched")
+  reviewsUpserted  Int                              @default(0) @map("reviews_upserted")
+  errorCode        String?                          @map("error_code")
+  errorMessage     String?                          @map("error_message") @db.Text
+  startedAt        DateTime?                        @map("started_at") @db.Timestamptz(6)
+  finishedAt       DateTime?                        @map("finished_at") @db.Timestamptz(6)
+  createdAt        DateTime                         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeMapping     AndroidStoreMapping              @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  sourceSchedule   AndroidStoreReviewFetchSchedule? @relation(fields: [sourceScheduleId], references: [id], onDelete: SetNull)
 
-  @@index([storeMappingId, startedAt], map: "android_store_review_fetch_runs_mapping_started_idx")
-  @@index([status, startedAt], map: "android_store_review_fetch_runs_status_started_idx")
+  @@unique([storeMappingId, triggerType, scheduledFor], map: "android_store_review_fetch_runs_mapping_trigger_scheduled_key")
+  @@index([status, nextAttemptAt], map: "android_store_review_fetch_runs_status_next_attempt_idx")
+  @@index([status, lockedAt], map: "android_store_review_fetch_runs_status_locked_idx")
+  @@index([storeMappingId, createdAt], map: "android_store_review_fetch_runs_mapping_created_idx")
+  @@index([sourceScheduleId, scheduledFor], map: "android_store_review_fetch_runs_schedule_for_idx")
+  @@index([createdAt], map: "android_store_review_fetch_runs_created_idx")
   @@map("android_store_review_fetch_runs")
+}
+
+model AndroidStoreReviewFetchSchedule {
+  id               String                       @id @default(uuid()) @db.Uuid
+  storeMappingId   String                       @unique @map("store_mapping_id") @db.Uuid
+  status           ReviewFetchScheduleStatus    @default(ACTIVE)
+  intervalHours    Int                          @default(8) @map("interval_hours")
+  nextRunAt        DateTime                     @map("next_run_at") @db.Timestamptz(6)
+  lastRunAt        DateTime?                    @map("last_run_at") @db.Timestamptz(6)
+  lastStatus       ReviewFetchRunStatus?        @map("last_status")
+  lastErrorCode    String?                      @map("last_error_code")
+  lastErrorMessage String?                      @map("last_error_message") @db.Text
+  lockedAt         DateTime?                    @map("locked_at") @db.Timestamptz(6)
+  lockedBy         String?                      @map("locked_by")
+  runCount         Int                          @default(0) @map("run_count")
+  createdBy        String?                      @map("created_by")
+  updatedBy        String?                      @map("updated_by")
+  createdAt        DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeMapping     AndroidStoreMapping          @relation(fields: [storeMappingId], references: [id], onDelete: Cascade)
+  fetchRuns        AndroidStoreReviewFetchRun[]
+
+  @@index([status, nextRunAt], map: "android_store_review_fetch_schedules_status_next_idx")
+  @@index([lockedAt], map: "android_store_review_fetch_schedules_locked_idx")
+  @@map("android_store_review_fetch_schedules")
 }
 
 model AndroidStoreReviewReplyTemplate {
@@ -165,6 +215,7 @@ model AndroidCredential {
   @@unique([storeProfileId], map: "android_credentials_profile_key")
   @@index([credentialRef, status], map: "android_credentials_lookup_idx")
   @@index([storeAccountName, status], map: "android_credentials_store_status_idx")
+  @@index([updatedAt(sort: Desc)], map: "android_credentials_updated_idx")
   @@index([vaultSecretId], map: "android_credentials_vault_secret_id_idx")
   @@index([vaultSecretName], map: "android_credentials_vault_secret_name_idx")
   @@map("android_credentials")
@@ -200,6 +251,8 @@ model IapAndroid {
 
   @@unique([packageName, purchaseToken])
   @@index([packageName, productId])
+  @@index([packageName, storeProfileId, verifiedAt], map: "iap_android_package_profile_verified_idx")
+  @@index([packageName, storeProfileId, purchaseDate], map: "iap_android_package_profile_purchase_idx")
   @@index([state, purchaseDate])
   @@index([storeProfileId])
   @@map("iap_android")

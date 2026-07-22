@@ -1,39 +1,36 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import type { DateRange } from "react-day-picker";
 import {
   ArrowDownRight,
   ArrowLeft,
+  ArrowUpDown,
   ArrowUpRight,
   Apple,
   Calendar,
   ChevronRight,
   CreditCard,
   FileJson,
-  MoreHorizontal,
+  RotateCcw,
   Smartphone,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { TableEmptyState } from "@/components/tracking/primitives";
+import { Calendar as CalendarPicker } from "@/components/ui/calendar";
+import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+  TableEmptyState,
+  TablePaginationFooter,
+} from "@/components/tracking/primitives";
 import {
-  Pagination,
-  PaginationContent,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -43,12 +40,137 @@ import {
 } from "@/components/ui/select";
 import type {
   IapAppDetailPageData,
+  IapAppMetrics,
   IapAppTransaction,
+  IapRevenueGranularity,
+  IapTrialConversionAnalytics,
 } from "@/lib/tracking/page-data";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
-import type { IosIapTransactionSummary } from "@/lib/tracking/types";
+import type {
+  IosIapTransactionSummary,
+  IosIapTwoHourCheck,
+} from "@/lib/tracking/types";
+import { showToast } from "@/lib/client/toast";
+import type { IapRevenueChartProps } from "./iap-revenue-chart";
+import type { IosTrialAnalyticsPanelProps } from "./ios-trial-analytics-panel";
 
-const pageSize = 10;
+const IapReceiptDialog = dynamic(
+  () => import("./iap-receipt-dialog").then((mod) => mod.IapReceiptDialog),
+  { loading: () => null },
+);
+
+const IapRevenueChart = dynamic<IapRevenueChartProps>(
+  () => import("./iap-revenue-chart").then((mod) => mod.IapRevenueChart),
+  {
+    loading: () => (
+      <div className="flex min-h-[320px] flex-col rounded-lg border bg-card p-5 lg:col-span-7">
+        <div className="h-5 w-28 animate-pulse rounded bg-muted" />
+        <div className="mt-5 h-[240px] animate-pulse rounded bg-muted/60" />
+      </div>
+    ),
+    ssr: false,
+  },
+);
+
+const IosTrialAnalyticsPanel = dynamic<IosTrialAnalyticsPanelProps>(
+  () =>
+    import("./ios-trial-analytics-panel").then(
+      (mod) => mod.IosTrialAnalyticsPanel,
+    ),
+  {
+    loading: () => (
+      <div className="h-[360px] overflow-hidden rounded-lg border bg-card">
+        <div className="h-full animate-pulse bg-muted/30" />
+      </div>
+    ),
+    ssr: false,
+  },
+);
+
+type IapTransactionListResponse = {
+  success?: boolean;
+  data?: IapAppTransaction[];
+  error?: string;
+  metrics?: IapAppMetrics;
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  totalPages?: number;
+  transactionStates?: string[];
+  twoHourChecks?: IosIapTwoHourCheck[];
+};
+
+type IapTrialAnalyticsResponse = {
+  success?: boolean;
+  error?: string;
+  trialAnalytics?: IapTrialConversionAnalytics | null;
+};
+
+type IapAppContextResponse = {
+  success?: boolean;
+  error?: string;
+  metrics?: IapAppMetrics;
+  transactionStates?: string[];
+};
+
+type IapTransactionReceiptResponse = {
+  success?: boolean;
+  error?: string;
+  rawReceipt?: unknown;
+};
+
+type IapTwoHourRetryResponse = {
+  check?: {
+    error?: string;
+    status: string;
+  } | null;
+  error?: string;
+  ok?: boolean;
+};
+
+const IAP_TRANSACTION_SKELETON_COUNT = 8;
+const IAP_REALTIME_REFRESH_DELAY_MS = 650;
+const IAP_TWO_HOUR_FILTER_OPTIONS = [
+  { label: "All 2h", value: "all" },
+  { label: "2h Passed", value: "passed" },
+  { label: "Auto-renew off", value: "cancelled" },
+  { label: "2h Checked", value: "checked" },
+  { label: "2h Failed", value: "failed" },
+  { label: "2h Checking", value: "processing" },
+  { label: "2h Retrying", value: "retrying" },
+  { label: "2h Pending", value: "pending" },
+  { label: "No 2h row", value: "not_scheduled" },
+  { label: "Not applicable", value: "not_applicable" },
+];
+const IAP_CONVERSION_FILTER_OPTIONS = [
+  { label: "All conversion", value: "all" },
+  { label: "Trial active", value: "trial_active" },
+  { label: "Grace period", value: "grace_period" },
+  { label: "Billing retry", value: "billing_retry" },
+  { label: "Converted to paid", value: "converted_to_paid" },
+  { label: "Not converted", value: "not_converted" },
+];
+const IAP_FIREBASE_FILTER_OPTIONS = [
+  { label: "All Firebase", value: "all" },
+  { label: "Firebase Sent", value: "sent" },
+  { label: "Firebase Failed", value: "failed" },
+  { label: "Firebase Retrying", value: "retrying" },
+  { label: "Firebase Pending", value: "pending" },
+  { label: "Firebase Not sent", value: "not_sent" },
+  { label: "Firebase No row", value: "not_scheduled" },
+  { label: "Firebase No data", value: "no_data" },
+];
+const IAP_ADJUST_FILTER_OPTIONS = [
+  { label: "All Adjust", value: "all" },
+  { label: "Adjust Sent", value: "sent" },
+  { label: "Adjust Skipped", value: "skipped" },
+  { label: "Adjust Failed", value: "failed" },
+  { label: "Adjust Retrying", value: "retrying" },
+  { label: "Adjust Pending", value: "pending" },
+  { label: "Adjust Not sent", value: "not_sent" },
+  { label: "Adjust No row", value: "not_scheduled" },
+  { label: "Adjust No data", value: "no_data" },
+];
 
 function formatRevenue(
   micros: number | string | null,
@@ -71,6 +193,37 @@ function formatDate(dateVal: number | string | null) {
   }
   if (Number.isNaN(d.getTime())) return "N/A";
   return d.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
+}
+
+function dateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateFromInputValue(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function displayDateValue(value: string) {
+  const date = dateFromInputValue(value);
+  if (!date) return "Purchase date";
+
+  return date.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function isIosTransaction(
@@ -101,14 +254,30 @@ function transactionProductId(transaction: IapAppTransaction) {
     : transaction.productId;
 }
 
-function transactionPackageOrBundle(transaction: IapAppTransaction) {
-  return isIosTransaction(transaction)
-    ? transaction.bundle_id
-    : transaction.packageName;
-}
-
 function transactionKind(transaction: IapAppTransaction) {
   return isAndroidTransaction(transaction) ? transaction.purchaseKind : null;
+}
+
+function transactionIsFreeTrial(transaction: IapAppTransaction) {
+  if (!isIosTransaction(transaction)) return false;
+  return (
+    transaction.is_trial === true ||
+    transaction.offer_discount_type?.toLowerCase() === "free_trial"
+  );
+}
+
+function transactionTrialLabel(transaction: IapAppTransaction) {
+  if (!isIosTransaction(transaction)) return null;
+  if (transactionIsFreeTrial(transaction)) return "Free Trial";
+  if (transaction.offer_discount_type) {
+    return transaction.offer_discount_type
+      .toLowerCase()
+      .split(/[_\s-]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+  return "Paid";
 }
 
 function transactionIsTest(transaction: IapAppTransaction) {
@@ -139,40 +308,540 @@ function transactionExpiresDate(transaction: IapAppTransaction) {
     : transaction.expiresDate;
 }
 
-function transactionRawReceipt(transaction: IapAppTransaction) {
-  return isIosTransaction(transaction)
-    ? transaction.raw_receipt
-    : transaction.rawReceipt;
+function transactionSource(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction) ? transaction.ingestion_source : null;
 }
 
-function transactionRevenueValue(transaction: IapAppTransaction) {
-  const micros = transactionRevenueMicros(transaction);
-  if (micros === null) return 0;
-  const numericMicros =
-    typeof micros === "number" ? micros : Number.parseInt(micros, 10);
-  return Number.isFinite(numericMicros) ? numericMicros / 1_000_000 : 0;
+function transactionRenewalStatus(transaction: IapAppTransaction) {
+  if (isIosTransaction(transaction)) return transaction.renewal_status;
+  if (transaction.autoRenewing === true) return "enabled";
+  if (transaction.autoRenewing === false) return "disabled";
+  return null;
 }
 
-function transactionTimestamp(transaction: IapAppTransaction) {
-  const dateValue = transactionPurchaseDate(transaction);
-  if (!dateValue) return 0;
-  const timestamp = new Date(dateValue).getTime();
-  return Number.isFinite(timestamp) ? timestamp : 0;
+function transactionRenewalDate(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction) ? transaction.renewal_date : null;
 }
 
-function transactionSearchText(transaction: IapAppTransaction) {
-  return [
-    transactionDisplayId(transaction),
-    transactionSecondaryId(transaction),
-    transactionProductId(transaction),
-    transactionPackageOrBundle(transaction),
-    isIosTransaction(transaction)
-      ? transaction.user_id
-      : transaction.purchaseToken,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+function transactionRenewalProductId(transaction: IapAppTransaction) {
+  return isIosTransaction(transaction) ? transaction.renewal_product_id : null;
+}
+
+function renewalStatusMeta(status: "enabled" | "disabled" | null) {
+  if (status === "enabled") {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Auto-renew on",
+      title:
+        "Apple reports that this subscription is set to renew automatically.",
+    };
+  }
+
+  if (status === "disabled") {
+    return {
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      label: "Auto-renew off",
+      title:
+        "The customer turned off automatic renewal. Access may remain active until expiry.",
+    };
+  }
+
+  return null;
+}
+
+function trialConversionStatusMeta(transaction: IosIapTransactionSummary) {
+  const paidTransactionSuffix = transaction.paid_transaction_id
+    ? ` Paid transaction: ${transaction.paid_transaction_id}.`
+    : "";
+
+  switch (transaction.trial_conversion_status) {
+    case "trial_active":
+      return {
+        className: "border-blue-200 bg-blue-50 text-blue-700",
+        label: "Trial active",
+        title: "The free trial has not expired yet.",
+      };
+    case "grace_period":
+      return {
+        className: "border-amber-200 bg-amber-50 text-amber-700",
+        label: "Grace period",
+        title:
+          "The trial expired, but Apple still grants access during the billing grace period.",
+      };
+    case "billing_retry":
+      return {
+        className: "border-amber-200 bg-amber-50 text-amber-700",
+        label: "Billing retry",
+        title:
+          "The trial expired and payment failed. Apple is retrying billing; no paid renewal is confirmed yet.",
+      };
+    case "converted_to_paid":
+      return {
+        className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        label: "Converted to paid",
+        title: `A paid transaction was recorded after the free trial.${paidTransactionSuffix}`,
+      };
+    case "not_converted":
+      return {
+        className: "border-rose-200 bg-rose-50 text-rose-700",
+        label: "Not converted",
+        title:
+          "The free trial expired and no paid continuation transaction has been recorded.",
+      };
+    default:
+      return null;
+  }
+}
+
+type TwoHourBadgeMeta = {
+  className: string;
+  label: string;
+  title: string;
+};
+
+type ProviderDeliveryMeta = {
+  message: string | null;
+  provider: "Adjust" | "Firebase";
+  skipped: boolean;
+  status: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function cleanText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function providerDeliveryMeta(
+  rawContext: unknown,
+  provider: "adjust" | "ga4",
+): ProviderDeliveryMeta | null {
+  const context = isRecord(rawContext) ? rawContext : {};
+  const delivery = isRecord(context.delivery) ? context.delivery : {};
+  const deliveryState = isRecord(delivery[provider])
+    ? delivery[provider]
+    : null;
+  const legacyState = isRecord(context[provider]) ? context[provider] : null;
+  const state = deliveryState ?? legacyState;
+  if (!state) return null;
+
+  const result = isRecord(state.result) ? state.result : state;
+  const responseStatus = Number(result.responseStatus ?? result.status);
+  const status =
+    cleanText(state.status) ||
+    (Number.isFinite(responseStatus) &&
+    responseStatus >= 200 &&
+    responseStatus < 300
+      ? "delivered"
+      : "");
+  const message =
+    cleanText(state.message) ||
+    cleanText(result.responseBody) ||
+    cleanText(result.error) ||
+    null;
+
+  return {
+    message,
+    provider: provider === "ga4" ? "Firebase" : "Adjust",
+    skipped: Boolean(result.skipped),
+    status,
+  };
+}
+
+function providerStatusBadge(meta: ProviderDeliveryMeta): TwoHourBadgeMeta {
+  if (meta.skipped) {
+    return {
+      className: "border-slate-200 bg-slate-50 text-slate-600",
+      label: "Skipped",
+      title: meta.message ?? `${meta.provider} delivery was skipped.`,
+    };
+  }
+
+  if (meta.status === "delivered") {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Sent",
+      title: `${meta.provider} delivery completed.`,
+    };
+  }
+
+  if (meta.status === "retryable_error") {
+    return {
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      label: "Retrying",
+      title: meta.message ?? `${meta.provider} delivery will retry.`,
+    };
+  }
+
+  return {
+    className: "border-rose-200 bg-rose-50 text-rose-700",
+    label: "Failed",
+    title: meta.message ?? `${meta.provider} delivery failed.`,
+  };
+}
+
+function twoHourMutedBadge(label: string, title: string): TwoHourBadgeMeta {
+  return {
+    className: "border-slate-200 bg-slate-50 text-slate-600",
+    label,
+    title,
+  };
+}
+
+function twoHourCheckStatusBadge(
+  check: IosIapTwoHourCheck | null,
+  options?: { expectsCheck?: boolean },
+): TwoHourBadgeMeta {
+  if (!check) {
+    if (!options?.expectsCheck) {
+      return twoHourMutedBadge(
+        "-",
+        "2-hour checks only apply to iOS free-trial transactions.",
+      );
+    }
+
+    return twoHourMutedBadge(
+      "Not scheduled",
+      "No ios_iap_two_hour_checks row exists for this transaction. Webhook-only records usually do not include app_instance_id or device identifiers, so Firebase/Adjust cannot be sent.",
+    );
+  }
+
+  const status = check.status.toLowerCase();
+  const ga4 = providerDeliveryMeta(check.raw_context, "ga4");
+  const adjust = providerDeliveryMeta(check.raw_context, "adjust");
+  const providerBadges = [
+    ga4 ??
+      (check.renewed === true && check.ga4_sent_at
+        ? ({
+            message: null,
+            provider: "Firebase",
+            skipped: false,
+            status: "delivered",
+          } satisfies ProviderDeliveryMeta)
+        : null),
+    adjust,
+  ].filter((item): item is ProviderDeliveryMeta => Boolean(item));
+  const failedProviders = providerBadges.filter(
+    (item) =>
+      item.status &&
+      item.status !== "delivered" &&
+      item.status !== "retryable_error" &&
+      !item.skipped,
+  );
+
+  if (status === "sent") {
+    if (check.renewed === null) {
+      return {
+        className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        label: "Checked",
+        title: "2-hour check completed.",
+      };
+    }
+
+    return {
+      className: check.renewed
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+        : "border-rose-200 bg-rose-50 text-rose-700",
+      label: check.renewed ? "Passed" : "Auto-renew off",
+      title: check.renewed
+        ? "No cancellation signal was found after 2 hours. This is a prediction signal, not a paid renewal."
+        : "Apple reported that auto-renew was disabled within the 2-hour observation window. Trial access remains valid until expiry.",
+    };
+  }
+
+  if (status === "failed") {
+    if (failedProviders.length >= 2) {
+      return {
+        className: "border-rose-200 bg-rose-50 text-rose-700",
+        label: "Failed",
+        title: check.last_error ?? "All 2-hour provider deliveries failed.",
+      };
+    }
+
+    if (providerBadges.length) {
+      return {
+        className: "border-amber-200 bg-amber-50 text-amber-700",
+        label: "Partial",
+        title:
+          check.last_error ??
+          "2-hour check completed with a provider-specific issue.",
+      };
+    }
+
+    return {
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      label: "Failed",
+      title:
+        check.last_error ?? "2-hour check failed before provider delivery.",
+    };
+  }
+
+  if (status === "processing") {
+    return {
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      label: "Checking",
+      title: "2-hour check is processing.",
+    };
+  }
+
+  if (status === "retrying") {
+    return {
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      label: "Retrying",
+      title: check.last_error ?? "2-hour check will retry.",
+    };
+  }
+
+  return {
+    className: "border-slate-200 bg-slate-50 text-slate-600",
+    label: "Pending",
+    title: `The retention signal will be evaluated at ${formatDate(check.check_at)}.`,
+  };
+}
+
+function providerFailureLikely(
+  check: IosIapTwoHourCheck,
+  provider: "adjust" | "ga4",
+) {
+  const message = `${check.last_error ?? ""} ${
+    isRecord(check.raw_context) ? cleanText(check.raw_context.error) : ""
+  }`.toLowerCase();
+  return provider === "ga4"
+    ? /ga4|firebase|measurement|api_secret|app_instance/.test(message)
+    : /adjust|adid|idfa|idfv/.test(message);
+}
+
+function providerColumnStatusBadge(
+  check: IosIapTwoHourCheck | null,
+  provider: "adjust" | "ga4",
+  options?: { expectsCheck?: boolean },
+): TwoHourBadgeMeta {
+  const providerLabel = provider === "ga4" ? "Firebase" : "Adjust";
+
+  if (!check) {
+    if (!options?.expectsCheck) {
+      return twoHourMutedBadge(
+        "-",
+        `${providerLabel} delivery only applies when a 2-hour check exists.`,
+      );
+    }
+
+    return twoHourMutedBadge(
+      "Not scheduled",
+      `No 2-hour check row exists, so ${providerLabel} was not attempted.`,
+    );
+  }
+
+  const meta = providerDeliveryMeta(check.raw_context, provider);
+  if (meta) return providerStatusBadge(meta);
+
+  if (provider === "ga4" && check.renewed === true && check.ga4_sent_at) {
+    return providerStatusBadge({
+      message: null,
+      provider: "Firebase",
+      skipped: false,
+      status: "delivered",
+    });
+  }
+
+  const status = check.status.toLowerCase();
+  if (check.renewed === false) {
+    return twoHourMutedBadge(
+      "Not sent",
+      `${providerLabel} was not sent because the 2-hour check found a cancellation signal.`,
+    );
+  }
+
+  if (status === "pending") {
+    return twoHourMutedBadge(
+      "Pending",
+      `${providerLabel} will be evaluated when the 2-hour check runs.`,
+    );
+  }
+
+  if (status === "processing") {
+    return {
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      label: "Checking",
+      title: `${providerLabel} delivery is being evaluated.`,
+    };
+  }
+
+  if (status === "retrying") {
+    return {
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      label: "Retrying",
+      title: check.last_error ?? `${providerLabel} delivery will retry.`,
+    };
+  }
+
+  if (status === "failed" && providerFailureLikely(check, provider)) {
+    return {
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      label: "Failed",
+      title: check.last_error ?? `${providerLabel} delivery failed.`,
+    };
+  }
+
+  return twoHourMutedBadge(
+    "No data",
+    `${providerLabel} delivery status was not recorded for this check.`,
+  );
+}
+
+function canRetryTwoHourCheck(check: IosIapTwoHourCheck | null) {
+  return Boolean(check && ["failed", "retrying"].includes(check.status));
+}
+
+function sourceMeta(source: string | null) {
+  const normalized = source?.trim().toLowerCase() ?? "";
+
+  if (normalized === "app_store_server_notification") {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Webhook",
+      title: "Saved from App Store Server Notifications webhook",
+    };
+  }
+
+  if (
+    normalized === "verify_ios_edge_function" ||
+    normalized === "app_store_server_api.get_transaction_info"
+  ) {
+    return {
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      label: "Verify API",
+      title: "Saved from verify-ios/API transaction verification",
+    };
+  }
+
+  if (normalized) {
+    return {
+      className: "border-slate-200 bg-slate-50 text-slate-600",
+      label: source,
+      title: `Saved from ${source}`,
+    };
+  }
+
+  return {
+    className: "border-slate-200 bg-slate-50 text-slate-600",
+    label: "Legacy source",
+    title:
+      "Saved before source tracking was added. This does not guarantee the mobile verify API provided app_instance_id or attribution identifiers.",
+  };
+}
+
+function iapRealtimeTopic(platform: string, identifier: string) {
+  return `iap-detail:${platform}:${identifier}`;
+}
+
+function realtimeStatusMeta(
+  status: "connected" | "disconnected" | "error" | "unauthorized",
+) {
+  if (status === "connected") {
+    return {
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      label: "Live",
+    };
+  }
+
+  if (status === "unauthorized") {
+    return {
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      label: "Live auth",
+    };
+  }
+
+  if (status === "error") {
+    return {
+      className: "border-rose-200 bg-rose-50 text-rose-700",
+      label: "Live error",
+    };
+  }
+
+  return {
+    className: "border-slate-200 bg-slate-50 text-slate-600",
+    label: "Live off",
+  };
+}
+
+type JsonRecord = Record<string, unknown>;
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function decodeBase64UrlJson(value: string): unknown {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const json = new TextDecoder().decode(bytes);
+
+  return JSON.parse(json) as unknown;
+}
+
+function decodeJws(jws: string) {
+  const [header, payload] = jws.split(".");
+  if (!header || !payload) return null;
+
+  try {
+    return {
+      header: decodeBase64UrlJson(header),
+      payload: decodeBase64UrlJson(payload),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function signedTransactionInfoFromReceipt(receipt: unknown) {
+  if (!isJsonRecord(receipt)) return null;
+
+  const direct = receipt.signedTransactionInfo;
+  if (typeof direct === "string") return direct;
+
+  const transactionInfoResponse = receipt.transactionInfoResponse;
+  if (isJsonRecord(transactionInfoResponse)) {
+    const nested = transactionInfoResponse.signedTransactionInfo;
+    if (typeof nested === "string") return nested;
+  }
+
+  return null;
+}
+
+function receiptDisplayPayload(receipt: unknown) {
+  if (!isJsonRecord(receipt)) return receipt;
+
+  const existingDecoded =
+    isJsonRecord(receipt.decodedTransactionInfo) ||
+    Array.isArray(receipt.decodedTransactionInfo)
+      ? receipt.decodedTransactionInfo
+      : null;
+  const decodedRenewalInfo =
+    isJsonRecord(receipt.decodedRenewalInfo) ||
+    Array.isArray(receipt.decodedRenewalInfo)
+      ? receipt.decodedRenewalInfo
+      : null;
+  const signedTransactionInfo = signedTransactionInfoFromReceipt(receipt);
+  const decoded = signedTransactionInfo
+    ? decodeJws(signedTransactionInfo)
+    : null;
+  const decodedTransactionInfo = existingDecoded ?? decoded?.payload ?? null;
+
+  if (!decodedTransactionInfo && !decodedRenewalInfo) return receipt;
+
+  return {
+    receiptType: "app_store_server_api_transaction",
+    decodedTransactionInfo,
+    decodedRenewalInfo,
+    jwsHeader: decoded?.header ?? receipt.jwsHeader ?? null,
+    notificationType: receipt.notificationType ?? null,
+    source: receipt.source ?? "app_store_server_api.get_transaction_info",
+    subtype: receipt.subtype ?? null,
+  };
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -181,7 +850,12 @@ function StatusBadge({ status }: { status: string }) {
   if (s.includes("active") || s.includes("purchased"))
     cls =
       "bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-200 dark:text-emerald-400";
-  else if (s.includes("expired") || s.includes("canceled"))
+  else if (
+    s.includes("expired") ||
+    s.includes("canceled") ||
+    s.includes("refund") ||
+    s.includes("revoke")
+  )
     cls =
       "bg-destructive/10 border-destructive/30 text-destructive dark:bg-destructive/50 dark:text-foreground";
   else if (s.includes("grace") || s.includes("paused"))
@@ -217,7 +891,7 @@ function OverviewCard({
         <div className="tracking-tight flex items-center gap-2 text-sm font-medium">
           <span>{title}</span>
         </div>
-        <MoreHorizontal size={16} className="cursor-pointer opacity-60" />
+        <div className="h-2 w-2 rounded-full bg-primary/70" />
       </div>
       {/* Content */}
       <div className="space-y-[10px] px-4 pt-0 pb-4">
@@ -247,66 +921,804 @@ function OverviewCard({
   );
 }
 
-export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
-  const { app, transactions } = data;
-  const isIos = app.platform === "ios";
+function IapMetricsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-2 gap-4 lg:col-span-5">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div
+            key={`iap-overview-skeleton-${index}`}
+            className="col-span-2 h-[150px] rounded-lg border bg-card p-5 sm:col-span-1"
+          >
+            <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+            <div className="mt-8 h-8 w-28 animate-pulse rounded bg-muted" />
+            <div className="mt-4 h-4 w-36 animate-pulse rounded bg-muted" />
+          </div>
+        ))}
+      </div>
+      <div className="h-[320px] rounded-lg border bg-card p-5 lg:col-span-7">
+        <div className="h-5 w-28 animate-pulse rounded bg-muted" />
+        <div className="mt-4 h-[240px] animate-pulse rounded bg-muted/60" />
+      </div>
+    </div>
+  );
+}
 
-  const [search, setSearch] = useState("");
-  const [filterState, setFilterState] = useState<string>("all");
-  const [filterKind, setFilterKind] = useState<string>("all");
-  const [page, setPage] = useState(1);
-  const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
+function displayDateRangeValue(from: string, to: string) {
+  const fromLabel = displayDateValue(from);
+  const toLabel = displayDateValue(to);
 
-  const filteredTransactions = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  if (from && to) return `${fromLabel} - ${toLabel}`;
+  if (from) return `From ${fromLabel}`;
+  if (to) return `To ${toLabel}`;
+  return "Purchase date";
+}
 
-    return transactions
-      .filter((tx) => {
-        const tState = tx.state.toLowerCase();
-        const tKind = transactionKind(tx);
-        const matchSearch = !query || transactionSearchText(tx).includes(query);
-        const matchState = filterState === "all" || tState === filterState;
-        const matchKind =
-          isIos || filterKind === "all" || tKind?.toLowerCase() === filterKind;
+function dateOnlyTime(date: Date) {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+  ).getTime();
+}
 
-        return matchSearch && matchState && matchKind;
-      })
-      .sort((a, b) => transactionTimestamp(b) - transactionTimestamp(a));
-  }, [transactions, search, filterState, filterKind, isIos]);
+function TransactionPurchaseDateRangePicker({
+  onChange,
+  valueFrom,
+  valueTo,
+}: {
+  onChange: (value: { from: string; to: string }) => void;
+  valueFrom: string;
+  valueTo: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draftRange, setDraftRange] = useState<DateRange | undefined>();
 
-  const stats = useMemo(() => {
-    let rev = 0;
-    let active = 0;
-    let canceled = 0;
-    const latestTimestamp = Math.max(
-      0,
-      ...filteredTransactions.map(transactionTimestamp),
+  function resetDraftRange() {
+    setDraftRange(
+      valueFrom || valueTo
+        ? {
+            from: dateFromInputValue(valueFrom) ?? undefined,
+            to: dateFromInputValue(valueTo) ?? undefined,
+          }
+        : undefined,
     );
-    const week = 7 * 24 * 60 * 60 * 1000;
-    let revL7 = 0;
-    let revP7 = 0;
-    let ordL7 = 0;
-    let ordP7 = 0;
+  }
 
-    filteredTransactions.forEach((tx) => {
-      const test = transactionIsTest(tx);
-      const st = tx.state.toLowerCase();
-      const value = transactionRevenueValue(tx);
-      const timestamp = transactionTimestamp(tx);
+  function applyRange(from: Date, to: Date) {
+    onChange({
+      from: dateInputValue(from),
+      to: dateInputValue(to),
+    });
+    setOpen(false);
+  }
 
-      if (!test && value > 0) {
-        rev += value;
-        if (latestTimestamp && timestamp >= latestTimestamp - week) {
-          revL7 += value;
-          ordL7++;
-        } else if (latestTimestamp && timestamp >= latestTimestamp - 2 * week) {
-          revP7 += value;
-          ordP7++;
+  function handleDayClick(day: Date) {
+    if (!draftRange?.from || draftRange.to) {
+      setDraftRange({ from: day, to: undefined });
+      return;
+    }
+
+    if (dateOnlyTime(day) < dateOnlyTime(draftRange.from)) {
+      setDraftRange({ from: day, to: undefined });
+      return;
+    }
+
+    setDraftRange({ from: draftRange.from, to: day });
+    applyRange(draftRange.from, day);
+  }
+
+  return (
+    <div className="flex w-full items-center gap-2 sm:w-auto">
+      <Popover
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (nextOpen) resetDraftRange();
+          setOpen(nextOpen);
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-9 w-full justify-start gap-2 bg-background px-3 font-normal sm:w-[270px]"
+          >
+            <Calendar size={14} />
+            <span className="truncate">
+              {displayDateRangeValue(valueFrom, valueTo)}
+            </span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="end">
+          <CalendarPicker
+            mode="range"
+            numberOfMonths={2}
+            selected={draftRange}
+            onDayClick={handleDayClick}
+            className="rounded-lg border"
+            captionLayout="dropdown"
+          />
+        </PopoverContent>
+      </Popover>
+      {valueFrom || valueTo ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="h-9 w-9 shrink-0 bg-background"
+          onClick={() => onChange({ from: "", to: "" })}
+          title="Clear purchase date range"
+        >
+          <X size={14} />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
+  const { app } = data;
+  const isIos = app.platform === "ios";
+  const normalizedAppId =
+    app.appId
+      ?.trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "") ?? "";
+  const isTestApp = isIos
+    ? normalizedAppId === "li000"
+    : normalizedAppId === "la000";
+
+  const [metrics, setMetrics] = useState(data.metrics);
+  const [transactions, setTransactions] = useState(data.transactions);
+  const [twoHourChecks, setTwoHourChecks] = useState(data.twoHourChecks);
+  const [transactionPagination, setTransactionPagination] = useState(
+    data.transactionPagination,
+  );
+  const [transactionStates, setTransactionStates] = useState(
+    data.transactionStates,
+  );
+  const [metricsLoaded, setMetricsLoaded] = useState(
+    data.metricsLoaded ?? true,
+  );
+  const [trialAnalytics, setTrialAnalytics] = useState(data.trialAnalytics);
+  const [trialAnalyticsLoading, setTrialAnalyticsLoading] = useState(
+    isIos && !data.trialAnalytics,
+  );
+  const [trialAnalyticsRefreshing, setTrialAnalyticsRefreshing] =
+    useState(false);
+  const [realtimeStatus, setRealtimeStatus] = useState<
+    "connected" | "disconnected" | "error" | "unauthorized"
+  >("disconnected");
+  const [realtimeRefreshing, setRealtimeRefreshing] = useState(false);
+  const [filterEnvironment, setFilterEnvironment] = useState<string>(
+    data.filters.environment,
+  );
+  const [filterAdjustStatus, setFilterAdjustStatus] = useState<string>(
+    data.filters.adjustStatus,
+  );
+  const [filterConversionStatus, setFilterConversionStatus] = useState<string>(
+    data.filters.conversionStatus,
+  );
+  const [filterFirebaseStatus, setFilterFirebaseStatus] = useState<string>(
+    data.filters.firebaseStatus,
+  );
+  const [filterState, setFilterState] = useState<string>(data.filters.state);
+  const [filterKind, setFilterKind] = useState<string>(data.filters.kind);
+  const [filterTwoHourStatus, setFilterTwoHourStatus] = useState<string>(
+    data.filters.twoHourStatus,
+  );
+  const [filterTrial, setFilterTrial] = useState<string>(data.filters.trial);
+  const [filterPurchaseDateFrom, setFilterPurchaseDateFrom] = useState<string>(
+    data.filters.purchaseDateFrom,
+  );
+  const [filterPurchaseDateTo, setFilterPurchaseDateTo] = useState<string>(
+    data.filters.purchaseDateTo,
+  );
+  const [revenueGranularity, setRevenueGranularity] =
+    useState<IapRevenueGranularity>(data.filters.revenueGranularity);
+  const [revenueSort, setRevenueSort] = useState<string>(
+    data.filters.revenueSort,
+  );
+  const [revenueGranularityLoading, setRevenueGranularityLoading] =
+    useState(false);
+  const [tableLoading, setTableLoading] = useState(false);
+  const [loadingPage, setLoadingPage] = useState<number | null>(null);
+  const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
+  const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
+  const [twoHourRetryingId, setTwoHourRetryingId] = useState<string | null>(
+    null,
+  );
+  const latestViewRef = useRef({
+    filterAdjustStatus: data.filters.adjustStatus,
+    filterConversionStatus: data.filters.conversionStatus,
+    filterEnvironment: data.filters.environment,
+    filterFirebaseStatus: data.filters.firebaseStatus,
+    filterKind: data.filters.kind,
+    filterPurchaseDateFrom: data.filters.purchaseDateFrom,
+    filterPurchaseDateTo: data.filters.purchaseDateTo,
+    filterState: data.filters.state,
+    filterTwoHourStatus: data.filters.twoHourStatus,
+    filterTrial: data.filters.trial,
+    page: data.transactionPagination.page,
+    revenueGranularity: data.filters.revenueGranularity,
+    revenueSort: data.filters.revenueSort,
+  });
+  const realtimeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const realtimeRefreshInFlightRef = useRef(false);
+  const realtimeRefreshQueuedRef = useRef(false);
+
+  async function loadTransactionsPage(
+    page: number,
+    overrides?: {
+      filterAdjustStatus?: string;
+      filterConversionStatus?: string;
+      filterEnvironment?: string;
+      filterFirebaseStatus?: string;
+      filterKind?: string;
+      filterPurchaseDateFrom?: string;
+      filterPurchaseDateTo?: string;
+      filterState?: string;
+      filterTwoHourStatus?: string;
+      filterTrial?: string;
+      revenueGranularity?: IapRevenueGranularity;
+      revenueSort?: string;
+    },
+    options?: {
+      silent?: boolean;
+    },
+  ) {
+    const nextFilterAdjustStatus =
+      overrides?.filterAdjustStatus ?? filterAdjustStatus;
+    const nextFilterConversionStatus =
+      overrides?.filterConversionStatus ?? filterConversionStatus;
+    const nextFilterEnvironment =
+      overrides?.filterEnvironment ?? filterEnvironment;
+    const nextFilterFirebaseStatus =
+      overrides?.filterFirebaseStatus ?? filterFirebaseStatus;
+    const nextFilterState = overrides?.filterState ?? filterState;
+    const nextFilterKind = overrides?.filterKind ?? filterKind;
+    const nextFilterTwoHourStatus =
+      overrides?.filterTwoHourStatus ?? filterTwoHourStatus;
+    const nextFilterTrial = overrides?.filterTrial ?? filterTrial;
+    const nextFilterPurchaseDateFrom =
+      overrides?.filterPurchaseDateFrom ?? filterPurchaseDateFrom;
+    const nextFilterPurchaseDateTo =
+      overrides?.filterPurchaseDateTo ?? filterPurchaseDateTo;
+    const nextRevenueGranularity =
+      overrides?.revenueGranularity ?? revenueGranularity;
+    const nextRevenueSort = overrides?.revenueSort ?? revenueSort;
+    const params = new URLSearchParams({
+      context: overrides ? "true" : "false",
+      mappingId: app.mappingId,
+      page: String(page),
+      pageSize: "10",
+      platform: app.platform,
+    });
+
+    if (isTestApp) {
+      params.set("environment", nextFilterEnvironment);
+    }
+    if (nextFilterState !== "all") params.set("state", nextFilterState);
+    if (!isIos && nextFilterKind !== "all") params.set("kind", nextFilterKind);
+    if (isIos && nextFilterTrial !== "all") {
+      params.set("trial", nextFilterTrial);
+    }
+    if (isIos && nextFilterConversionStatus !== "all") {
+      params.set("conversionStatus", nextFilterConversionStatus);
+    }
+    if (isIos && nextFilterTwoHourStatus !== "all") {
+      params.set("twoHourStatus", nextFilterTwoHourStatus);
+    }
+    if (isIos && nextFilterFirebaseStatus !== "all") {
+      params.set("firebaseStatus", nextFilterFirebaseStatus);
+    }
+    if (isIos && nextFilterAdjustStatus !== "all") {
+      params.set("adjustStatus", nextFilterAdjustStatus);
+    }
+    if (nextFilterPurchaseDateFrom) {
+      params.set("purchaseDateFrom", nextFilterPurchaseDateFrom);
+    }
+    if (nextFilterPurchaseDateTo) {
+      params.set("purchaseDateTo", nextFilterPurchaseDateTo);
+    }
+    if (nextRevenueGranularity) {
+      params.set("revenueGranularity", nextRevenueGranularity);
+    }
+    if (nextRevenueSort === "asc" || nextRevenueSort === "desc") {
+      params.set("revenueSort", nextRevenueSort);
+    }
+    if (!overrides) {
+      params.set("knownTotal", String(transactionPagination.total));
+    }
+
+    if (!options?.silent) {
+      setTableLoading(true);
+      setLoadingPage(page);
+    }
+
+    try {
+      const response = await fetch(
+        `/api/admin/iap/app-transactions?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapTransactionListResponse;
+
+      if (!response.ok || !payload.success || !Array.isArray(payload.data)) {
+        throw new Error(payload.error ?? "Load IAP transactions failed.");
+      }
+
+      setTransactions(payload.data);
+      setTransactionPagination({
+        page: payload.page ?? page,
+        pageSize: payload.pageSize ?? 10,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? 1,
+      });
+      if (payload.metrics) {
+        setMetrics(payload.metrics);
+        setMetricsLoaded(true);
+      }
+      if (payload.transactionStates) {
+        setTransactionStates(payload.transactionStates);
+      }
+      if (payload.twoHourChecks) {
+        setTwoHourChecks(payload.twoHourChecks);
+      }
+    } catch (error) {
+      if (options?.silent) {
+        console.error("Realtime IAP transaction refresh failed", error);
+      } else {
+        void showToast(
+          "error",
+          error instanceof Error
+            ? error.message
+            : "Load IAP transactions failed.",
+        );
+      }
+    } finally {
+      if (!options?.silent) {
+        setTableLoading(false);
+        setLoadingPage(null);
+      }
+    }
+  }
+
+  async function loadRevenueGranularity(
+    nextGranularity: IapRevenueGranularity,
+  ) {
+    const previousGranularity = revenueGranularity;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
+      revenueGranularity: nextGranularity,
+    });
+
+    if (isTestApp) {
+      params.set("environment", filterEnvironment);
+    }
+    if (filterState !== "all") params.set("state", filterState);
+    if (!isIos && filterKind !== "all") params.set("kind", filterKind);
+    if (isIos && filterTrial !== "all") {
+      params.set("trial", filterTrial);
+    }
+
+    setRevenueGranularity(nextGranularity);
+    setRevenueGranularityLoading(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/iap/app-context?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapAppContextResponse;
+
+      if (!response.ok || !payload.success || !payload.metrics) {
+        throw new Error(payload.error ?? "Load IAP metrics failed.");
+      }
+
+      setMetrics(payload.metrics);
+      setMetricsLoaded(true);
+      setTransactionStates(payload.transactionStates ?? []);
+    } catch (error) {
+      setRevenueGranularity(previousGranularity);
+      void showToast(
+        "error",
+        error instanceof Error ? error.message : "Load IAP metrics failed.",
+      );
+    } finally {
+      setRevenueGranularityLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (metricsLoaded) return;
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
+    });
+
+    if (isTestApp) {
+      params.set("environment", filterEnvironment);
+    }
+    if (filterState !== "all") params.set("state", filterState);
+    if (!isIos && filterKind !== "all") params.set("kind", filterKind);
+    if (isIos && filterTrial !== "all") {
+      params.set("trial", filterTrial);
+    }
+    params.set("revenueGranularity", revenueGranularity);
+
+    async function loadIapContext() {
+      try {
+        const response = await fetch(
+          `/api/admin/iap/app-context?${params.toString()}`,
+        );
+        const payload = (await response.json()) as IapAppContextResponse;
+
+        if (!response.ok || !payload.success || !payload.metrics) {
+          throw new Error(payload.error ?? "Load IAP metrics failed.");
+        }
+
+        if (!cancelled) {
+          setMetrics(payload.metrics);
+          setTransactionStates(payload.transactionStates ?? []);
+          setMetricsLoaded(true);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setMetricsLoaded(true);
+          void showToast(
+            "error",
+            error instanceof Error ? error.message : "Load IAP metrics failed.",
+          );
         }
       }
-      if (st === "active" || st === "purchased") active++;
-      if (st === "canceled" || st === "expired") canceled++;
+    }
+
+    void loadIapContext();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    app.mappingId,
+    app.platform,
+    filterEnvironment,
+    filterKind,
+    filterState,
+    filterTrial,
+    isIos,
+    isTestApp,
+    metricsLoaded,
+    revenueGranularity,
+  ]);
+
+  useEffect(() => {
+    if (!isIos || trialAnalytics) return;
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
     });
+
+    async function loadTrialAnalytics() {
+      setTrialAnalyticsLoading(true);
+
+      try {
+        const response = await fetch(
+          `/api/admin/iap/trial-analytics?${params.toString()}`,
+        );
+        const payload = (await response.json()) as IapTrialAnalyticsResponse;
+
+        if (!response.ok || !payload.success) {
+          throw new Error(payload.error ?? "Load trial analytics failed.");
+        }
+
+        if (!cancelled) {
+          setTrialAnalytics(payload.trialAnalytics ?? null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          void showToast(
+            "error",
+            error instanceof Error
+              ? error.message
+              : "Load trial analytics failed.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setTrialAnalyticsLoading(false);
+        }
+      }
+    }
+
+    void loadTrialAnalytics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [app.mappingId, app.platform, isIos, trialAnalytics]);
+
+  async function refreshTrialAnalytics(options?: { silent?: boolean }) {
+    if (!isIos || trialAnalyticsRefreshing) return;
+
+    const params = new URLSearchParams({
+      mappingId: app.mappingId,
+      platform: app.platform,
+    });
+
+    setTrialAnalyticsRefreshing(true);
+
+    try {
+      const response = await fetch(
+        `/api/admin/iap/trial-analytics?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapTrialAnalyticsResponse;
+
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error ?? "Refresh notification events failed.");
+      }
+
+      setTrialAnalytics(payload.trialAnalytics ?? null);
+      if (!options?.silent) {
+        void showToast("success", "Notification events refreshed.");
+      }
+    } catch (error) {
+      if (!options?.silent) {
+        void showToast(
+          "error",
+          error instanceof Error
+            ? error.message
+            : "Refresh notification events failed.",
+        );
+      }
+    } finally {
+      setTrialAnalyticsRefreshing(false);
+    }
+  }
+
+  async function inspectTransactionReceipt(transaction: IapAppTransaction) {
+    setReceiptLoadingId(transaction.id);
+
+    try {
+      const params = new URLSearchParams({
+        id: transaction.id,
+        platform: app.platform,
+      });
+      const response = await fetch(
+        `/api/admin/iap/transaction-receipt?${params.toString()}`,
+      );
+      const payload = (await response.json()) as IapTransactionReceiptResponse;
+
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error ?? "Load IAP receipt failed.");
+      }
+
+      setSelectedReceipt(receiptDisplayPayload(payload.rawReceipt ?? null));
+    } catch (error) {
+      void showToast(
+        "error",
+        error instanceof Error ? error.message : "Load IAP receipt failed.",
+      );
+    } finally {
+      setReceiptLoadingId(null);
+    }
+  }
+
+  async function retryTwoHourDelivery(check: IosIapTwoHourCheck) {
+    setTwoHourRetryingId(check.transaction_id);
+
+    try {
+      const response = await fetch("/api/admin/iap/two-hour-retry", {
+        body: JSON.stringify({
+          mappingId: app.mappingId,
+          transactionId: check.transaction_id,
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      });
+      const payload = (await response.json()) as IapTwoHourRetryResponse;
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error ?? "Retry IAP 2-hour delivery failed.");
+      }
+
+      if (payload.check?.status === "sent") {
+        void showToast("success", "2-hour delivery sent successfully.");
+      } else {
+        void showToast(
+          "warning",
+          payload.check?.error ?? "Retry completed with a delivery error.",
+        );
+      }
+      await loadTransactionsPage(transactionPagination.page);
+    } catch (error) {
+      void showToast(
+        "error",
+        error instanceof Error
+          ? error.message
+          : "Retry IAP 2-hour delivery failed.",
+      );
+    } finally {
+      setTwoHourRetryingId(null);
+    }
+  }
+
+  useEffect(() => {
+    latestViewRef.current = {
+      filterAdjustStatus,
+      filterConversionStatus,
+      filterEnvironment,
+      filterFirebaseStatus,
+      filterKind,
+      filterPurchaseDateFrom,
+      filterPurchaseDateTo,
+      filterState,
+      filterTwoHourStatus,
+      filterTrial,
+      page: transactionPagination.page,
+      revenueGranularity,
+      revenueSort,
+    };
+  }, [
+    filterAdjustStatus,
+    filterConversionStatus,
+    filterEnvironment,
+    filterFirebaseStatus,
+    filterKind,
+    filterPurchaseDateFrom,
+    filterPurchaseDateTo,
+    filterState,
+    filterTwoHourStatus,
+    filterTrial,
+    revenueGranularity,
+    revenueSort,
+    transactionPagination.page,
+  ]);
+
+  async function refreshIapDetailFromRealtime() {
+    if (realtimeRefreshInFlightRef.current) {
+      realtimeRefreshQueuedRef.current = true;
+      return;
+    }
+
+    realtimeRefreshInFlightRef.current = true;
+    setRealtimeRefreshing(true);
+
+    try {
+      const latest = latestViewRef.current;
+
+      await Promise.all([
+        loadTransactionsPage(
+          latest.page,
+          {
+            filterEnvironment: latest.filterEnvironment,
+            filterAdjustStatus: latest.filterAdjustStatus,
+            filterConversionStatus: latest.filterConversionStatus,
+            filterFirebaseStatus: latest.filterFirebaseStatus,
+            filterKind: latest.filterKind,
+            filterPurchaseDateFrom: latest.filterPurchaseDateFrom,
+            filterPurchaseDateTo: latest.filterPurchaseDateTo,
+            filterState: latest.filterState,
+            filterTwoHourStatus: latest.filterTwoHourStatus,
+            filterTrial: latest.filterTrial,
+            revenueGranularity: latest.revenueGranularity,
+            revenueSort: latest.revenueSort,
+          },
+          { silent: true },
+        ),
+        isIos ? refreshTrialAnalytics({ silent: true }) : Promise.resolve(),
+      ]);
+    } catch (error) {
+      console.error("Realtime IAP detail refresh failed", error);
+      setRealtimeStatus("error");
+    } finally {
+      realtimeRefreshInFlightRef.current = false;
+      setRealtimeRefreshing(false);
+
+      if (realtimeRefreshQueuedRef.current) {
+        realtimeRefreshQueuedRef.current = false;
+        scheduleIapDetailRealtimeRefresh();
+      }
+    }
+  }
+
+  function scheduleIapDetailRealtimeRefresh() {
+    if (realtimeRefreshTimerRef.current) {
+      clearTimeout(realtimeRefreshTimerRef.current);
+    }
+
+    realtimeRefreshTimerRef.current = setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      void refreshIapDetailFromRealtime();
+    }, IAP_REALTIME_REFRESH_DELAY_MS);
+  }
+
+  const realtimeRefreshHandlerRef = useRef<() => void>(() => undefined);
+
+  useEffect(() => {
+    realtimeRefreshHandlerRef.current = scheduleIapDetailRealtimeRefresh;
+  });
+
+  useEffect(() => {
+    if (!app.identifier) return;
+
+    let active = true;
+    let cleanupSubscription: (() => void) | null = null;
+
+    async function subscribe() {
+      const { createClient } = await import("@/lib/supabase/client");
+      if (!active) return;
+
+      const supabase = createClient();
+      const topic = iapRealtimeTopic(app.platform, app.identifier);
+      const channel = supabase.channel(topic, {
+        config: { private: true },
+      });
+      cleanupSubscription = () => {
+        void supabase.removeChannel(channel);
+      };
+
+      const { data: sessionData, error } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      if (!active) return;
+
+      if (error || !accessToken) {
+        setRealtimeStatus("unauthorized");
+        return;
+      }
+
+      supabase.realtime.setAuth(accessToken);
+
+      channel
+        .on("broadcast", { event: "changed" }, () => {
+          realtimeRefreshHandlerRef.current();
+        })
+        .subscribe((status, err) => {
+          if (!active) return;
+
+          if (status === "SUBSCRIBED") {
+            setRealtimeStatus("connected");
+            return;
+          }
+
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            console.error("IAP detail realtime subscription failed", err);
+            setRealtimeStatus("error");
+            return;
+          }
+
+          if (status === "CLOSED") {
+            setRealtimeStatus("disconnected");
+          }
+        });
+    }
+
+    void subscribe();
+
+    return () => {
+      active = false;
+      if (realtimeRefreshTimerRef.current) {
+        clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      cleanupSubscription?.();
+    };
+  }, [app.identifier, app.platform]);
+
+  const stats = useMemo(() => {
+    const rev = metrics.totalRevenue;
+    const active = metrics.activeCount;
+    const canceled = metrics.canceledCount;
+    const total = metrics.totalCount;
+    const revL7 = metrics.last7Revenue;
+    const revP7 = metrics.previous7Revenue;
+    const ordL7 = metrics.last7Orders;
+    const ordP7 = metrics.previous7Orders;
     const sg =
       revP7 > 0 ? ((revL7 - revP7) / revP7) * 100 : revL7 > 0 ? 100 : 0;
     const og =
@@ -315,7 +1727,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       rev,
       active,
       canceled,
-      total: filteredTransactions.length,
+      total,
       sg,
       ogDir: og >= 0 ? ("up" as const) : ("down" as const),
       sgDir: sg >= 0 ? ("up" as const) : ("down" as const),
@@ -324,81 +1736,34 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       ordL7,
       ordP7,
       og,
-      latestTimestamp,
+      latestTimestamp: metrics.latestTimestamp,
     };
-  }, [filteredTransactions]);
-
-  // Monthly chart data (12 months)
-  const { buckets, maxVal } = useMemo(() => {
-    const months = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-    const b: { label: string; prod: number; sand: number }[] = [];
-    const chartEnd = stats.latestTimestamp
-      ? new Date(stats.latestTimestamp)
-      : new Date("2026-06-01T00:00:00.000Z");
-
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(chartEnd.getFullYear(), chartEnd.getMonth() - i, 1);
-      b.push({ label: months[d.getMonth()], prod: 0, sand: 0 });
-    }
-
-    filteredTransactions.forEach((tx) => {
-      const pd = new Date(transactionPurchaseDate(tx) ?? 0);
-      const value = transactionRevenueValue(tx);
-      if (!value || Number.isNaN(pd.getTime())) return;
-
-      const mIdx = b.findIndex((_, idx) => {
-        const ref = new Date(
-          chartEnd.getFullYear(),
-          chartEnd.getMonth() - (11 - idx),
-          1,
-        );
-        return (
-          ref.getMonth() === pd.getMonth() &&
-          ref.getFullYear() === pd.getFullYear()
-        );
-      });
-
-      if (mIdx >= 0) {
-        if (transactionIsTest(tx)) b[mIdx].sand += value;
-        else b[mIdx].prod += value;
-      }
-    });
-    let mx = 1;
-    b.forEach((x) => {
-      if (x.prod + x.sand > mx) mx = x.prod + x.sand;
-    });
-    return { buckets: b, maxVal: mx };
-  }, [filteredTransactions, stats.latestTimestamp]);
+  }, [metrics]);
 
   const uniqueStates = useMemo(() => {
-    const states = new Set<string>();
-    transactions.forEach((tx) => states.add(tx.state.toLowerCase()));
-    return Array.from(states).sort();
-  }, [transactions]);
+    return Array.from(
+      new Set(transactionStates.map((state) => state.toLowerCase())),
+    ).sort();
+  }, [transactionStates]);
 
-  const totalPages = Math.ceil(filteredTransactions.length / pageSize);
-  const currentPage = Math.min(page, Math.max(1, totalPages));
-  const visible = useMemo(
-    () =>
-      filteredTransactions.slice(
-        (currentPage - 1) * pageSize,
-        currentPage * pageSize,
-      ),
-    [filteredTransactions, currentPage],
-  );
+  const twoHourCheckByTransactionId = useMemo(() => {
+    return new Map(
+      twoHourChecks.map((check) => [check.transaction_id, check] as const),
+    );
+  }, [twoHourChecks]);
+
+  const currentPage = transactionPagination.page;
+  const tableStartIndex =
+    (transactionPagination.page - 1) * transactionPagination.pageSize;
+  const visible = transactions;
+  const nextRevenueSort = revenueSort === "asc" ? "desc" : "asc";
+  const revenueSortLabel =
+    revenueSort === "asc"
+      ? "Revenue ascending"
+      : revenueSort === "desc"
+        ? "Revenue descending"
+        : "Sort revenue";
+  const realtimeMeta = realtimeStatusMeta(realtimeStatus);
 
   const fmtVND = (n: number) =>
     new Intl.NumberFormat("vi-VN", {
@@ -406,20 +1771,58 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       currency: "VND",
     }).format(n);
   const fmtNum = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
-  const revTrendBadgePct =
-    stats.sg >= 0 ? `+${stats.sg.toFixed(0)}%` : `${stats.sg.toFixed(0)}%`;
+  const defaultPurchaseDate = dateInputValue(new Date());
+  const hasCustomPurchaseDate =
+    filterPurchaseDateFrom !== defaultPurchaseDate ||
+    filterPurchaseDateTo !== defaultPurchaseDate;
+  const hasActiveTransactionFilters =
+    hasCustomPurchaseDate ||
+    filterState !== "all" ||
+    (isTestApp && filterEnvironment !== "production") ||
+    (!isIos && filterKind !== "all") ||
+    (isIos &&
+      (filterTrial !== "all" ||
+        filterConversionStatus !== "all" ||
+        filterTwoHourStatus !== "all" ||
+        filterFirebaseStatus !== "all" ||
+        filterAdjustStatus !== "all"));
+
+  function resetTransactionFilters() {
+    setFilterEnvironment("production");
+    setFilterKind("all");
+    setFilterConversionStatus("all");
+    setFilterTrial("all");
+    setFilterState("all");
+    setFilterTwoHourStatus("all");
+    setFilterFirebaseStatus("all");
+    setFilterAdjustStatus("all");
+    setFilterPurchaseDateFrom(defaultPurchaseDate);
+    setFilterPurchaseDateTo(defaultPurchaseDate);
+    void loadTransactionsPage(1, {
+      filterAdjustStatus: "all",
+      filterConversionStatus: "all",
+      filterEnvironment: "production",
+      filterFirebaseStatus: "all",
+      filterKind: "all",
+      filterPurchaseDateFrom: defaultPurchaseDate,
+      filterPurchaseDateTo: defaultPurchaseDate,
+      filterState: "all",
+      filterTwoHourStatus: "all",
+      filterTrial: "all",
+    });
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-muted/10 p-4 sm:p-6 gap-6">
       {/* Breadcrumb */}
       <nav className="flex items-center space-x-2 text-sm text-muted-foreground font-medium shrink-0">
-        <Link
+        <PendingNavigationLink
           href="/iap"
           className="hover:text-foreground transition-colors flex items-center"
         >
           <ArrowLeft className="mr-1.5 h-4 w-4" />
           Apps
-        </Link>
+        </PendingNavigationLink>
         <ChevronRight className="h-4 w-4" />
         <div className="flex items-center gap-2 text-foreground bg-background px-2 py-1 rounded-md border shadow-sm">
           {isIos ? (
@@ -444,150 +1847,132 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       </nav>
 
       {/* Overview Grid: Left = 4 cards (2×2), Right = Revenue Chart */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 shrink-0">
-        {/* Left: 4 Overview Cards in 2×2 sub-grid */}
-        <div className="lg:col-span-5 grid grid-cols-2 gap-4">
-          <div className="col-span-2 sm:col-span-1">
-            <OverviewCard
-              title="Total Sales"
-              value={fmtVND(stats.rev)}
-              trendPct={`${Math.abs(stats.sg).toFixed(1)}%`}
-              trendText={`${stats.sgDir === "up" ? "+" : "-"}${fmtVND(Math.abs(stats.revL7 - stats.revP7))} this week`}
-              trendDir={stats.sgDir}
-            />
+      {metricsLoaded ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 shrink-0">
+          {/* Left: 4 Overview Cards in 2×2 sub-grid */}
+          <div className="lg:col-span-5 grid grid-cols-2 gap-4">
+            <div className="col-span-2 sm:col-span-1">
+              <OverviewCard
+                title="Total Sales"
+                value={fmtVND(stats.rev)}
+                trendPct={`${Math.abs(stats.sg).toFixed(1)}%`}
+                trendText={`${stats.sgDir === "up" ? "+" : "-"}${fmtVND(Math.abs(stats.revL7 - stats.revP7))} this week`}
+                trendDir={stats.sgDir}
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <OverviewCard
+                title="Total Orders"
+                value={fmtNum(stats.total - stats.canceled)}
+                trendPct={`${Math.abs(stats.og).toFixed(1)}%`}
+                trendText={`${stats.ogDir === "up" ? "+" : "-"}${Math.abs(stats.ordL7 - stats.ordP7)} orders this week`}
+                trendDir={stats.ogDir}
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <OverviewCard
+                title="Active Subs"
+                value={fmtNum(stats.active)}
+                trendPct={`${stats.total > 0 ? ((stats.active / stats.total) * 100).toFixed(0) : 0}%`}
+                trendText="of total transactions"
+                trendDir="flat"
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <OverviewCard
+                title="Refunded"
+                value={fmtNum(stats.canceled)}
+                trendPct={`${stats.total > 0 ? ((stats.canceled / stats.total) * 100).toFixed(0) : 0}%`}
+                trendText="churned transactions"
+                trendDir={stats.canceled > 0 ? "down" : "flat"}
+              />
+            </div>
           </div>
-          <div className="col-span-2 sm:col-span-1">
-            <OverviewCard
-              title="Total Orders"
-              value={fmtNum(stats.total - stats.canceled)}
-              trendPct={`${Math.abs(stats.og).toFixed(1)}%`}
-              trendText={`${stats.ogDir === "up" ? "+" : "-"}${Math.abs(stats.ordL7 - stats.ordP7)} orders this week`}
-              trendDir={stats.ogDir}
-            />
-          </div>
-          <div className="col-span-2 sm:col-span-1">
-            <OverviewCard
-              title="Active Subs"
-              value={fmtNum(stats.active)}
-              trendPct={`${stats.total > 0 ? ((stats.active / stats.total) * 100).toFixed(0) : 0}%`}
-              trendText="of total transactions"
-              trendDir="flat"
-            />
-          </div>
-          <div className="col-span-2 sm:col-span-1">
-            <OverviewCard
-              title="Refunded"
-              value={fmtNum(stats.canceled)}
-              trendPct={`${stats.total > 0 ? ((stats.canceled / stats.total) * 100).toFixed(0) : 0}%`}
-              trendText="churned transactions"
-              trendDir={stats.canceled > 0 ? "down" : "flat"}
-            />
-          </div>
-        </div>
 
-        {/* Right: Revenue Chart Card */}
-        <div className="lg:col-span-7 bg-card text-card-foreground rounded-lg border flex flex-col">
-          <div className="flex flex-col space-y-1.5 p-4">
-            <div className="flex items-center justify-between">
-              <div className="leading-none font-semibold tracking-tight">
-                Revenue
-              </div>
-              <Select defaultValue="2026">
-                <SelectTrigger className="w-[100px] h-9">
-                  <SelectValue placeholder="Year" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2026">2026</SelectItem>
-                  <SelectItem value="2025">2025</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center gap-2">
-              <p className="text-2xl font-bold">{fmtVND(stats.rev)}</p>
-              <span className="text-muted-foreground text-sm font-medium">
-                {revTrendBadgePct} from last week
-              </span>
-            </div>
-          </div>
-          <div className="p-4 pt-0 flex-1 flex flex-col justify-end mt-4">
-            {/* Custom Bar Chart matching Shadcn Reference */}
-            <div className="relative flex items-end w-full h-[180px] xl:h-[220px]">
-              {/* Horizontal Grid Lines */}
-              <div className="absolute inset-0 flex flex-col justify-between pointer-events-none pb-[24px]">
-                <div className="w-full border-t border-border/50"></div>
-                <div className="w-full border-t border-border/50"></div>
-                <div className="w-full border-t border-border/50"></div>
-              </div>
-
-              {/* Bars */}
-              <div className="relative z-10 w-full flex items-end justify-between h-full pb-[24px]">
-                {buckets.map((b, i) => {
-                  const total = b.prod + b.sand;
-                  const hPct = maxVal > 0 ? (total / maxVal) * 100 : 0;
-                  return (
-                    <div
-                      key={i}
-                      className="flex flex-col items-center flex-1 group relative h-full justify-end"
-                    >
-                      <div className="absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center pointer-events-none bg-zinc-950 text-white text-xs p-2.5 rounded-lg shadow-xl z-50 border border-zinc-800 min-w-[120px]">
-                        <p className="font-semibold border-b border-zinc-800 pb-1.5 mb-1 w-full text-center">
-                          {b.label}
-                        </p>
-                        <div className="flex justify-between w-full gap-3">
-                          <span className="text-zinc-400">Total:</span>
-                          <span className="font-bold">{fmtVND(total)}</span>
-                        </div>
-                        <div className="flex justify-between w-full gap-3 mt-1 text-[10px]">
-                          <span className="text-zinc-500">Prod:</span>
-                          <span className="font-semibold text-zinc-300">
-                            {fmtVND(b.prod)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between w-full gap-3 mt-0.5 text-[10px]">
-                          <span className="text-zinc-500">Sand:</span>
-                          <span className="font-semibold text-zinc-300">
-                            {fmtVND(b.sand)}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="w-full px-[2px] sm:px-1 md:px-2 flex justify-center items-end h-full">
-                        <div
-                          className="w-full max-w-[32px] bg-primary rounded-t-[4px] transition-all duration-500 hover:opacity-80"
-                          style={{ height: `${hPct}%` }}
-                        ></div>
-                      </div>
-                      <span className="absolute -bottom-[20px] text-[12px] text-muted-foreground font-medium">
-                        {b.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
+          <IapRevenueChart
+            buckets={metrics.revenueBuckets}
+            granularity={revenueGranularity}
+            loading={revenueGranularityLoading}
+            onGranularityChange={(granularity) =>
+              void loadRevenueGranularity(granularity)
+            }
+          />
         </div>
-      </div>
+      ) : (
+        <IapMetricsSkeleton />
+      )}
+
+      {isIos && trialAnalytics ? (
+        <IosTrialAnalyticsPanel
+          analytics={trialAnalytics}
+          onInspectPayload={setSelectedReceipt}
+          onRefresh={refreshTrialAnalytics}
+          refreshing={trialAnalyticsRefreshing}
+        />
+      ) : isIos && trialAnalyticsLoading ? (
+        <div className="h-[360px] overflow-hidden rounded-lg border bg-card">
+          <div className="h-full animate-pulse bg-muted/30" />
+        </div>
+      ) : null}
 
       {/* Table Card */}
       <div className="flex-1 min-h-0 flex flex-col bg-card text-card-foreground border rounded-lg overflow-hidden">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 border-b bg-muted/20">
-          <Input
-            type="search"
-            placeholder="Search Order ID or Product ID..."
-            className="w-full sm:max-w-xs h-9 bg-background"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-          />
-          <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex flex-col items-stretch justify-between gap-4 border-b bg-muted/20 p-4 sm:flex-row sm:items-center">
+          <div className="flex min-h-9 items-center gap-2">
+            <Badge
+              variant="outline"
+              className={`gap-1.5 px-2 py-0.5 text-[11px] font-medium transition-[transform,box-shadow] duration-300 ease-out ${realtimeRefreshing ? "scale-[1.02] shadow-[0_0_0_4px_rgba(16,185,129,0.12)]" : "scale-100"} ${realtimeMeta.className}`}
+            >
+              <span className="relative flex h-1.5 w-1.5">
+                <span
+                  className={`absolute inline-flex h-full w-full rounded-full bg-current transition-opacity duration-300 ${realtimeRefreshing ? "opacity-70 motion-safe:animate-ping" : "opacity-0"}`}
+                />
+                <span
+                  className={`relative inline-flex h-1.5 w-1.5 rounded-full bg-current transition-all duration-300 ${realtimeRefreshing ? "scale-100 opacity-100" : "scale-75 opacity-60"}`}
+                />
+              </span>
+              {realtimeMeta.label}
+            </Badge>
+          </div>
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+            <TransactionPurchaseDateRangePicker
+              valueFrom={filterPurchaseDateFrom}
+              valueTo={filterPurchaseDateTo}
+              onChange={(value) => {
+                setFilterPurchaseDateFrom(value.from);
+                setFilterPurchaseDateTo(value.to);
+                void loadTransactionsPage(1, {
+                  filterPurchaseDateFrom: value.from,
+                  filterPurchaseDateTo: value.to,
+                });
+              }}
+            />
+            {isTestApp && (
+              <Select
+                value={filterEnvironment}
+                onValueChange={(v) => {
+                  setFilterEnvironment(v);
+                  void loadTransactionsPage(1, { filterEnvironment: v });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full bg-background sm:w-[145px]">
+                  <SelectValue placeholder="Environment" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Env</SelectItem>
+                  <SelectItem value="production">Production</SelectItem>
+                  <SelectItem value={isIos ? "sandbox" : "test"}>
+                    {isIos ? "Sandbox" : "Test"}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             {!isIos && (
               <Select
                 value={filterKind}
                 onValueChange={(v) => {
                   setFilterKind(v);
-                  setPage(1);
+                  void loadTransactionsPage(1, { filterKind: v });
                 }}
               >
                 <SelectTrigger className="w-full sm:w-[130px] h-9 bg-background">
@@ -600,11 +1985,51 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 </SelectContent>
               </Select>
             )}
+            {isIos && (
+              <Select
+                value={filterTrial}
+                onValueChange={(v) => {
+                  setFilterTrial(v);
+                  void loadTransactionsPage(1, { filterTrial: v });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full bg-background sm:w-[150px]">
+                  <SelectValue placeholder="Trial" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Billing</SelectItem>
+                  <SelectItem value="trial">Free Trial</SelectItem>
+                  <SelectItem value="non_trial">Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            {isIos && (
+              <Select
+                value={filterConversionStatus}
+                onValueChange={(value) => {
+                  setFilterConversionStatus(value);
+                  void loadTransactionsPage(1, {
+                    filterConversionStatus: value,
+                  });
+                }}
+              >
+                <SelectTrigger className="h-9 w-full bg-background sm:w-[180px]">
+                  <SelectValue placeholder="Conversion" />
+                </SelectTrigger>
+                <SelectContent>
+                  {IAP_CONVERSION_FILTER_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <Select
               value={filterState}
               onValueChange={(v) => {
                 setFilterState(v);
-                setPage(1);
+                void loadTransactionsPage(1, { filterState: v });
               }}
             >
               <SelectTrigger className="w-full sm:w-[140px] h-9 bg-background">
@@ -619,6 +2044,78 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 ))}
               </SelectContent>
             </Select>
+            {isIos ? (
+              <>
+                <Select
+                  value={filterTwoHourStatus}
+                  onValueChange={(v) => {
+                    setFilterTwoHourStatus(v);
+                    void loadTransactionsPage(1, { filterTwoHourStatus: v });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[150px]">
+                    <SelectValue placeholder="2h Check" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_TWO_HOUR_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filterFirebaseStatus}
+                  onValueChange={(v) => {
+                    setFilterFirebaseStatus(v);
+                    void loadTransactionsPage(1, {
+                      filterFirebaseStatus: v,
+                    });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[165px]">
+                    <SelectValue placeholder="Firebase" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_FIREBASE_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filterAdjustStatus}
+                  onValueChange={(v) => {
+                    setFilterAdjustStatus(v);
+                    void loadTransactionsPage(1, { filterAdjustStatus: v });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full bg-background sm:w-[155px]">
+                    <SelectValue placeholder="Adjust" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {IAP_ADJUST_FILTER_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            ) : null}
+            {hasActiveTransactionFilters ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 bg-background px-2.5"
+                onClick={resetTransactionFilters}
+              >
+                <X size={13} />
+                Reset
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -629,193 +2126,372 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 <th className="px-4 py-3">Transaction / Order</th>
                 <th className="px-4 py-3">Product Info</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Revenue / Price</th>
+                {isIos ? (
+                  <>
+                    <th className="px-4 py-3">2h Check</th>
+                    <th className="px-4 py-3">Firebase</th>
+                    <th className="px-4 py-3">Adjust</th>
+                  </>
+                ) : null}
+                <th className="px-4 py-3">
+                  <button
+                    type="button"
+                    className={`inline-flex items-center gap-1.5 rounded-md text-left font-semibold uppercase tracking-wider transition-colors hover:text-foreground ${
+                      revenueSort === "asc" || revenueSort === "desc"
+                        ? "text-foreground"
+                        : ""
+                    }`}
+                    title={revenueSortLabel}
+                    onClick={() => {
+                      setRevenueSort(nextRevenueSort);
+                      void loadTransactionsPage(1, {
+                        revenueSort: nextRevenueSort,
+                      });
+                    }}
+                  >
+                    Revenue / Price
+                    <ArrowUpDown size={13} />
+                  </button>
+                </th>
                 <th className="px-4 py-3">Purchase time</th>
-                <th className="px-4 py-3">Receipt</th>
+                <th className="min-w-[168px] px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y border-b bg-background">
-              {visible.map((tx) => {
-                const txId = transactionDisplayId(tx);
-                const secondaryId = transactionSecondaryId(tx);
-                const productId = transactionProductId(tx);
-                const purchaseKind = transactionKind(tx);
-                const isTest = transactionIsTest(tx);
-                const revenue = transactionRevenueMicros(tx);
-                const currency = transactionCurrency(tx);
-                const purchaseDate = transactionPurchaseDate(tx);
-                const expiresDate = transactionExpiresDate(tx);
-                return (
-                  <tr
-                    key={tx.id}
-                    className="hover:bg-muted/20 transition-colors"
-                  >
-                    <td className="px-4 py-3.5 max-w-[240px]">
-                      <div className="font-semibold truncate" title={txId}>
-                        {txId}
-                      </div>
-                      {isIos && secondaryId ? (
-                        <div className="text-xs text-muted-foreground font-mono mt-0.5 truncate">
-                          Orig: {secondaryId}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div className="flex flex-col gap-1 items-start">
-                        {!isIos && purchaseKind && (
-                          <Badge
-                            variant="secondary"
-                            className="px-2 py-0.5 text-[11px] font-medium"
-                          >
-                            {purchaseKind === "subscription"
-                              ? "Subscription"
-                              : "Product"}
-                          </Badge>
-                        )}
-                        <div className="text-xs text-muted-foreground font-semibold">
-                          {productId}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div className="flex flex-col gap-1 items-start">
-                        <StatusBadge status={tx.state || "UNKNOWN"} />
-                        {isTest && (
-                          <span className="inline-flex items-center border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none bg-orange-50 border-orange-300 text-orange-700">
-                            Sandbox
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div className="font-semibold">
-                        {formatRevenue(revenue, currency)}
-                      </div>
-                      {!isIos && isAndroidTransaction(tx) && (
-                        <div className="text-[10px] text-muted-foreground mt-0.5">
-                          {tx.regionCode && `Region: ${tx.regionCode}`}
-                          {tx.currency && ` (${tx.currency})`}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3.5 text-xs">
-                      <div className="flex items-center gap-1.5 text-muted-foreground">
-                        <Calendar size={12} className="shrink-0" />
-                        <span>{formatDate(purchaseDate)}</span>
-                      </div>
-                      {expiresDate ? (
-                        <div className="mt-1 flex items-center gap-1.5 text-muted-foreground">
-                          <Calendar size={12} className="shrink-0" />
-                          <span>Expires: {formatDate(expiresDate)}</span>
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <Dialog>
-                        <DialogTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-8 gap-1.5 px-2.5"
-                            onClick={() =>
-                              setSelectedReceipt(transactionRawReceipt(tx))
-                            }
-                          >
-                            <FileJson size={13} />
-                            <span>JSON</span>
-                          </Button>
-                        </DialogTrigger>
-                        <DialogContent className="sm:max-w-4xl max-h-[80vh] flex flex-col p-6">
-                          <DialogHeader className="pb-2 border-b">
-                            <DialogTitle className="flex items-center gap-2">
-                              <FileJson size={18} className="text-primary" />
-                              <span>Receipt Details</span>
-                            </DialogTitle>
-                          </DialogHeader>
-                          <div className="flex-1 overflow-auto mt-4 p-4 rounded-lg bg-zinc-950 font-mono text-xs text-zinc-300 border border-zinc-800">
-                            <pre className="whitespace-pre-wrap">
-                              {JSON.stringify(selectedReceipt, null, 2)}
-                            </pre>
+              {tableLoading
+                ? Array.from({ length: IAP_TRANSACTION_SKELETON_COUNT }).map(
+                    (_, index) => (
+                      <tr key={`iap-transaction-skeleton-${index}`}>
+                        <td className="px-4 py-3.5">
+                          <div className="h-4 w-44 animate-pulse rounded bg-muted" />
+                          <div className="mt-2 h-3 w-32 animate-pulse rounded bg-muted" />
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="h-5 w-24 animate-pulse rounded-full bg-muted" />
+                          <div className="mt-2 h-3 w-36 animate-pulse rounded bg-muted" />
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                        </td>
+                        {isIos ? (
+                          <>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
+                            </td>
+                          </>
+                        ) : null}
+                        <td className="px-4 py-3.5">
+                          <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+                          <div className="mt-2 h-3 w-28 animate-pulse rounded bg-muted" />
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="h-8 w-20 animate-pulse rounded-md bg-muted" />
+                        </td>
+                      </tr>
+                    ),
+                  )
+                : visible.map((tx) => {
+                    const txId = transactionDisplayId(tx);
+                    const secondaryId = transactionSecondaryId(tx);
+                    const productId = transactionProductId(tx);
+                    const purchaseKind = transactionKind(tx);
+                    const trialLabel = transactionTrialLabel(tx);
+                    const freeTrial = transactionIsFreeTrial(tx);
+                    const isTest = transactionIsTest(tx);
+                    const revenue = transactionRevenueMicros(tx);
+                    const currency = transactionCurrency(tx);
+                    const purchaseDate = transactionPurchaseDate(tx);
+                    const expiresDate = transactionExpiresDate(tx);
+                    const source = isIos
+                      ? sourceMeta(transactionSource(tx))
+                      : null;
+                    const renewal = renewalStatusMeta(
+                      transactionRenewalStatus(tx),
+                    );
+                    const trialConversion = isIosTransaction(tx)
+                      ? trialConversionStatusMeta(tx)
+                      : null;
+                    const renewalDate = transactionRenewalDate(tx);
+                    const renewalProductId = transactionRenewalProductId(tx);
+                    const twoHourCheck = isIosTransaction(tx)
+                      ? (twoHourCheckByTransactionId.get(tx.transaction_id) ??
+                        null)
+                      : null;
+                    const expectsTwoHourCheck =
+                      isIosTransaction(tx) && transactionIsFreeTrial(tx);
+                    const twoHourStatus = twoHourCheckStatusBadge(
+                      twoHourCheck,
+                      { expectsCheck: expectsTwoHourCheck },
+                    );
+                    const firebaseStatus = providerColumnStatusBadge(
+                      twoHourCheck,
+                      "ga4",
+                      { expectsCheck: expectsTwoHourCheck },
+                    );
+                    const adjustStatus = providerColumnStatusBadge(
+                      twoHourCheck,
+                      "adjust",
+                      { expectsCheck: expectsTwoHourCheck },
+                    );
+                    return (
+                      <tr
+                        key={tx.id}
+                        className="hover:bg-muted/20 transition-colors"
+                      >
+                        <td className="px-4 py-3.5 max-w-[240px]">
+                          <div className="font-semibold truncate" title={txId}>
+                            {txId}
                           </div>
-                        </DialogContent>
-                      </Dialog>
-                    </td>
-                  </tr>
-                );
-              })}
-              {!visible.length && (
+                          {isIos && secondaryId ? (
+                            <div className="text-xs text-muted-foreground font-mono mt-0.5 truncate">
+                              Orig: {secondaryId}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="flex flex-col gap-1 items-start">
+                            {!isIos && purchaseKind && (
+                              <Badge
+                                variant="secondary"
+                                className="px-2 py-0.5 text-[11px] font-medium"
+                              >
+                                {purchaseKind === "subscription"
+                                  ? "Subscription"
+                                  : "Product"}
+                              </Badge>
+                            )}
+                            {isIos && trialLabel ? (
+                              <Badge
+                                variant="outline"
+                                className={
+                                  freeTrial
+                                    ? "border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
+                                    : "border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600"
+                                }
+                              >
+                                {trialLabel}
+                              </Badge>
+                            ) : null}
+                            {source ? (
+                              <Badge
+                                variant="outline"
+                                className={`px-2 py-0.5 text-[11px] font-medium ${source.className}`}
+                                title={source.title}
+                              >
+                                {source.label}
+                              </Badge>
+                            ) : null}
+                            <div className="text-xs text-muted-foreground font-semibold">
+                              {productId}
+                            </div>
+                            {isIos &&
+                            isIosTransaction(tx) &&
+                            (tx.transaction_reason || tx.billing_plan_type) ? (
+                              <div className="text-[10px] text-muted-foreground">
+                                {[tx.transaction_reason, tx.billing_plan_type]
+                                  .filter(Boolean)
+                                  .join(" / ")}
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="flex flex-col gap-1 items-start">
+                            <span title="Transaction state reported by the store.">
+                              <StatusBadge status={tx.state || "UNKNOWN"} />
+                            </span>
+                            {trialConversion ? (
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${trialConversion.className}`}
+                                title={trialConversion.title}
+                              >
+                                {trialConversion.label}
+                              </span>
+                            ) : null}
+                            {isIosTransaction(tx) &&
+                            tx.paid_transaction_id ? (
+                              <div
+                                className="max-w-[180px] truncate font-mono text-[10px] text-muted-foreground"
+                                title={tx.paid_transaction_id}
+                              >
+                                Paid TX: {tx.paid_transaction_id}
+                              </div>
+                            ) : null}
+                            {isTest && (
+                              <span className="inline-flex items-center border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none bg-orange-50 border-orange-300 text-orange-700">
+                                Sandbox
+                              </span>
+                            )}
+                            {renewal ? (
+                              <span
+                                className={`inline-flex items-center border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${renewal.className}`}
+                                title={renewal.title}
+                              >
+                                {renewal.label}
+                              </span>
+                            ) : null}
+                            {renewalDate ? (
+                              <div className="text-[10px] text-muted-foreground">
+                                Renews: {formatDate(renewalDate)}
+                              </div>
+                            ) : null}
+                            {renewalProductId &&
+                            renewalProductId !== productId ? (
+                              <div className="max-w-[160px] truncate text-[10px] text-muted-foreground">
+                                Next: {renewalProductId}
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
+                        {isIos ? (
+                          <>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourStatus.className}`}
+                                title={twoHourStatus.title}
+                              >
+                                {twoHourStatus.label}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${firebaseStatus.className}`}
+                                title={firebaseStatus.title}
+                              >
+                                {firebaseStatus.label}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${adjustStatus.className}`}
+                                title={adjustStatus.title}
+                              >
+                                {adjustStatus.label}
+                              </span>
+                            </td>
+                          </>
+                        ) : null}
+                        <td className="px-4 py-3.5">
+                          <div className="font-semibold">
+                            {formatRevenue(revenue, currency)}
+                          </div>
+                          {!isIos && isAndroidTransaction(tx) && (
+                            <div className="text-[10px] text-muted-foreground mt-0.5">
+                              {tx.regionCode && `Region: ${tx.regionCode}`}
+                              {tx.currency && ` (${tx.currency})`}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3.5 text-xs">
+                          <div className="flex items-center gap-1.5 text-muted-foreground">
+                            <Calendar size={12} className="shrink-0" />
+                            <span>{formatDate(purchaseDate)}</span>
+                          </div>
+                          {expiresDate ? (
+                            <div className="mt-1 flex items-center gap-1.5 text-muted-foreground">
+                              <Calendar size={12} className="shrink-0" />
+                              <span>Expires: {formatDate(expiresDate)}</span>
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="min-w-[168px] px-4 py-3.5">
+                          <div className="flex items-center gap-2">
+                            {isIos && canRetryTwoHourCheck(twoHourCheck) ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 gap-1.5 px-2.5"
+                                disabled={
+                                  twoHourRetryingId ===
+                                  twoHourCheck?.transaction_id
+                                }
+                                title="Retry failed Firebase or Adjust delivery now"
+                                onClick={() =>
+                                  twoHourCheck
+                                    ? void retryTwoHourDelivery(twoHourCheck)
+                                    : undefined
+                                }
+                              >
+                                <RotateCcw
+                                  size={13}
+                                  className={
+                                    twoHourRetryingId ===
+                                    twoHourCheck?.transaction_id
+                                      ? "animate-spin"
+                                      : undefined
+                                  }
+                                />
+                                <span>
+                                  {twoHourRetryingId ===
+                                  twoHourCheck?.transaction_id
+                                    ? "Retrying"
+                                    : "Retry"}
+                                </span>
+                              </Button>
+                            ) : null}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 gap-1.5 px-2.5"
+                              disabled={receiptLoadingId === tx.id}
+                              onClick={() => void inspectTransactionReceipt(tx)}
+                            >
+                              {receiptLoadingId === tx.id ? (
+                                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                              ) : (
+                                <FileJson size={13} />
+                              )}
+                              <span>
+                                {receiptLoadingId === tx.id
+                                  ? "Loading"
+                                  : "JSON"}
+                              </span>
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              {!tableLoading && !visible.length && (
                 <TableEmptyState
-                  colSpan={6}
+                  colSpan={isIos ? 9 : 6}
                   icon={CreditCard}
                   title="No transactions found"
-                  description="Try changing your search terms or filters."
+                  description="Try changing your filters."
                 />
               )}
             </tbody>
           </table>
         </div>
 
-        {filteredTransactions.length > 0 && (
-          <div className="flex flex-col gap-3 border-t px-4 py-3.5 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between bg-muted/10 shrink-0">
-            <span>
-              Showing {visible.length} of {filteredTransactions.length}{" "}
-              transactions
-            </span>
-            <Pagination className="mx-0 w-auto justify-start sm:justify-end">
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious
-                    href="#"
-                    text="Prev"
-                    className={
-                      currentPage <= 1 ? "pointer-events-none opacity-50" : ""
-                    }
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setPage((v) => Math.max(1, v - 1));
-                    }}
-                  />
-                </PaginationItem>
-                {Array.from({ length: Math.min(5, totalPages) }).map((_, i) => {
-                  let pn = i + 1;
-                  if (totalPages > 5 && currentPage > 3)
-                    pn = currentPage - 2 + i;
-                  if (pn > totalPages) return null;
-                  return (
-                    <PaginationItem key={pn}>
-                      <PaginationLink
-                        href="#"
-                        isActive={currentPage === pn}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setPage(pn);
-                        }}
-                      >
-                        {pn}
-                      </PaginationLink>
-                    </PaginationItem>
-                  );
-                })}
-                <PaginationItem>
-                  <PaginationNext
-                    href="#"
-                    text="Next"
-                    className={
-                      currentPage >= totalPages
-                        ? "pointer-events-none opacity-50"
-                        : ""
-                    }
-                    onClick={(e) => {
-                      e.preventDefault();
-                      setPage((v) => Math.min(totalPages, v + 1));
-                    }}
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          </div>
-        )}
+        <TablePaginationFooter
+          from={tableStartIndex + 1}
+          loadingPage={loadingPage}
+          onPageChange={(page) => void loadTransactionsPage(page)}
+          page={currentPage}
+          shown={visible.length}
+          to={tableStartIndex + visible.length}
+          total={transactionPagination.total}
+          totalPages={transactionPagination.totalPages}
+        />
       </div>
+      {selectedReceipt !== null ? (
+        <IapReceiptDialog
+          receipt={selectedReceipt}
+          onOpenChange={(open) => {
+            if (!open) setSelectedReceipt(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

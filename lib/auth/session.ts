@@ -1,59 +1,56 @@
-import { redirect } from "next/navigation";
+import "server-only";
 
-import { canAccessPath, type ConsoleSession, isStaffRole } from "@/lib/auth/rbac";
-import { normalizeEmail, prismaRoleToStaffRole, prismaStatusToTeamMemberStatus } from "@/lib/auth/team-members";
+import { redirect } from "next/navigation";
+import { cache } from "react";
+
 import {
-  getTeamMemberByAuthUserOrEmail,
-  linkTeamMemberAuthUser,
-} from "@/lib/server/repositories/auth/team-member.repository";
-import { createClient } from "@/lib/supabase/server";
+  canAccessPath,
+  type ConsoleSession,
+  isStaffRole,
+} from "@/lib/auth/rbac";
+import { fetchSystemTrackingApi } from "@/lib/server-api";
 import type { StaffRole } from "@/lib/tracking/types";
 
-export async function getConsoleSession(): Promise<ConsoleSession | null> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
-
-  if (error || !user?.id || !user.email) {
-    return null;
-  }
-
-  const email = normalizeEmail(user.email);
-  const member = await getTeamMemberByAuthUserOrEmail({
-    authUserId: user.id,
-    email,
-  });
-
-  if (!member || (member.authUserId && member.authUserId !== user.id)) {
-    return null;
-  }
-
-  const role = prismaRoleToStaffRole[member.role];
-  const status = prismaStatusToTeamMemberStatus[member.status];
-
-  if (status !== "active" || !isStaffRole(role)) {
-    return null;
-  }
-
-  const linkedMember =
-    member.authUserId === user.id
-      ? member
-      : await linkTeamMemberAuthUser(member.id, user.id);
-
-  return {
-    authUserId: user.id,
-    memberId: linkedMember.id,
-    email: linkedMember.email,
-    role,
-    name: linkedMember.name || linkedMember.email,
-    status: "active",
-    globalAccess: linkedMember.globalAccess,
-    appScope: linkedMember.appScope,
-    storeScope: linkedMember.storeScope,
-  };
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
+
+function consoleSession(value: unknown): ConsoleSession | null {
+  if (!value || typeof value !== "object") return null;
+  const session = value as Partial<ConsoleSession>;
+
+  if (
+    typeof session.authUserId !== "string"
+    || typeof session.memberId !== "string"
+    || typeof session.email !== "string"
+    || typeof session.name !== "string"
+    || !isStaffRole(session.role)
+    || session.status !== "active"
+    || typeof session.globalAccess !== "boolean"
+    || !stringArray(session.appScope)
+    || !stringArray(session.storeScope)
+  ) {
+    return null;
+  }
+
+  return session as ConsoleSession;
+}
+
+async function resolveConsoleSession(): Promise<ConsoleSession | null> {
+  try {
+    const response = await fetchSystemTrackingApi("/api/auth/session");
+
+    if (!response.ok) return null;
+
+    const payload = await response.json() as { session?: unknown };
+    return consoleSession(payload.session);
+  } catch (error) {
+    console.error("Console session API request failed", error);
+    return null;
+  }
+}
+
+export const getConsoleSession = cache(resolveConsoleSession);
 
 export async function requireConsoleSession(allowedRoles?: StaffRole[]) {
   const session = await getConsoleSession();

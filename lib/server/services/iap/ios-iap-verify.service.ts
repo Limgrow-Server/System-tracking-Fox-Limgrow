@@ -1,12 +1,16 @@
 import "server-only";
 
 import { ApiError, badRequest } from "@/lib/server/api/errors";
-import { createClient } from "@/lib/supabase/server";
 
 type VerifyIosIapPayload = {
+  adjustAdid?: unknown;
+  appInstanceId?: unknown;
   bundleId?: unknown;
   credentialRef?: unknown;
   environment?: unknown;
+  firebaseAppId?: unknown;
+  idfa?: unknown;
+  idfv?: unknown;
   productId?: unknown;
   transactionId?: unknown;
   userId?: unknown;
@@ -57,22 +61,22 @@ function sanitizeVerifyIosResponse(value: unknown) {
   };
 }
 
-async function getCurrentSupabaseAccessToken() {
-  const supabase = await createClient();
-  // Authorization already happened via requireAdminSession; this only forwards the JWT to the Edge gateway.
-  const { data, error } = await supabase.auth.getSession();
-
-  if (error || !data.session?.access_token) {
-    throw new ApiError("Supabase session expired. Please sign in again.", 401);
-  }
-
-  return data.session.access_token;
+function functionsBaseUrl() {
+  return (
+    clean(process.env.SYSTEM_TRACKING_API_URL)
+    || clean(process.env.SYSTEM_TRACKING_FUNCTIONS_BASE_URL)
+  );
 }
 
 export async function verifyIosIapTransaction(payload: VerifyIosIapPayload) {
   const bundleId = clean(payload.bundleId);
   const transactionId = clean(payload.transactionId);
   const credentialRef = clean(payload.credentialRef);
+  const adjustAdid = clean(payload.adjustAdid);
+  const appInstanceId = clean(payload.appInstanceId);
+  const firebaseAppId = clean(payload.firebaseAppId);
+  const idfa = clean(payload.idfa);
+  const idfv = clean(payload.idfv);
   const productId = clean(payload.productId);
   const userId = clean(payload.userId);
 
@@ -84,24 +88,29 @@ export async function verifyIosIapTransaction(payload: VerifyIosIapPayload) {
     throw badRequest("TransactionId is required.");
   }
 
-  const supabaseUrl = clean(process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const baseUrl = functionsBaseUrl();
   const publishableKey = clean(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
 
-  if (!supabaseUrl || !publishableKey) {
-    throw new ApiError("Missing Supabase URL or publishable key.", 500);
+  if (!baseUrl || !publishableKey) {
+    throw new ApiError("Missing System Tracking API URL or publishable key.", 500);
   }
 
-  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/functions/v1/verify-ios`, {
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/functions/v1/verify-ios`, {
     method: "POST",
     headers: {
       apikey: publishableKey,
-      authorization: `Bearer ${await getCurrentSupabaseAccessToken()}`,
+      authorization: `Bearer ${publishableKey}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
       bundleId,
+      adjustAdid: adjustAdid || undefined,
+      appInstanceId: appInstanceId || undefined,
       credentialRef: credentialRef || undefined,
       environment: normalizeEnvironment(payload.environment),
+      firebaseAppId: firebaseAppId || undefined,
+      idfa: idfa || undefined,
+      idfv: idfv || undefined,
       productId: productId || undefined,
       transactionId,
       userId: userId || undefined,

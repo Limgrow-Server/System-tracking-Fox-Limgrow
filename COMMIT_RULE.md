@@ -82,23 +82,51 @@ chore(husky): add commit hooks
 
 - `pre-commit`: kiểm tra branch name và chạy `lint-staged`.
 - `commit-msg`: kiểm tra commit message bằng Commitlint.
-- `pre-push`: chạy `npm run check`.
+
+Repo không chạy full build ở `git push` để tránh trùng với GitHub Action. Trước khi push, chạy thủ công:
+
+```bash
+npm run check
+```
 
 ## GitHub Action
 
 Workflow CI nằm ở:
 
 ```bash
-.github/workflows/quality.yml
+.github/workflows/ci.yml
 ```
 
-Workflow/job tên `quality`. Nếu GitHub branch protection đang yêu cầu status check, chọn đúng check `quality`.
+Workflow tên `CI`, job tên `quality`. Nếu GitHub branch protection đang yêu cầu status check, chọn đúng check `quality`.
 
 Workflow chạy:
 
 ```bash
 npm ci
 npm run check
+```
+
+SonarCloud hiện đang bật `Automatic Analysis`, nên workflow không chạy manual Sonar scan mặc định để tránh lỗi phân tích trùng.
+
+Nếu muốn chuyển sang manual scan trong GitHub Action:
+
+1. Tắt `Automatic Analysis` trong SonarCloud project.
+2. Tạo repository variable:
+
+```bash
+ENABLE_SONAR_SCAN=true
+```
+
+3. Tạo secret:
+
+```bash
+SONAR_TOKEN
+```
+
+Manual scan dùng host mặc định:
+
+```text
+https://sonarcloud.io
 ```
 
 ## Discord notification

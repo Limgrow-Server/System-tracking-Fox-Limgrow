@@ -1,29 +1,10 @@
 import "server-only";
 
-import {
-  getAndroidIapTransactions,
-  getAndroidStoreProfilesWithMappings,
-} from "@/lib/server/repositories/android/iap.repository";
-import type { IapAndroid, AndroidStoreProfile } from "@prisma/client";
+import type { AndroidStoreProfile, IapAndroid } from "@prisma/client";
 
-export type IapAndroidRecord = IapAndroid & {
-  storeProfile: AndroidStoreProfile | null;
-};
-
-export type AndroidAppSummary = {
-  id: string;
-  appName: string;
-  packageName: string;
-  appIconUrl: string | null;
-  appLink: string | null;
-};
-
-export type AndroidStoreProfileSummary = {
-  id: string;
-  storeAccountName: string;
-  avatarUrl: string | null;
-  linkStore: string | null;
-  apps: AndroidAppSummary[];
+export type IapAndroidRecord = Omit<IapAndroid, "rawReceipt"> & {
+  rawReceipt?: unknown | null;
+  storeProfile: Pick<AndroidStoreProfile, "storeAccountName"> | null;
 };
 
 export type IapAndroidDto = {
@@ -47,14 +28,17 @@ export type IapAndroidDto = {
   basePlanId: string | null;
   offerId: string | null;
   isTestPurchase: boolean;
-  rawReceipt: unknown;
+  rawReceipt: unknown | null;
   verifiedAt: string;
   createdAt: string;
   updatedAt: string;
   storeAccountName: string | null;
 };
 
-export function iapAndroidToDto(tx: IapAndroidRecord): IapAndroidDto {
+export function iapAndroidToDto(
+  tx: IapAndroidRecord,
+  options?: { includeRawReceipt?: boolean },
+): IapAndroidDto {
   return {
     id: tx.id,
     storeProfileId: tx.storeProfileId,
@@ -76,33 +60,10 @@ export function iapAndroidToDto(tx: IapAndroidRecord): IapAndroidDto {
     basePlanId: tx.basePlanId,
     offerId: tx.offerId,
     isTestPurchase: tx.isTestPurchase,
-    rawReceipt: tx.rawReceipt,
+    rawReceipt: options?.includeRawReceipt ? tx.rawReceipt : null,
     verifiedAt: tx.verifiedAt.toISOString(),
     createdAt: tx.createdAt.toISOString(),
     updatedAt: tx.updatedAt.toISOString(),
     storeAccountName: tx.storeProfile?.storeAccountName ?? null,
   };
-}
-
-export async function getAndroidIapDtos(options?: { take?: number }) {
-  const transactions = await getAndroidIapTransactions(options);
-  return transactions.map(iapAndroidToDto);
-}
-
-export async function getAndroidStoreProfileSummaries(): Promise<AndroidStoreProfileSummary[]> {
-  const profiles = await getAndroidStoreProfilesWithMappings();
-  
-  return profiles.map((p) => ({
-    id: p.id,
-    storeAccountName: p.storeAccountName,
-    avatarUrl: p.avatarUrl,
-    linkStore: p.linkStore,
-    apps: p.mappings.map((m) => ({
-      id: m.id,
-      appName: m.appName,
-      packageName: m.packageName,
-      appIconUrl: m.appIconUrl,
-      appLink: m.appLink,
-    })),
-  }));
 }

@@ -2,13 +2,15 @@ import {
   AlertCircle,
   Apple,
   CheckCircle2,
+  ChevronsLeft,
+  ChevronsRight,
   Circle,
   Globe2,
   LucideIcon,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +24,7 @@ import {
 import {
   Pagination,
   PaginationContent,
+  PaginationEllipsis,
   PaginationItem,
   PaginationLink,
   PaginationNext,
@@ -103,7 +106,11 @@ export function PlatformBadge({ platform }: { platform: Platform | string | null
 
 export function StatusBadge({ status }: { status: string | null | undefined }) {
   const normalized = status ?? "unknown";
-  const label = normalized
+  const labelOverride: Record<string, string> = {
+    partial_failed: "Sent",
+    sent_with_issues: "Sent",
+  };
+  const label = labelOverride[normalized] ?? normalized
     .split(/[_-]+/)
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -111,7 +118,7 @@ export function StatusBadge({ status }: { status: string | null | undefined }) {
   const tone =
     ["active", "passed", "sent", "delivered", "healthy", "purchased", "renewed", "served", "published", "approved", "fresh", "succeeded"].includes(normalized)
       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-      : ["pending", "received", "sending", "grace_period", "warning", "draft", "pending_approval", "paused", "stale"].includes(normalized)
+      : ["pending", "queued", "processing", "received", "sending", "grace_period", "warning", "draft", "pending_approval", "paused", "stale", "partial", "retrying", "partial_failed", "sent_with_issues"].includes(normalized)
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : ["failed", "invalid", "expired", "refunded", "revoked", "critical", "blocked", "not_found", "unregistered"].includes(normalized)
           ? "border-rose-200 bg-rose-50 text-rose-700"
@@ -163,6 +170,23 @@ export function EmptyPanel({
   description: string;
   className?: string;
 }) {
+  const isLoading = title.trim().toLowerCase().startsWith("loading");
+
+  if (isLoading) {
+    return (
+      <div
+        aria-busy="true"
+        aria-label={title}
+        className={cn("min-h-40 space-y-3 rounded-lg p-6", className)}
+      >
+        <div className="mx-auto size-10 animate-pulse rounded-lg bg-muted" />
+        <div className="mx-auto h-4 w-40 max-w-full animate-pulse rounded bg-muted" />
+        <div className="mx-auto h-3 w-64 max-w-full animate-pulse rounded bg-muted/70" />
+        <div className="mx-auto h-3 w-52 max-w-full animate-pulse rounded bg-muted/70" />
+      </div>
+    );
+  }
+
   return (
     <Empty className={cn("min-h-40 rounded-none border-0", className)}>
       <EmptyHeader>
@@ -187,6 +211,31 @@ export function TableEmptyState({
   title: string;
   description: string;
 }) {
+  const isLoading = title.trim().toLowerCase().startsWith("loading");
+
+  if (isLoading) {
+    return (
+      <>
+        {Array.from({ length: 5 }).map((_, index) => (
+          <TableRow key={`table-loading-skeleton-${index}`}>
+            <TableCell colSpan={colSpan} className="p-3">
+              <div className="grid animate-pulse gap-3 md:grid-cols-[minmax(12rem,1.6fr)_repeat(4,minmax(5rem,1fr))]">
+                <div className="space-y-2">
+                  <div className="h-4 w-48 max-w-full rounded bg-muted" />
+                  <div className="h-3 w-32 max-w-full rounded bg-muted/70" />
+                </div>
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+                <div className="h-5 rounded bg-muted/70" />
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+      </>
+    );
+  }
+
   return (
     <TableRow>
       <TableCell colSpan={colSpan} className="p-0">
@@ -196,32 +245,196 @@ export function TableEmptyState({
   );
 }
 
+function paginationItems(currentPage: number, lastPage: number) {
+  if (lastPage <= 7) {
+    return Array.from({ length: lastPage }, (_, index) => index + 1);
+  }
+
+  const pageNumbers = new Set([
+    1,
+    lastPage,
+    currentPage,
+    currentPage - 1,
+    currentPage + 1,
+  ]);
+
+  if (currentPage <= 3) {
+    pageNumbers.add(2);
+    pageNumbers.add(3);
+    pageNumbers.add(4);
+  }
+
+  if (currentPage >= lastPage - 2) {
+    pageNumbers.add(lastPage - 3);
+    pageNumbers.add(lastPage - 2);
+    pageNumbers.add(lastPage - 1);
+  }
+
+  const sortedPages = Array.from(pageNumbers)
+    .filter((pageNumber) => pageNumber >= 1 && pageNumber <= lastPage)
+    .sort((left, right) => left - right);
+
+  return sortedPages.flatMap((pageNumber, index) => {
+    const previousPage = sortedPages[index - 1];
+    if (previousPage && pageNumber - previousPage > 1) {
+      return [`ellipsis-${previousPage}-${pageNumber}`, pageNumber];
+    }
+
+    return [pageNumber];
+  });
+}
+
 export function TablePaginationFooter({
+  from,
+  loadingPage,
+  onPageChange,
+  page,
   shown,
+  to,
   total,
+  totalPages,
 }: {
+  from?: number;
+  loadingPage?: number | null;
+  onPageChange?: (page: number) => void;
+  page?: number;
   shown: number;
+  to?: number;
   total: number;
+  totalPages?: number;
 }) {
   if (!total) return null;
 
+  const currentPage = page ?? 1;
+  const lastPage = Math.max(totalPages ?? 1, 1);
+  const pendingPage = typeof loadingPage === "number" ? loadingPage : null;
+  const isBusy = pendingPage !== null;
+  const previousPage = currentPage - 1;
+  const nextPage = currentPage + 1;
+  const previousLoading = pendingPage === previousPage;
+  const nextLoading = pendingPage === nextPage;
+  const canGoFirst = Boolean(onPageChange && currentPage > 1 && !isBusy);
+  const canGoPrevious = Boolean(onPageChange && currentPage > 1 && !isBusy);
+  const canGoNext = Boolean(onPageChange && currentPage < lastPage && !isBusy);
+  const canGoLast = Boolean(onPageChange && currentPage < lastPage && !isBusy);
+  const rangeLabel = from && to ? `Showing ${from}-${to} of ${total}` : `Showing ${shown} of ${total}`;
+  const items = paginationItems(currentPage, lastPage);
+
+  function canGoToPage(targetPage: number) {
+    return Boolean(
+      onPageChange &&
+        !isBusy &&
+        targetPage >= 1 &&
+        targetPage <= lastPage &&
+        targetPage !== currentPage
+    );
+  }
+
+  function goToPage(targetPage: number) {
+    return (event: MouseEvent<HTMLAnchorElement>) => {
+      event.preventDefault();
+      if (canGoToPage(targetPage)) onPageChange?.(targetPage);
+    };
+  }
+
+  function goFirst(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (canGoFirst) onPageChange?.(1);
+  }
+
+  function goPrevious(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (canGoPrevious) onPageChange?.(currentPage - 1);
+  }
+
+  function goNext(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (canGoNext) onPageChange?.(currentPage + 1);
+  }
+
+  function goLast(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    if (canGoLast) onPageChange?.(lastPage);
+  }
+
   return (
     <div className="flex flex-col gap-3 border-t px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-      <span>
-        Showing {shown} of {total}
-      </span>
+      <span>{rangeLabel}</span>
       <Pagination className="mx-0 w-auto justify-start sm:justify-end">
-        <PaginationContent>
+        <PaginationContent className="flex-wrap justify-start sm:justify-end">
           <PaginationItem>
-            <PaginationPrevious href="#" text="Prev" className="pointer-events-none opacity-50" />
-          </PaginationItem>
-          <PaginationItem>
-            <PaginationLink href="#" isActive>
-              1
+            <PaginationLink
+              aria-disabled={!canGoFirst}
+              aria-label="Go to first page"
+              href="#"
+              size="icon"
+              className={cn(!canGoFirst && "pointer-events-none opacity-50")}
+              onClick={goFirst}
+            >
+              <ChevronsLeft size={16} />
             </PaginationLink>
           </PaginationItem>
           <PaginationItem>
-            <PaginationNext href="#" text="Next" className="pointer-events-none opacity-50" />
+            <PaginationPrevious
+              href="#"
+              loading={previousLoading}
+              text="Prev"
+              className={cn(
+                !canGoPrevious && !previousLoading && "pointer-events-none opacity-50",
+                previousLoading && "pointer-events-none"
+              )}
+              onClick={goPrevious}
+            />
+          </PaginationItem>
+          {items.map((item) =>
+            typeof item === "string" ? (
+              <PaginationItem key={item}>
+                <PaginationEllipsis />
+              </PaginationItem>
+            ) : (
+              <PaginationItem key={item}>
+                <PaginationLink
+                  aria-disabled={!canGoToPage(item)}
+                  aria-label={`Go to page ${item}`}
+                  href="#"
+                  isActive={item === currentPage}
+                  size="icon"
+                  className={cn(
+                    "min-w-8 px-2",
+                    !canGoToPage(item) &&
+                      item !== currentPage &&
+                      "pointer-events-none opacity-50"
+                  )}
+                  onClick={goToPage(item)}
+                >
+                  {item}
+                </PaginationLink>
+              </PaginationItem>
+            )
+          )}
+          <PaginationItem>
+            <PaginationNext
+              href="#"
+              loading={nextLoading}
+              text="Next"
+              className={cn(
+                !canGoNext && !nextLoading && "pointer-events-none opacity-50",
+                nextLoading && "pointer-events-none"
+              )}
+              onClick={goNext}
+            />
+          </PaginationItem>
+          <PaginationItem>
+            <PaginationLink
+              aria-disabled={!canGoLast}
+              aria-label="Go to last page"
+              href="#"
+              size="icon"
+              className={cn(!canGoLast && "pointer-events-none opacity-50")}
+              onClick={goLast}
+            >
+              <ChevronsRight size={16} />
+            </PaginationLink>
           </PaginationItem>
         </PaginationContent>
       </Pagination>

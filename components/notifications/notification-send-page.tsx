@@ -3,7 +3,8 @@
 import { useMemo, useState } from "react";
 import { Activity, Bell, ChevronRight, Clock3, Languages, Send, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { announceBackgroundJob } from "@/lib/client/background-jobs";
+import { showToast } from "@/lib/client/toast";
 
 import { PageHeader, StatusBadge } from "@/components/tracking/primitives";
 import { Badge } from "@/components/ui/badge";
@@ -34,7 +35,6 @@ import {
   type SendResponse,
   TITLE_MAX_LENGTH,
   createLocaleRows,
-  devicesForApp,
   appIdentifierForApp,
   matchingFirebaseCredentials,
   platformLabel,
@@ -68,6 +68,7 @@ export function NotificationSendPage({
   const [, setJobs] = useState(data.notificationJobs);
   const [, setEvents] = useState(data.notificationEvents);
   const [schedules, setSchedules] = useState(data.notificationSchedules);
+  const deviceCounts = data.notificationDeviceCounts;
   const [lastSendSummaries, setLastSendSummaries] = useState<AppSendSummary[]>([]);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
@@ -76,13 +77,13 @@ export function NotificationSendPage({
     () => platformApps.filter((app) => selectedAppIdSet.has(app.id)),
     [platformApps, selectedAppIdSet]
   );
-  const selectedDevices = useMemo(
-    () => selectedApps.flatMap((app) => devicesForApp(app, data.deviceTokens)),
-    [data.deviceTokens, selectedApps]
+  const selectedTokenCount = useMemo(
+    () => selectedApps.reduce((total, app) => total + (deviceCounts[app.id] ?? 0), 0),
+    [deviceCounts, selectedApps]
   );
   const enabledRows = localeRows.filter((row) => row.enabled);
   const selectedReadyAppCount = selectedApps.filter((app) => matchingFirebaseCredentials(app, data.credentialSecrets).length).length;
-  const selectedAppsWithDevices = selectedApps.filter((app) => devicesForApp(app, data.deviceTokens).length).length;
+  const selectedAppsWithDevices = selectedApps.filter((app) => (deviceCounts[app.id] ?? 0) > 0).length;
   const selectedMissingConfigCount = Math.max(selectedApps.length - selectedReadyAppCount, 0);
   const selectedAppHasConfig = selectedApps.length > 0 && selectedMissingConfigCount === 0;
   const canTranslateContent =
@@ -139,12 +140,15 @@ export function NotificationSendPage({
     }));
   }
 
-  function buildPayloadForApp(app: StoreMapping) {
+  function activeTokenCountForApp(app: StoreMapping) {
+    return deviceCounts[app.id] ?? 0;
+  }
+
+  function buildPayloadForApp(app: StoreMapping, options?: { allowQueueByApp?: boolean }) {
     const deliveryRows = rowsForDelivery();
     validateMessageRows(deliveryRows);
-    const appDevices = devicesForApp(app, data.deviceTokens);
-    const deviceIds = appDevices.map((device) => device.device_id);
-    if (!deviceIds.length) throw new Error(`${app.app_name} does not have any active FCM token.`);
+    const allowQueueByApp = options?.allowQueueByApp ?? true;
+    if (!activeTokenCountForApp(app)) throw new Error(`${app.app_name} does not have any active FCM token.`);
 
     const appIdentifier = appIdentifierForApp(app);
 
@@ -153,7 +157,7 @@ export function NotificationSendPage({
       appName: app.app_name,
       bundleId: app.bundle_id,
       data: {},
-      deviceIds,
+      deviceIds: [],
       notifications: deliveryRows.map((row) => ({
         message: row.message,
         title: row.title,
@@ -162,6 +166,9 @@ export function NotificationSendPage({
       packageName: app.package_name,
       platform: app.platform,
       productAppId: appIdentifier,
+      queueByApp: allowQueueByApp,
+      queueMode: allowQueueByApp ? "app" : undefined,
+      resolveByApp: true,
       storeAccountName: app.store_account_name,
       storePlatform: app.store_platform,
       storeProfileId: app.store_profile_id,
@@ -209,9 +216,9 @@ export function NotificationSendPage({
         })
       );
       setShowLocalizedRows(true);
-      toast.success(`Generated and translated ${payload.notifications.length} language row(s).`);
+      void showToast("success", `Generated and translated ${payload.notifications.length} language row(s).`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Generate failed.");
+      void showToast("error", error instanceof Error ? error.message : "Generate failed.");
     } finally {
       setPendingAction(null);
     }
@@ -219,7 +226,7 @@ export function NotificationSendPage({
 
   async function translateLocalizedCopy() {
     if (!baseTitle.trim() || !baseMessage.trim()) {
-      toast.error("Enter title and content before translating.");
+      void showToast("error", "Enter title and content before translating.");
       return;
     }
 
@@ -258,9 +265,9 @@ export function NotificationSendPage({
         })
       );
       setShowLocalizedRows(true);
-      toast.success(`Translated ${payload.notifications.length} language row(s).`);
+      void showToast("success", `Translated ${payload.notifications.length} language row(s).`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Translate failed.");
+      void showToast("error", error instanceof Error ? error.message : "Translate failed.");
     } finally {
       setPendingAction(null);
     }
@@ -268,14 +275,14 @@ export function NotificationSendPage({
 
   async function sendNow() {
     if (!selectedApps.length) {
-      toast.error("Select at least one app first.");
+      void showToast("error", "Select at least one app first.");
       return;
     }
 
     try {
       validateMessageRows(rowsForDelivery());
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Notification title and content are required.");
+      void showToast("error", error instanceof Error ? error.message : "Notification title and content are required.");
       return;
     }
 
@@ -289,19 +296,22 @@ export function NotificationSendPage({
     try {
       for (const app of selectedApps) {
         try {
-          const appDevices = devicesForApp(app, data.deviceTokens);
           const response = await fetch("/api/admin/notifications/send", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(buildPayloadForApp(app)),
+            body: JSON.stringify(buildPayloadForApp(app, { allowQueueByApp: true })),
           });
           const payload = (await response.json()) as SendResponse;
           if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Send notification failed.");
+          announceBackgroundJob(payload.result?.backgroundJob);
 
+          const queued = payload.result?.queued === true;
           const results = payload.result?.results ?? [];
-          const sentCount = payload.result?.sentCount ?? results.filter((result) => result.ok).length;
-          const errorCount = payload.result?.errorCount ?? results.filter((result) => !result.ok).length;
-          const totalCount = Math.max(results.length, sentCount + errorCount, appDevices.length);
+          const sentCount = queued ? 0 : payload.result?.sentCount ?? results.filter((result) => result.ok).length;
+          const errorCount = queued ? 0 : payload.result?.errorCount ?? results.filter((result) => !result.ok).length;
+          const totalCount = queued
+            ? Number(payload.result?.targetCount ?? activeTokenCountForApp(app) ?? 0)
+            : Math.max(results.length, sentCount + errorCount);
           const resultJob = payload.result?.job;
 
           if (resultJob) {
@@ -316,7 +326,13 @@ export function NotificationSendPage({
                 event_type: result.ok ? "fcm_sent" : "fcm_failed",
                 id: `local-${resultJob.id}-${index}`,
                 job_id: resultJob.id,
-                metadata: { topicCode: result.topicCode },
+                device_token_id: result.deviceTokenId ?? null,
+                metadata: {
+                  fcmErrorCode: result.fcmErrorCode ?? null,
+                  fcmToken: result.fcmToken ?? null,
+                  invalidToken: result.invalidToken ?? false,
+                  topicCode: result.topicCode,
+                },
                 notification_id: resultJob.id,
                 platform: app.platform,
                 provider_message_id: result.providerMessageId,
@@ -330,16 +346,18 @@ export function NotificationSendPage({
           summaries.push({
             appId: appIdentifierForApp(app),
             appName: app.app_name,
+            batchCount: payload.result?.batchCount,
             errorCount,
             jobId: resultJob?.id,
             platform: app.platform,
+            queued,
             results,
             sentCount,
             totalCount,
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Send notification failed.";
-          const totalCount = Math.max(devicesForApp(app, data.deviceTokens).length, 1);
+          const totalCount = Math.max(activeTokenCountForApp(app), 1);
           summaries.push({
             appId: appIdentifierForApp(app),
             appName: app.app_name,
@@ -368,11 +386,14 @@ export function NotificationSendPage({
       const sentCount = summaries.reduce((total, summary) => total + summary.sentCount, 0);
       const errorCount = summaries.reduce((total, summary) => total + summary.errorCount, 0);
       const totalCount = summaries.reduce((total, summary) => total + summary.totalCount, 0);
+      const queuedApps = summaries.filter((summary) => summary.queued).length;
       const failedApps = summaries.filter((summary) => summary.errorCount > 0).length;
-      if (failedApps) {
-        toast.error(`Send finished with issues: ${sentCount}/${totalCount} token(s) sent, ${errorCount} failed.`);
+      if (queuedApps && !failedApps) {
+        void showToast("success", `Queued ${totalCount} target(s) across ${queuedApps} app(s).`);
+      } else if (failedApps) {
+        void showToast("error", `Send finished with issues: ${sentCount}/${totalCount} target(s) sent, ${errorCount} failed.`);
       } else {
-        toast.success(`Send finished: ${sentCount}/${totalCount} token(s) sent.`);
+        void showToast("success", `Send finished: ${sentCount}/${totalCount} target(s) sent.`);
       }
       router.refresh();
     } finally {
@@ -387,14 +408,14 @@ export function NotificationSendPage({
     }
 
     if (!selectedApps.length) {
-      toast.error("Select at least one app first.");
+      void showToast("error", "Select at least one app first.");
       return;
     }
 
     try {
       validateMessageRows(rowsForDelivery());
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Notification title and content are required.");
+      void showToast("error", error instanceof Error ? error.message : "Notification title and content are required.");
       return;
     }
 
@@ -410,7 +431,7 @@ export function NotificationSendPage({
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              ...buildPayloadForApp(app),
+              ...buildPayloadForApp(app, { allowQueueByApp: false }),
               data: canAutoGenerateSchedule
                 ? {
                   [SCHEDULE_DATA_KEY]: {
@@ -446,13 +467,13 @@ export function NotificationSendPage({
       }
 
       if (errors.length) {
-        toast.error(`${savedSchedules.length} schedule(s) saved, ${errors.length} failed.`);
+        void showToast("error", `${savedSchedules.length} schedule(s) saved, ${errors.length} failed.`);
       } else {
-        toast.success(`${savedSchedules.length} schedule(s) saved.`);
+        void showToast("success", `${savedSchedules.length} schedule(s) saved.`);
       }
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Save schedule failed.");
+      void showToast("error", error instanceof Error ? error.message : "Save schedule failed.");
     } finally {
       setPendingAction(null);
     }
@@ -486,9 +507,11 @@ export function NotificationSendPage({
               <AppSelectionTable
                 apps={platformApps}
                 credentials={data.credentialSecrets}
-                devices={data.deviceTokens}
+                deviceCounts={deviceCounts}
+                devices={[]}
                 fillHeight
                 schedules={schedules}
+                scheduleStats={data.notificationScheduleStats}
                 search={search}
                 selectedAppIdSet={selectedAppIdSet}
                 updateAppSelection={updateAppSelection}
@@ -618,8 +641,8 @@ export function NotificationSendPage({
                   </div>
                   <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
                     <div className="rounded-md bg-muted/35 p-2">
-                      <div className="text-muted-foreground">Tokens</div>
-                      <div className="mt-0.5 font-mono text-base font-semibold tabular-nums">{selectedDevices.length}</div>
+                      <div className="text-muted-foreground">Active tokens</div>
+                      <div className="mt-0.5 font-mono text-base font-semibold tabular-nums">{selectedTokenCount}</div>
                     </div>
                     <div className="rounded-md bg-muted/35 p-2">
                       <div className="text-muted-foreground">With tokens</div>
@@ -649,7 +672,11 @@ export function NotificationSendPage({
                       </SelectContent>
                     </Select>
                   </div>
-                  <Button className="h-9 px-3 text-xs" onClick={saveSchedule} disabled={pendingAction !== null || !selectedApps.length || !selectedDevices.length}>
+                  <Button
+                    className="h-9 px-3 text-xs"
+                    onClick={saveSchedule}
+                    disabled={pendingAction !== null || !selectedApps.length || !selectedTokenCount}
+                  >
                     {pendingAction === "schedule" || pendingAction === "send" ? <Spinner /> : scheduleMode === "now" ? <Send size={16} /> : <Clock3 size={16} />}
                     {scheduleMode === "now" ? "Send" : "Save"}
                   </Button>
@@ -824,24 +851,32 @@ export function NotificationSendPage({
               const total = Math.max(summary.totalCount, summary.sentCount + failed);
               const successRate = total ? (summary.sentCount / total) * 100 : 0;
               const firstError = summary.error ?? summary.results.find((result) => result.error)?.error;
+              const status = summary.queued
+                ? "queued"
+                : failed
+                  ? summary.sentCount ? "sent_with_issues" : "failed"
+                  : "sent";
 
               return (
                 <Card key={summary.appId} className="rounded-lg border bg-card p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="truncate font-medium">{summary.appName}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{platformLabel(summary.platform)} · {total} token(s)</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {platformLabel(summary.platform)} · {total} target(s)
+                        {summary.batchCount ? ` · ${summary.batchCount} batch(es)` : ""}
+                      </div>
                     </div>
-                    <StatusBadge status={failed ? summary.sentCount ? "partial_failed" : "failed" : "sent"} />
+                    <StatusBadge status={status} />
                   </div>
                   <div className="mt-3 grid grid-cols-4 gap-2 text-xs">
                     <div className="rounded-md bg-muted/35 p-2">
-                      <div className="text-muted-foreground">Total</div>
+                      <div className="text-muted-foreground">Targets</div>
                       <div className="mt-1 font-mono text-base font-semibold tabular-nums">{total}</div>
                     </div>
                     <div className="rounded-md bg-blue-50 p-2 text-blue-700">
-                      <div>Sent</div>
-                      <div className="mt-1 font-mono text-base font-semibold tabular-nums">{summary.sentCount}</div>
+                      <div>{summary.queued ? "Queued" : "Sent"}</div>
+                      <div className="mt-1 font-mono text-base font-semibold tabular-nums">{summary.queued ? total : summary.sentCount}</div>
                     </div>
                     <div className="rounded-md bg-rose-50 p-2 text-rose-700">
                       <div>Failed</div>

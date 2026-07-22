@@ -11,20 +11,24 @@ import {
   teamMemberStatusToPrismaStatus,
   teamMemberToTracking,
 } from "@/lib/auth/team-members";
-import { badRequest, conflict } from "@/lib/server/api/errors";
+import { ApiError, badRequest, conflict } from "@/lib/server/api/errors";
 import {
   createTeamMember,
   deleteTeamMember,
   getTeamMembers,
+  getTeamMembersPage,
   updateTeamMember,
 } from "@/lib/server/repositories/auth/team-member.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { normalizeScopeKey, normalizeScopeList } from "@/lib/tracking/identity";
 import type { StaffRole, TeamMember } from "@/lib/tracking/types";
 
 export type UserPayload = {
   id?: string;
   name?: string;
   email?: string;
+  password?: string;
   role?: StaffRole;
   status?: TeamMember["status"];
   appScope?: string[];
@@ -36,32 +40,83 @@ const roles = new Set<StaffRole>(["Admin", "Dev", "Marketing"]);
 const statuses = new Set<TeamMember["status"]>(["active", "invited", "suspended", "disabled"]);
 
 function arrayScope(value: unknown) {
-  return Array.isArray(value) ? value.map(cleanText).filter(Boolean) : [];
+  return normalizeScopeList(value);
+}
+
+function accessForRole(role: StaffRole, payload: UserPayload) {
+  if (role === "Admin") {
+    return {
+      appScope: [],
+      globalAccess: true,
+      storeScope: [],
+    };
+  }
+
+  return {
+    appScope: arrayScope(payload.appScope),
+    globalAccess: false,
+    storeScope: arrayScope(payload.storeScope),
+  };
 }
 
 function isPrismaUniqueError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
-async function inviteAuthUser(email: string, name: string, request: Request) {
+function passwordValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function isDuplicateAuthUserError(errorMessage: string) {
+  const normalized = errorMessage.toLowerCase();
+  return normalized.includes("already") || normalized.includes("registered");
+}
+
+async function createVerifiedAuthUser(email: string, name: string, password: string) {
   const supabase = createAdminClient();
   if (!supabase) {
-    return {
-      authUserId: null,
-      warning: "User row was saved, but SUPABASE_SERVICE_ROLE_KEY is not configured so no Auth invite was sent.",
-    };
+    throw new ApiError(
+      "SUPABASE_SERVICE_ROLE_KEY is required to create Supabase Auth users.",
+      500,
+    );
   }
 
-  const origin = new URL(request.url).origin;
-  const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
-    data: { name },
-    redirectTo: `${origin}/auth/callback?next=/dashboard`,
+  const { data, error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: {
+      display_name: name,
+      name,
+    },
+    app_metadata: {
+      account_type: "console",
+    },
   });
 
+  if (error || !data.user?.id) {
+    const message = error?.message ?? "Supabase Auth user could not be created.";
+    if (isDuplicateAuthUserError(message)) {
+      throw conflict("A Supabase Auth user with this email already exists.");
+    }
+
+    throw new ApiError(message, error?.status ?? 500);
+  }
+
   return {
-    authUserId: data?.user?.id ?? null,
-    warning: error?.message ?? null,
+    authUserId: data.user.id,
+    supabase,
   };
+}
+
+async function deleteAuthUserBestEffort(input: Awaited<ReturnType<typeof createVerifiedAuthUser>>) {
+  const { error } = await input.supabase.auth.admin.deleteUser(input.authUserId);
+  if (error) {
+    console.error(
+      "Failed to rollback Supabase Auth user after team member create failed.",
+      error,
+    );
+  }
 }
 
 export async function getConsoleUsers() {
@@ -69,44 +124,69 @@ export async function getConsoleUsers() {
   return { users: users.map(teamMemberToTracking) };
 }
 
-export async function createConsoleUser(payload: UserPayload, admin: ConsoleSession, request: Request) {
+export async function getConsoleUsersPage(
+  options: PaginationQuery & {
+    appScopeKey?: string;
+    role?: StaffRole;
+    search?: string;
+    storeScopeKey?: string;
+  },
+) {
+  const [users, total] = await getTeamMembersPage({
+    appScopeKey: normalizeScopeKey(options.appScopeKey),
+    role: options.role ? staffRoleToPrismaRole[options.role] : undefined,
+    search: options.search,
+    skip: options.skip,
+    storeScopeKey: normalizeScopeKey(options.storeScopeKey),
+    take: options.take,
+  });
+
+  return paginatedResult(users.map(teamMemberToTracking), total, options);
+}
+
+export async function createConsoleUser(payload: UserPayload, admin: ConsoleSession) {
   const name = cleanText(payload.name);
   const email = normalizeEmail(payload.email);
+  const password = passwordValue(payload.password);
   const role = payload.role ?? "Marketing";
-  const status = payload.status ?? "active";
 
-  if (!name || !email || !roles.has(role) || !statuses.has(status)) {
+  if (!name || !email || !password || !roles.has(role)) {
     throw badRequest("Invalid user payload.");
   }
 
-  const invite = await inviteAuthUser(email, name, request);
+  if (password.length < 6) {
+    throw badRequest("Password must contain at least 6 characters.");
+  }
+
+  const authUser = await createVerifiedAuthUser(email, name, password);
+  const access = accessForRole(role, payload);
 
   try {
     const user = await createTeamMember({
-      authUserId: invite.authUserId,
+      authUserId: authUser.authUserId,
       name,
       email,
       role: staffRoleToPrismaRole[role],
-      status: teamMemberStatusToPrismaStatus[status],
-      globalAccess: payload.globalAccess ?? role === "Admin",
-      appScope: arrayScope(payload.appScope),
-      storeScope: arrayScope(payload.storeScope),
+      status: teamMemberStatusToPrismaStatus.active,
+      globalAccess: access.globalAccess,
+      appScope: access.appScope,
+      storeScope: access.storeScope,
       createdBy: admin.email,
-      invitedAt: new Date(),
+      invitedAt: null,
     });
     const dto = teamMemberToTracking(user);
     const metadataWarning = await syncConsoleAuthMetadata(dto.auth_user_id, dto);
-    const message = invite.warning
-      ? `User ${email} created. ${invite.warning}`
-      : metadataWarning
-        ? `User ${email} created and invited. Metadata sync warning: ${metadataWarning}`
-        : `User ${email} created and invited.`;
+    const message = metadataWarning
+      ? `User ${email} created. Metadata sync warning: ${metadataWarning}`
+      : `User ${email} created.`;
 
     return {
       user: dto,
       message,
     };
   } catch (error) {
+    await deleteAuthUserBestEffort(authUser);
+
     if (isPrismaUniqueError(error)) {
       throw conflict("A user with this email already exists.");
     }
@@ -124,13 +204,20 @@ export async function updateConsoleUser(payload: UserPayload) {
 
   const data: Prisma.TeamMemberUpdateInput = {};
   if (payload.name !== undefined) data.name = cleanText(payload.name);
-  if (payload.role !== undefined && roles.has(payload.role)) data.role = staffRoleToPrismaRole[payload.role];
+  if (payload.role !== undefined && roles.has(payload.role)) {
+    const access = accessForRole(payload.role, payload);
+    data.role = staffRoleToPrismaRole[payload.role];
+    data.globalAccess = access.globalAccess;
+    data.appScope = access.appScope;
+    data.storeScope = access.storeScope;
+  }
   if (payload.status !== undefined && statuses.has(payload.status)) {
     data.status = teamMemberStatusToPrismaStatus[payload.status];
   }
-  if (payload.globalAccess !== undefined) data.globalAccess = Boolean(payload.globalAccess);
-  if (Array.isArray(payload.appScope)) data.appScope = arrayScope(payload.appScope);
-  if (Array.isArray(payload.storeScope)) data.storeScope = arrayScope(payload.storeScope);
+  if (payload.role === undefined) {
+    if (Array.isArray(payload.appScope)) data.appScope = arrayScope(payload.appScope);
+    if (Array.isArray(payload.storeScope)) data.storeScope = arrayScope(payload.storeScope);
+  }
 
   const user = await updateTeamMember(id, data);
   const dto = teamMemberToTracking(user);

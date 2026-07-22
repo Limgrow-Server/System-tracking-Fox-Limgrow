@@ -6,6 +6,7 @@ model DeviceToken {
   platform           String
   firebaseAppId      String?  @map("firebase_app_id")
   firebaseProjectId  String?  @map("firebase_project_id")
+  appIdentifier      String?  @map("app_identifier")
   tokenHash          String   @unique @map("token_hash")
   fcmToken           String   @map("fcm_token")
   appVersion         String?  @map("app_version")
@@ -18,58 +19,90 @@ model DeviceToken {
   productAppId       String?  @map("product_app_id")
   packageName        String?  @map("package_name")
   bundleId           String?  @map("bundle_id")
+  deviceType         String?  @map("device_type")
   deviceModel        String?  @map("device_model")
   deviceManufacturer String?  @map("device_manufacturer")
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt          DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  @@index([platform, status, lastSeenAt], map: "device_tokens_platform_status_seen_idx")
   @@index([deviceId, platform], map: "device_tokens_device_platform_idx")
+  @@index([platform, appIdentifier, status], map: "device_tokens_identifier_platform_status_idx")
   @@index([appId, platform, status], map: "device_tokens_app_id_platform_status_idx")
   @@index([productAppId, platform, status], map: "device_tokens_app_platform_status_idx")
-  @@index([packageName, status], map: "device_tokens_package_status_idx")
   @@index([bundleId, status], map: "device_tokens_bundle_status_idx")
   @@map("device_tokens")
 }
 
 model NotificationJob {
-  id               String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  scheduleId       String?               @map("schedule_id") @db.Uuid
+  id               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  scheduleId       String?                @map("schedule_id") @db.Uuid
   platform         String
-  storePlatform    String?               @map("store_platform")
-  storeProfileId   String?               @map("store_profile_id") @db.Uuid
-  storeAccountName String?               @map("store_account_name")
-  appMappingId     String?               @map("app_mapping_id") @db.Uuid
-  appId            String?               @map("app_id")
-  appName          String                @map("app_name")
-  packageName      String?               @map("package_name")
-  bundleId         String?               @map("bundle_id")
-  topicBase        String                @map("topic_base")
-  credentialRef    String?               @map("credential_ref")
-  projectId        String?               @map("project_id")
-  targetType       String                @default("topic") @map("target_type")
-  targetValues     String[]              @default([]) @map("target_values")
+  storePlatform    String?                @map("store_platform")
+  storeProfileId   String?                @map("store_profile_id") @db.Uuid
+  storeAccountName String?                @map("store_account_name")
+  appMappingId     String?                @map("app_mapping_id") @db.Uuid
+  appId            String?                @map("app_id")
+  appName          String                 @map("app_name")
+  packageName      String?                @map("package_name")
+  bundleId         String?                @map("bundle_id")
+  topicBase        String                 @map("topic_base")
+  credentialRef    String?                @map("credential_ref")
+  projectId        String?                @map("project_id")
+  targetType       String                 @default("topic") @map("target_type")
+  targetValues     String[]               @default([]) @map("target_values")
   title            String?
   message          String?
-  imageUrl         String?               @map("image_url")
-  dataPayload      Json                  @default("{}") @map("data_payload")
-  localePayload    Json                  @default("[]") @map("locale_payload")
-  status           String                @default("draft")
-  sentCount        Int                   @default(0) @map("sent_count")
-  errorCount       Int                   @default(0) @map("error_count")
-  requestedBy      String?               @map("requested_by")
-  sentAt           DateTime?             @map("sent_at") @db.Timestamptz(6)
-  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
-  schedule         NotificationSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  imageUrl         String?                @map("image_url")
+  dataPayload      Json                   @default("{}") @map("data_payload")
+  localePayload    Json                   @default("[]") @map("locale_payload")
+  status           String                 @default("draft")
+  sentCount        Int                    @default(0) @map("sent_count")
+  errorCount       Int                    @default(0) @map("error_count")
+  requestedBy      String?                @map("requested_by")
+  sentAt           DateTime?              @map("sent_at") @db.Timestamptz(6)
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  schedule         NotificationSchedule?  @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  batches          NotificationJobBatch[]
   events           NotificationEvent[]
 
   @@index([scheduleId, createdAt], map: "notification_jobs_schedule_created_idx")
   @@index([platform, status, createdAt], map: "notification_jobs_platform_status_created_idx")
   @@index([storeAccountName, createdAt], map: "notification_jobs_store_created_idx")
+  @@index([appMappingId, platform, createdAt], map: "notification_jobs_mapping_platform_created_idx")
   @@index([appId, platform, createdAt], map: "notification_jobs_app_id_platform_created_idx")
   @@index([appName, platform, createdAt], map: "notification_jobs_app_platform_created_idx")
+  @@index([packageName, platform, createdAt], map: "notification_jobs_package_platform_created_idx")
+  @@index([bundleId, platform, createdAt], map: "notification_jobs_bundle_platform_created_idx")
   @@map("notification_jobs")
+}
+
+model NotificationJobBatch {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId         String          @map("job_id") @db.Uuid
+  batchIndex    Int             @map("batch_index")
+  targetValues  String[]        @default([]) @map("target_values")
+  status        String          @default("queued")
+  attemptCount  Int             @default(0) @map("attempt_count")
+  maxAttempts   Int             @default(3) @map("max_attempts")
+  lockedAt      DateTime?       @map("locked_at") @db.Timestamptz(6)
+  lockedBy      String?         @map("locked_by")
+  nextAttemptAt DateTime        @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  startedAt     DateTime?       @map("started_at") @db.Timestamptz(6)
+  finishedAt    DateTime?       @map("finished_at") @db.Timestamptz(6)
+  sentCount     Int             @default(0) @map("sent_count")
+  errorCount    Int             @default(0) @map("error_count")
+  lastError     String?         @map("last_error") @db.Text
+  resultPayload Json            @default("{}") @map("result_payload")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  job           NotificationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, batchIndex], map: "notification_job_batches_job_batch_key")
+  @@index([jobId, status], map: "notification_job_batches_job_status_idx")
+  @@index([status, nextAttemptAt], map: "notification_job_batches_status_next_idx")
+  @@index([lockedAt], map: "notification_job_batches_locked_idx")
+  @@map("notification_job_batches")
 }
 
 model NotificationSchedule {
@@ -107,13 +140,16 @@ model NotificationSchedule {
   runCount         Int               @default(0) @map("run_count")
   createdBy        String?           @map("created_by")
   createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   jobs             NotificationJob[]
 
   @@index([status, nextRunAt], map: "notification_schedules_status_next_run_idx")
   @@index([platform, scheduleType, status], map: "notification_schedules_platform_type_status_idx")
+  @@index([appMappingId, platform, createdAt], map: "notification_schedules_mapping_platform_created_idx")
   @@index([appId, platform, createdAt], map: "notification_schedules_app_id_platform_created_idx")
   @@index([appName, platform, createdAt], map: "notification_schedules_app_platform_created_idx")
+  @@index([packageName, platform, createdAt], map: "notification_schedules_package_platform_created_idx")
+  @@index([bundleId, platform, createdAt], map: "notification_schedules_bundle_platform_created_idx")
   @@map("notification_schedules")
 }
 
@@ -122,6 +158,7 @@ model NotificationEvent {
   notificationId    String           @map("notification_id")
   jobId             String?          @map("job_id") @db.Uuid
   eventType         String           @map("event_type")
+  deviceTokenId     String?          @map("device_token_id") @db.Uuid
   deviceId          String?          @map("device_id")
   platform          String?
   targetType        String?          @map("target_type")
