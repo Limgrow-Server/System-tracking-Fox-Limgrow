@@ -3,7 +3,7 @@ import "server-only";
 import { createSign } from "crypto";
 import type { NotificationJob, Prisma } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma, prisma } from "@/lib/prisma";
 import {
   rewriteStoreProviderUrl,
   type StoreProviderEndpointContext,
@@ -962,7 +962,7 @@ async function getDeviceTargets(input: {
       DEVICE_TOKEN_QUERY_BATCH_SIZE,
     )) {
       rows.push(
-        ...(await prisma.deviceToken.findMany({
+        ...(await notificationPrisma.deviceToken.findMany({
           select: deviceTargetSelect,
           where: {
             id: { in: tokenIdBatch },
@@ -978,7 +978,7 @@ async function getDeviceTargets(input: {
       DEVICE_TOKEN_QUERY_BATCH_SIZE,
     )) {
       rows.push(
-        ...(await prisma.deviceToken.findMany({
+        ...(await notificationPrisma.deviceToken.findMany({
           select: deviceTargetSelect,
           where: {
             deviceId: { in: deviceIdBatch },
@@ -1133,7 +1133,7 @@ async function writeEvents(input: {
   }));
 
   for (const rowBatch of chunks(rows, DB_WRITE_BATCH_SIZE)) {
-    await prisma.notificationEvent.createMany({ data: rowBatch });
+    await notificationPrisma.notificationEvent.createMany({ data: rowBatch });
   }
 }
 
@@ -1155,7 +1155,7 @@ async function markInvalidDeviceTokens(input: {
     invalidDeviceTokenIds,
     DB_WRITE_BATCH_SIZE,
   )) {
-    await prisma.deviceToken.updateMany({
+    await notificationPrisma.deviceToken.updateMany({
       where: {
         id: { in: tokenIdBatch },
         platform: input.platform,
@@ -1190,7 +1190,7 @@ async function createNotificationJobForLocalSend(input: {
     null;
   const firstLocale = primaryLocale(input.locales);
 
-  return prisma.notificationJob.create({
+  return notificationPrisma.notificationJob.create({
     data: {
       appId,
       appName,
@@ -1233,7 +1233,7 @@ async function updateNotificationJobAfterLocalSend(input: {
 }) {
   const status = input.sentCount > 0 ? "sent" : "failed";
 
-  return prisma.notificationJob.update({
+  return notificationPrisma.notificationJob.update({
     where: { id: input.jobId },
     data: {
       appId: input.resolvedPayload

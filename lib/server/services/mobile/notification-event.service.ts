@@ -4,7 +4,7 @@ import { createHash } from "crypto";
 
 import type { Prisma } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma, prisma } from "@/lib/prisma";
 import { normalizeAppId } from "@/lib/tracking/identity";
 import { badRequest } from "@/lib/server/api/errors";
 import {
@@ -209,7 +209,8 @@ async function touchDeviceToken(
 
 export async function handleNotificationEventRequest(
   payload: NotificationEventRequest,
-  db: NotificationEventPrisma = prisma,
+  db: NotificationEventPrisma = notificationPrisma,
+  trackingDb: NotificationEventPrisma = db === notificationPrisma ? prisma : db,
 ) {
   const platform = inferPlatform(payload);
   const appId = requestAppId(payload);
@@ -244,7 +245,7 @@ export async function handleNotificationEventRequest(
       storeAccountName: clean(payload.storeAccountName),
       storeProfileId: clean(payload.storeProfileId),
     },
-    db,
+    trackingDb,
   );
   const fcmToken = clean(payload.fcmToken);
   const tokenHash = fcmToken ? sha256Hex(fcmToken) : null;

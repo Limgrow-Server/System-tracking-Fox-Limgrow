@@ -3,7 +3,7 @@ import "server-only";
 import { Prisma, type DeviceToken as DeviceTokenModel } from "@prisma/client";
 import { unstable_cache } from "next/cache";
 
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma as prisma } from "@/lib/prisma";
 import { searchTextVariants } from "@/lib/search";
 import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { firstAppId } from "@/lib/tracking/identity";

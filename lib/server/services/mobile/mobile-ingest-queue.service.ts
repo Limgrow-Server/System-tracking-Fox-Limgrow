@@ -6,6 +6,7 @@ import path from "node:path";
 
 import type { Prisma } from "@prisma/client";
 
+import { prisma } from "@/lib/prisma";
 import {
   mobileIngestConnectionLimit,
   mobileIngestPrisma,
@@ -635,8 +636,13 @@ async function processMobileIngestEvent(row: ClaimRow) {
           payload as DeviceTokenRequest,
           row.platform === "ios" ? "ios" : "android",
           mobileIngestPrisma,
+          prisma,
         )
-      : await handleNotificationEventRequest(payload as NotificationEventRequest, mobileIngestPrisma);
+      : await handleNotificationEventRequest(
+          payload as NotificationEventRequest,
+          mobileIngestPrisma,
+          prisma,
+        );
 
     await markProcessed(row, result);
 

@@ -5,7 +5,7 @@ import { randomUUID } from "crypto";
 import type { BackgroundJobStatus, NotificationJob, Prisma } from "@prisma/client";
 
 import { firstAppId } from "@/lib/tracking/identity";
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma as prisma } from "@/lib/prisma";
 import { badRequest } from "@/lib/server/api/errors";
 import {
   createBackgroundJob,

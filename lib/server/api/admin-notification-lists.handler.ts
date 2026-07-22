@@ -1,7 +1,7 @@
 import "server-only";
 
 import { CACHE_TAGS, revalidateCacheTags } from "@/lib/server/cache-tags";
-import { prisma } from "@/lib/prisma";
+import { notificationPrisma as prisma } from "@/lib/prisma";
 import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, notFound } from "@/lib/server/api/errors";
 import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
