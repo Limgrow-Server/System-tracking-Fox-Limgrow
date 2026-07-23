@@ -1771,10 +1771,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       currency: "VND",
     }).format(n);
   const fmtNum = (n: number) => new Intl.NumberFormat("vi-VN").format(n);
-  const defaultPurchaseDate = dateInputValue(new Date());
-  const hasCustomPurchaseDate =
-    filterPurchaseDateFrom !== defaultPurchaseDate ||
-    filterPurchaseDateTo !== defaultPurchaseDate;
+  const hasCustomPurchaseDate = Boolean(
+    filterPurchaseDateFrom || filterPurchaseDateTo,
+  );
   const hasActiveTransactionFilters =
     hasCustomPurchaseDate ||
     filterState !== "all" ||
@@ -1796,16 +1795,16 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     setFilterTwoHourStatus("all");
     setFilterFirebaseStatus("all");
     setFilterAdjustStatus("all");
-    setFilterPurchaseDateFrom(defaultPurchaseDate);
-    setFilterPurchaseDateTo(defaultPurchaseDate);
+    setFilterPurchaseDateFrom("");
+    setFilterPurchaseDateTo("");
     void loadTransactionsPage(1, {
       filterAdjustStatus: "all",
       filterConversionStatus: "all",
       filterEnvironment: "production",
       filterFirebaseStatus: "all",
       filterKind: "all",
-      filterPurchaseDateFrom: defaultPurchaseDate,
-      filterPurchaseDateTo: defaultPurchaseDate,
+      filterPurchaseDateFrom: "",
+      filterPurchaseDateTo: "",
       filterState: "all",
       filterTwoHourStatus: "all",
       filterTrial: "all",

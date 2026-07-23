@@ -52,22 +52,6 @@ function revenueGranularity(value: string | undefined): IapRevenueGranularity {
     : "month";
 }
 
-function todayInputDate(timeZone = "Asia/Ho_Chi_Minh") {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    day: "2-digit",
-    month: "2-digit",
-    timeZone,
-    year: "numeric",
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
 export async function getIapAppDetailPageData(
   mappingId: string,
   platform: string,
@@ -80,9 +64,8 @@ export async function getIapAppDetailPageData(
   const kind = clean(options?.kind) || "all";
   const environment = clean(options?.environment) || "production";
   const firebaseStatus = clean(options?.firebaseStatus) || "all";
-  const defaultPurchaseDate = todayInputDate();
-  const purchaseDateFrom = clean(options?.purchaseDateFrom) || defaultPurchaseDate;
-  const purchaseDateTo = clean(options?.purchaseDateTo) || defaultPurchaseDate;
+  const purchaseDateFrom = clean(options?.purchaseDateFrom);
+  const purchaseDateTo = clean(options?.purchaseDateTo);
   const selectedRevenueGranularity = revenueGranularity(
     options?.revenueGranularity,
   );
