@@ -5,23 +5,29 @@ import dynamic from "next/dynamic";
 import type { DateRange } from "react-day-picker";
 import {
   ArrowDownRight,
-  ArrowLeft,
   ArrowUpDown,
   ArrowUpRight,
-  Apple,
   Calendar,
-  ChevronRight,
   CreditCard,
   FileJson,
-  RotateCcw,
-  Smartphone,
+  Trash2,
   X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Calendar as CalendarPicker } from "@/components/ui/calendar";
-import { PendingNavigationLink } from "@/components/tracking/pending-navigation-link";
 import {
   TableEmptyState,
   TablePaginationFooter,
@@ -38,6 +44,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type {
   IapAppDetailPageData,
   IapAppMetrics,
@@ -53,6 +67,7 @@ import type {
 import { showToast } from "@/lib/client/toast";
 import type { IapRevenueChartProps } from "./iap-revenue-chart";
 import type { IosTrialAnalyticsPanelProps } from "./ios-trial-analytics-panel";
+import { IapAppContextHeader } from "./iap-app-context-header";
 
 const IapReceiptDialog = dynamic(
   () => import("./iap-receipt-dialog").then((mod) => mod.IapReceiptDialog),
@@ -119,29 +134,15 @@ type IapTransactionReceiptResponse = {
   rawReceipt?: unknown;
 };
 
-type IapTwoHourRetryResponse = {
-  check?: {
-    error?: string;
-    status: string;
-  } | null;
+type IapSandboxDeleteResponse = {
+  success?: boolean;
   error?: string;
-  ok?: boolean;
+  deletedTransactions?: number;
+  totalDeleted?: number;
 };
 
 const IAP_TRANSACTION_SKELETON_COUNT = 8;
 const IAP_REALTIME_REFRESH_DELAY_MS = 650;
-const IAP_TWO_HOUR_FILTER_OPTIONS = [
-  { label: "All 2h", value: "all" },
-  { label: "2h Passed", value: "passed" },
-  { label: "Auto-renew off", value: "cancelled" },
-  { label: "2h Checked", value: "checked" },
-  { label: "2h Failed", value: "failed" },
-  { label: "2h Checking", value: "processing" },
-  { label: "2h Retrying", value: "retrying" },
-  { label: "2h Pending", value: "pending" },
-  { label: "No 2h row", value: "not_scheduled" },
-  { label: "Not applicable", value: "not_applicable" },
-];
 const IAP_CONVERSION_FILTER_OPTIONS = [
   { label: "All conversion", value: "all" },
   { label: "Trial active", value: "trial_active" },
@@ -149,27 +150,6 @@ const IAP_CONVERSION_FILTER_OPTIONS = [
   { label: "Billing retry", value: "billing_retry" },
   { label: "Converted to paid", value: "converted_to_paid" },
   { label: "Not converted", value: "not_converted" },
-];
-const IAP_FIREBASE_FILTER_OPTIONS = [
-  { label: "All Firebase", value: "all" },
-  { label: "Firebase Sent", value: "sent" },
-  { label: "Firebase Failed", value: "failed" },
-  { label: "Firebase Retrying", value: "retrying" },
-  { label: "Firebase Pending", value: "pending" },
-  { label: "Firebase Not sent", value: "not_sent" },
-  { label: "Firebase No row", value: "not_scheduled" },
-  { label: "Firebase No data", value: "no_data" },
-];
-const IAP_ADJUST_FILTER_OPTIONS = [
-  { label: "All Adjust", value: "all" },
-  { label: "Adjust Sent", value: "sent" },
-  { label: "Adjust Skipped", value: "skipped" },
-  { label: "Adjust Failed", value: "failed" },
-  { label: "Adjust Retrying", value: "retrying" },
-  { label: "Adjust Pending", value: "pending" },
-  { label: "Adjust Not sent", value: "not_sent" },
-  { label: "Adjust No row", value: "not_scheduled" },
-  { label: "Adjust No data", value: "no_data" },
 ];
 
 function formatRevenue(
@@ -420,9 +400,13 @@ function providerDeliveryMeta(
 ): ProviderDeliveryMeta | null {
   const context = isRecord(rawContext) ? rawContext : {};
   const delivery = isRecord(context.delivery) ? context.delivery : {};
-  const deliveryState = isRecord(delivery[provider])
-    ? delivery[provider]
-    : null;
+  const paidAdjustState =
+    provider === "adjust" && isRecord(context.adjustPurchaseDelivery)
+      ? context.adjustPurchaseDelivery
+      : null;
+  const deliveryState =
+    paidAdjustState ??
+    (isRecord(delivery[provider]) ? delivery[provider] : null);
   const legacyState = isRecord(context[provider]) ? context[provider] : null;
   const state = deliveryState ?? legacyState;
   if (!state) return null;
@@ -438,6 +422,7 @@ function providerDeliveryMeta(
       : "");
   const message =
     cleanText(state.message) ||
+    cleanText(state.reason) ||
     cleanText(result.responseBody) ||
     cleanText(result.error) ||
     null;
@@ -445,8 +430,8 @@ function providerDeliveryMeta(
   return {
     message,
     provider: provider === "ga4" ? "Firebase" : "Adjust",
-    skipped: Boolean(result.skipped),
-    status,
+    skipped: Boolean(result.skipped) || status === "skipped",
+    status: ["sent", "already_sent"].includes(status) ? "delivered" : status,
   };
 }
 
@@ -467,7 +452,23 @@ function providerStatusBadge(meta: ProviderDeliveryMeta): TwoHourBadgeMeta {
     };
   }
 
-  if (meta.status === "retryable_error") {
+  if (["queued", "pending", "published"].includes(meta.status)) {
+    return {
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      label: "Queued",
+      title: `${meta.provider} purchase delivery is waiting in RabbitMQ.`,
+    };
+  }
+
+  if (meta.status === "processing") {
+    return {
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      label: "Sending",
+      title: `${meta.provider} purchase delivery is being processed by the worker.`,
+    };
+  }
+
+  if (["retryable_error", "retrying"].includes(meta.status)) {
     return {
       className: "border-amber-200 bg-amber-50 text-amber-700",
       label: "Retrying",
@@ -624,13 +625,13 @@ function providerColumnStatusBadge(
     if (!options?.expectsCheck) {
       return twoHourMutedBadge(
         "-",
-        `${providerLabel} delivery only applies when a 2-hour check exists.`,
+        `${providerLabel} purchase delivery only applies to a verified charged transaction.`,
       );
     }
 
     return twoHourMutedBadge(
       "Not scheduled",
-      `No 2-hour check row exists, so ${providerLabel} was not attempted.`,
+      `No purchase delivery record exists, so ${providerLabel} was not attempted.`,
     );
   }
 
@@ -708,7 +709,8 @@ function sourceMeta(source: string | null) {
 
   if (
     normalized === "verify_ios_edge_function" ||
-    normalized === "app_store_server_api.get_transaction_info"
+    normalized === "app_store_server_api.get_transaction_info" ||
+    normalized === "system_tracking_api"
   ) {
     return {
       className: "border-blue-200 bg-blue-50 text-blue-700",
@@ -733,17 +735,13 @@ function sourceMeta(source: string | null) {
   };
 }
 
-function iapRealtimeTopic(platform: string, identifier: string) {
-  return `iap-detail:${platform}:${identifier}`;
-}
-
 function realtimeStatusMeta(
   status: "connected" | "disconnected" | "error" | "unauthorized",
 ) {
   if (status === "connected") {
     return {
       className: "border-emerald-200 bg-emerald-50 text-emerald-700",
-      label: "Live",
+      label: "Auto refresh",
     };
   }
 
@@ -1070,7 +1068,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
 
   const [metrics, setMetrics] = useState(data.metrics);
   const [transactions, setTransactions] = useState(data.transactions);
-  const [twoHourChecks, setTwoHourChecks] = useState(data.twoHourChecks);
+  const [providerChecks, setProviderChecks] = useState(
+    data.twoHourChecks ?? [],
+  );
   const [transactionPagination, setTransactionPagination] = useState(
     data.transactionPagination,
   );
@@ -1125,9 +1125,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
   const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
-  const [twoHourRetryingId, setTwoHourRetryingId] = useState<string | null>(
-    null,
+  const [selectedSandboxIds, setSelectedSandboxIds] = useState<Set<string>>(
+    () => new Set(),
   );
+  const [sandboxDeleteMode, setSandboxDeleteMode] = useState<
+    "all" | "selected" | null
+  >(null);
+  const [sandboxDeleting, setSandboxDeleting] = useState(false);
   const latestViewRef = useRef({
     filterAdjustStatus: data.filters.adjustStatus,
     filterConversionStatus: data.filters.conversionStatus,
@@ -1248,11 +1252,21 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         throw new Error(payload.error ?? "Load IAP transactions failed.");
       }
 
-      setTransactions(payload.data);
+      const nextTransactions = payload.data;
+      setTransactions(nextTransactions);
+      setSelectedSandboxIds((current) => {
+        const available = new Set(
+          nextTransactions
+            .filter((transaction) => transactionIsTest(transaction))
+            .map((transaction) => transaction.id),
+        );
+        return new Set(Array.from(current).filter((id) => available.has(id)));
+      });
+      setProviderChecks(payload.twoHourChecks ?? []);
       setTransactionPagination({
         page: payload.page ?? page,
         pageSize: payload.pageSize ?? 10,
-        total: payload.total ?? payload.data.length,
+        total: payload.total ?? nextTransactions.length,
         totalPages: payload.totalPages ?? 1,
       });
       if (payload.metrics) {
@@ -1261,9 +1275,6 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       }
       if (payload.transactionStates) {
         setTransactionStates(payload.transactionStates);
-      }
-      if (payload.twoHourChecks) {
-        setTwoHourChecks(payload.twoHourChecks);
       }
     } catch (error) {
       if (options?.silent) {
@@ -1508,42 +1519,46 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     }
   }
 
-  async function retryTwoHourDelivery(check: IosIapTwoHourCheck) {
-    setTwoHourRetryingId(check.transaction_id);
+  async function deleteSandboxTransactions() {
+    if (!sandboxDeleteMode || sandboxDeleting) return;
 
+    const all = sandboxDeleteMode === "all";
+    const transactionIds = all ? [] : Array.from(selectedSandboxIds);
+    if (!all && !transactionIds.length) return;
+
+    setSandboxDeleting(true);
     try {
-      const response = await fetch("/api/admin/iap/two-hour-retry", {
-        body: JSON.stringify({
-          mappingId: app.mappingId,
-          transactionId: check.transaction_id,
-        }),
+      const response = await fetch("/api/admin/iap/sandbox-transactions", {
+        method: "DELETE",
         headers: { "content-type": "application/json" },
-        method: "POST",
+        body: JSON.stringify({
+          all,
+          mappingId: app.mappingId,
+          platform: app.platform,
+          transactionIds,
+        }),
       });
-      const payload = (await response.json()) as IapTwoHourRetryResponse;
-
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.error ?? "Retry IAP 2-hour delivery failed.");
+      const payload = (await response.json()) as IapSandboxDeleteResponse;
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error ?? "Delete sandbox transactions failed.");
       }
 
-      if (payload.check?.status === "sent") {
-        void showToast("success", "2-hour delivery sent successfully.");
-      } else {
-        void showToast(
-          "warning",
-          payload.check?.error ?? "Retry completed with a delivery error.",
-        );
-      }
-      await loadTransactionsPage(transactionPagination.page);
+      setSelectedSandboxIds(new Set());
+      setSandboxDeleteMode(null);
+      await loadTransactionsPage(1);
+      void showToast(
+        "success",
+        `Deleted ${payload.deletedTransactions ?? 0} sandbox transaction(s).`,
+      );
     } catch (error) {
       void showToast(
         "error",
         error instanceof Error
           ? error.message
-          : "Retry IAP 2-hour delivery failed.",
+          : "Delete sandbox transactions failed.",
       );
     } finally {
-      setTwoHourRetryingId(null);
+      setSandboxDeleting(false);
     }
   }
 
@@ -1646,67 +1661,20 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   useEffect(() => {
     if (!app.identifier) return;
 
-    let active = true;
-    let cleanupSubscription: (() => void) | null = null;
-
-    async function subscribe() {
-      const { createClient } = await import("@/lib/supabase/client");
-      if (!active) return;
-
-      const supabase = createClient();
-      const topic = iapRealtimeTopic(app.platform, app.identifier);
-      const channel = supabase.channel(topic, {
-        config: { private: true },
-      });
-      cleanupSubscription = () => {
-        void supabase.removeChannel(channel);
-      };
-
-      const { data: sessionData, error } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-
-      if (!active) return;
-
-      if (error || !accessToken) {
-        setRealtimeStatus("unauthorized");
-        return;
-      }
-
-      supabase.realtime.setAuth(accessToken);
-
-      channel
-        .on("broadcast", { event: "changed" }, () => {
-          realtimeRefreshHandlerRef.current();
-        })
-        .subscribe((status, err) => {
-          if (!active) return;
-
-          if (status === "SUBSCRIBED") {
-            setRealtimeStatus("connected");
-            return;
-          }
-
-          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-            console.error("IAP detail realtime subscription failed", err);
-            setRealtimeStatus("error");
-            return;
-          }
-
-          if (status === "CLOSED") {
-            setRealtimeStatus("disconnected");
-          }
-        });
-    }
-
-    void subscribe();
+    const connectTimer = window.setTimeout(() => {
+      setRealtimeStatus("connected");
+    }, 0);
+    const poll = setInterval(() => {
+      realtimeRefreshHandlerRef.current();
+    }, 15_000);
 
     return () => {
-      active = false;
+      window.clearTimeout(connectTimer);
+      clearInterval(poll);
       if (realtimeRefreshTimerRef.current) {
         clearTimeout(realtimeRefreshTimerRef.current);
         realtimeRefreshTimerRef.current = null;
       }
-      cleanupSubscription?.();
     };
   }, [app.identifier, app.platform]);
 
@@ -1746,16 +1714,26 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     ).sort();
   }, [transactionStates]);
 
-  const twoHourCheckByTransactionId = useMemo(() => {
-    return new Map(
-      twoHourChecks.map((check) => [check.transaction_id, check] as const),
-    );
-  }, [twoHourChecks]);
-
   const currentPage = transactionPagination.page;
   const tableStartIndex =
     (transactionPagination.page - 1) * transactionPagination.pageSize;
   const visible = transactions;
+  const sandboxRows = visible.filter((transaction) =>
+    transactionIsTest(transaction),
+  );
+  const sandboxEnvironment = isIos ? "sandbox" : "test";
+  const showSandboxDeleteControls =
+    isTestApp && filterEnvironment === sandboxEnvironment;
+  const allVisibleSandboxSelected =
+    sandboxRows.length > 0 &&
+    sandboxRows.every((transaction) => selectedSandboxIds.has(transaction.id));
+  const providerCheckByTransactionId = useMemo(
+    () =>
+      new Map(
+        providerChecks.map((check) => [check.transaction_id, check] as const),
+      ),
+    [providerChecks],
+  );
   const nextRevenueSort = revenueSort === "asc" ? "desc" : "asc";
   const revenueSortLabel =
     revenueSort === "asc"
@@ -1812,38 +1790,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-muted/10 p-4 sm:p-6 gap-6">
-      {/* Breadcrumb */}
-      <nav className="flex items-center space-x-2 text-sm text-muted-foreground font-medium shrink-0">
-        <PendingNavigationLink
-          href="/iap"
-          className="hover:text-foreground transition-colors flex items-center"
-        >
-          <ArrowLeft className="mr-1.5 h-4 w-4" />
-          Apps
-        </PendingNavigationLink>
-        <ChevronRight className="h-4 w-4" />
-        <div className="flex items-center gap-2 text-foreground bg-background px-2 py-1 rounded-md border shadow-sm">
-          {isIos ? (
-            <Badge
-              variant="outline"
-              className="border-zinc-200 bg-zinc-50 text-zinc-700 gap-1"
-            >
-              <Apple size={12} />
-              iOS
-            </Badge>
-          ) : (
-            <Badge
-              variant="outline"
-              className="border-emerald-200 bg-emerald-50 text-emerald-700 gap-1"
-            >
-              <Smartphone size={12} />
-              Android
-            </Badge>
-          )}
-          {app.appName}
-        </div>
-      </nav>
+    <div className="flex h-full flex-col gap-6 overflow-hidden">
+      <IapAppContextHeader activeTab="transactions" app={app} />
 
       {/* Overview Grid: Left = 4 cards (2×2), Right = Revenue Chart */}
       {metricsLoaded ? (
@@ -1934,6 +1882,32 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
             </Badge>
           </div>
           <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+            {showSandboxDeleteControls ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-9 gap-1.5 border-destructive/40 bg-background text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  disabled={!selectedSandboxIds.size || sandboxDeleting}
+                  onClick={() => setSandboxDeleteMode("selected")}
+                >
+                  <Trash2 size={13} />
+                  Delete selected ({selectedSandboxIds.size})
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  className="h-9 gap-1.5"
+                  disabled={!transactionPagination.total || sandboxDeleting}
+                  onClick={() => setSandboxDeleteMode("all")}
+                >
+                  <Trash2 size={13} />
+                  Delete all sandbox
+                </Button>
+              </>
+            ) : null}
             <TransactionPurchaseDateRangePicker
               valueFrom={filterPurchaseDateFrom}
               valueTo={filterPurchaseDateTo}
@@ -2043,66 +2017,6 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 ))}
               </SelectContent>
             </Select>
-            {isIos ? (
-              <>
-                <Select
-                  value={filterTwoHourStatus}
-                  onValueChange={(v) => {
-                    setFilterTwoHourStatus(v);
-                    void loadTransactionsPage(1, { filterTwoHourStatus: v });
-                  }}
-                >
-                  <SelectTrigger className="h-9 w-full bg-background sm:w-[150px]">
-                    <SelectValue placeholder="2h Check" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {IAP_TWO_HOUR_FILTER_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={filterFirebaseStatus}
-                  onValueChange={(v) => {
-                    setFilterFirebaseStatus(v);
-                    void loadTransactionsPage(1, {
-                      filterFirebaseStatus: v,
-                    });
-                  }}
-                >
-                  <SelectTrigger className="h-9 w-full bg-background sm:w-[165px]">
-                    <SelectValue placeholder="Firebase" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {IAP_FIREBASE_FILTER_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Select
-                  value={filterAdjustStatus}
-                  onValueChange={(v) => {
-                    setFilterAdjustStatus(v);
-                    void loadTransactionsPage(1, { filterAdjustStatus: v });
-                  }}
-                >
-                  <SelectTrigger className="h-9 w-full bg-background sm:w-[155px]">
-                    <SelectValue placeholder="Adjust" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {IAP_ADJUST_FILTER_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </>
-            ) : null}
             {hasActiveTransactionFilters ? (
               <Button
                 type="button"
@@ -2119,23 +2033,43 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         </div>
 
         <div className="flex-1 overflow-auto">
-          <table className="w-full border-collapse text-left text-sm text-foreground">
-            <thead className="bg-muted/40 border-b text-xs font-semibold text-muted-foreground uppercase tracking-wider sticky top-0 z-10 backdrop-blur">
-              <tr>
-                <th className="px-4 py-3">Transaction / Order</th>
-                <th className="px-4 py-3">Product Info</th>
-                <th className="px-4 py-3">Status</th>
-                {isIos ? (
-                  <>
-                    <th className="px-4 py-3">2h Check</th>
-                    <th className="px-4 py-3">Firebase</th>
-                    <th className="px-4 py-3">Adjust</th>
-                  </>
+          <Table className="text-foreground">
+            <TableHeader className="sticky top-0 z-10 bg-muted/95 text-xs font-semibold text-muted-foreground backdrop-blur">
+              <TableRow>
+                {showSandboxDeleteControls ? (
+                  <TableHead className="w-11 px-4">
+                    <Checkbox
+                      aria-label="Select all sandbox transactions on this page"
+                      checked={
+                        allVisibleSandboxSelected
+                          ? true
+                          : selectedSandboxIds.size > 0
+                            ? "indeterminate"
+                            : false
+                      }
+                      disabled={!sandboxRows.length}
+                      onCheckedChange={(checked) => {
+                        setSelectedSandboxIds((current) => {
+                          const next = new Set(current);
+                          for (const transaction of sandboxRows) {
+                            if (checked === true) next.add(transaction.id);
+                            else next.delete(transaction.id);
+                          }
+                          return next;
+                        });
+                      }}
+                    />
+                  </TableHead>
                 ) : null}
-                <th className="px-4 py-3">
-                  <button
+                <TableHead className="px-4">Transaction / Order</TableHead>
+                <TableHead className="px-4">Product Info</TableHead>
+                <TableHead className="px-4">Status</TableHead>
+                <TableHead className="px-4">
+                  <Button
                     type="button"
-                    className={`inline-flex items-center gap-1.5 rounded-md text-left font-semibold uppercase tracking-wider transition-colors hover:text-foreground ${
+                    variant="ghost"
+                    size="sm"
+                    className={`h-auto px-0 text-left font-semibold hover:bg-transparent ${
                       revenueSort === "asc" || revenueSort === "desc"
                         ? "text-foreground"
                         : ""
@@ -2150,52 +2084,60 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   >
                     Revenue / Price
                     <ArrowUpDown size={13} />
-                  </button>
-                </th>
-                <th className="px-4 py-3">Purchase time</th>
-                <th className="min-w-[168px] px-4 py-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y border-b bg-background">
+                  </Button>
+                </TableHead>
+                <TableHead className="px-4">Purchase time</TableHead>
+                {isIos ? (
+                  <>
+                    <TableHead className="px-4">Firebase</TableHead>
+                    <TableHead className="px-4">Adjust</TableHead>
+                  </>
+                ) : null}
+                <TableHead className="min-w-[168px] px-4">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className="bg-background">
               {tableLoading
                 ? Array.from({ length: IAP_TRANSACTION_SKELETON_COUNT }).map(
                     (_, index) => (
-                      <tr key={`iap-transaction-skeleton-${index}`}>
-                        <td className="px-4 py-3.5">
+                      <TableRow key={`iap-transaction-skeleton-${index}`}>
+                        {showSandboxDeleteControls ? (
+                          <TableCell className="px-4 py-3.5">
+                            <div className="h-4 w-4 animate-pulse rounded bg-muted" />
+                          </TableCell>
+                        ) : null}
+                        <TableCell className="px-4 py-3.5">
                           <div className="h-4 w-44 animate-pulse rounded bg-muted" />
                           <div className="mt-2 h-3 w-32 animate-pulse rounded bg-muted" />
-                        </td>
-                        <td className="px-4 py-3.5">
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
                           <div className="h-5 w-24 animate-pulse rounded-full bg-muted" />
                           <div className="mt-2 h-3 w-36 animate-pulse rounded bg-muted" />
-                        </td>
-                        <td className="px-4 py-3.5">
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
                           <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                        </td>
-                        {isIos ? (
-                          <>
-                            <td className="px-4 py-3.5">
-                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <div className="h-6 w-20 animate-pulse rounded-full bg-muted" />
-                            </td>
-                          </>
-                        ) : null}
-                        <td className="px-4 py-3.5">
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
                           <div className="h-4 w-24 animate-pulse rounded bg-muted" />
-                        </td>
-                        <td className="px-4 py-3.5">
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
                           <div className="h-4 w-32 animate-pulse rounded bg-muted" />
                           <div className="mt-2 h-3 w-28 animate-pulse rounded bg-muted" />
-                        </td>
-                        <td className="px-4 py-3.5">
+                        </TableCell>
+                        {isIos ? (
+                          <>
+                            <TableCell className="px-4 py-3.5">
+                              <div className="h-6 w-16 animate-pulse rounded-full bg-muted" />
+                            </TableCell>
+                            <TableCell className="px-4 py-3.5">
+                              <div className="h-6 w-16 animate-pulse rounded-full bg-muted" />
+                            </TableCell>
+                          </>
+                        ) : null}
+                        <TableCell className="px-4 py-3.5">
                           <div className="h-8 w-20 animate-pulse rounded-md bg-muted" />
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ),
                   )
                 : visible.map((tx) => {
@@ -2221,32 +2163,45 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                       : null;
                     const renewalDate = transactionRenewalDate(tx);
                     const renewalProductId = transactionRenewalProductId(tx);
-                    const twoHourCheck = isIosTransaction(tx)
-                      ? (twoHourCheckByTransactionId.get(tx.transaction_id) ??
+                    const providerCheck = isIosTransaction(tx)
+                      ? (providerCheckByTransactionId.get(tx.transaction_id) ??
                         null)
                       : null;
-                    const expectsTwoHourCheck =
-                      isIosTransaction(tx) && transactionIsFreeTrial(tx);
-                    const twoHourStatus = twoHourCheckStatusBadge(
-                      twoHourCheck,
-                      { expectsCheck: expectsTwoHourCheck },
+                    const expectsPurchaseDelivery = Boolean(
+                      isIosTransaction(tx) &&
+                      !freeTrial &&
+                      Number(revenue ?? 0) > 0,
                     );
-                    const firebaseStatus = providerColumnStatusBadge(
-                      twoHourCheck,
-                      "ga4",
-                      { expectsCheck: expectsTwoHourCheck },
-                    );
-                    const adjustStatus = providerColumnStatusBadge(
-                      twoHourCheck,
-                      "adjust",
-                      { expectsCheck: expectsTwoHourCheck },
-                    );
+                    const firebaseDelivery = isIos
+                      ? providerColumnStatusBadge(providerCheck, "ga4", {
+                          expectsCheck: expectsPurchaseDelivery,
+                        })
+                      : null;
+                    const adjustDelivery = isIos
+                      ? providerColumnStatusBadge(providerCheck, "adjust", {
+                          expectsCheck: expectsPurchaseDelivery,
+                        })
+                      : null;
                     return (
-                      <tr
-                        key={tx.id}
-                        className="hover:bg-muted/20 transition-colors"
-                      >
-                        <td className="px-4 py-3.5 max-w-[240px]">
+                      <TableRow key={tx.id} className="hover:bg-muted/20">
+                        {showSandboxDeleteControls ? (
+                          <TableCell className="w-11 px-4 py-3.5">
+                            <Checkbox
+                              aria-label={`Select sandbox transaction ${txId}`}
+                              checked={selectedSandboxIds.has(tx.id)}
+                              disabled={!isTest}
+                              onCheckedChange={(checked) => {
+                                setSelectedSandboxIds((current) => {
+                                  const next = new Set(current);
+                                  if (checked === true) next.add(tx.id);
+                                  else next.delete(tx.id);
+                                  return next;
+                                });
+                              }}
+                            />
+                          </TableCell>
+                        ) : null}
+                        <TableCell className="max-w-[240px] px-4 py-3.5">
                           <div className="font-semibold truncate" title={txId}>
                             {txId}
                           </div>
@@ -2255,8 +2210,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               Orig: {secondaryId}
                             </div>
                           ) : null}
-                        </td>
-                        <td className="px-4 py-3.5">
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
                           <div className="flex flex-col gap-1 items-start">
                             {!isIos && purchaseKind && (
                               <Badge
@@ -2302,8 +2257,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               </div>
                             ) : null}
                           </div>
-                        </td>
-                        <td className="px-4 py-3.5">
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
                           <div className="flex flex-col gap-1 items-start">
                             <span title="Transaction state reported by the store.">
                               <StatusBadge status={tx.state || "UNKNOWN"} />
@@ -2316,8 +2271,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                                 {trialConversion.label}
                               </span>
                             ) : null}
-                            {isIosTransaction(tx) &&
-                            tx.paid_transaction_id ? (
+                            {isIosTransaction(tx) && tx.paid_transaction_id ? (
                               <div
                                 className="max-w-[180px] truncate font-mono text-[10px] text-muted-foreground"
                                 title={tx.paid_transaction_id}
@@ -2350,36 +2304,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               </div>
                             ) : null}
                           </div>
-                        </td>
-                        {isIos ? (
-                          <>
-                            <td className="px-4 py-3.5">
-                              <span
-                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${twoHourStatus.className}`}
-                                title={twoHourStatus.title}
-                              >
-                                {twoHourStatus.label}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <span
-                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${firebaseStatus.className}`}
-                                title={firebaseStatus.title}
-                              >
-                                {firebaseStatus.label}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <span
-                                className={`inline-flex items-center whitespace-nowrap border font-semibold rounded-full px-2 py-[4px] text-[11px] leading-none ${adjustStatus.className}`}
-                                title={adjustStatus.title}
-                              >
-                                {adjustStatus.label}
-                              </span>
-                            </td>
-                          </>
-                        ) : null}
-                        <td className="px-4 py-3.5">
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
                           <div className="font-semibold">
                             {formatRevenue(revenue, currency)}
                           </div>
@@ -2389,8 +2315,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               {tx.currency && ` (${tx.currency})`}
                             </div>
                           )}
-                        </td>
-                        <td className="px-4 py-3.5 text-xs">
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5 text-xs">
                           <div className="flex items-center gap-1.5 text-muted-foreground">
                             <Calendar size={12} className="shrink-0" />
                             <span>{formatDate(purchaseDate)}</span>
@@ -2401,42 +2327,29 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               <span>Expires: {formatDate(expiresDate)}</span>
                             </div>
                           ) : null}
-                        </td>
-                        <td className="min-w-[168px] px-4 py-3.5">
-                          <div className="flex items-center gap-2">
-                            {isIos && canRetryTwoHourCheck(twoHourCheck) ? (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-8 gap-1.5 px-2.5"
-                                disabled={
-                                  twoHourRetryingId ===
-                                  twoHourCheck?.transaction_id
-                                }
-                                title="Retry failed Firebase or Adjust delivery now"
-                                onClick={() =>
-                                  twoHourCheck
-                                    ? void retryTwoHourDelivery(twoHourCheck)
-                                    : undefined
-                                }
+                        </TableCell>
+                        {isIos && firebaseDelivery && adjustDelivery ? (
+                          <>
+                            <TableCell className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none ${firebaseDelivery.className}`}
+                                title={firebaseDelivery.title}
                               >
-                                <RotateCcw
-                                  size={13}
-                                  className={
-                                    twoHourRetryingId ===
-                                    twoHourCheck?.transaction_id
-                                      ? "animate-spin"
-                                      : undefined
-                                  }
-                                />
-                                <span>
-                                  {twoHourRetryingId ===
-                                  twoHourCheck?.transaction_id
-                                    ? "Retrying"
-                                    : "Retry"}
-                                </span>
-                              </Button>
-                            ) : null}
+                                {firebaseDelivery.label}
+                              </span>
+                            </TableCell>
+                            <TableCell className="px-4 py-3.5">
+                              <span
+                                className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none ${adjustDelivery.className}`}
+                                title={adjustDelivery.title}
+                              >
+                                {adjustDelivery.label}
+                              </span>
+                            </TableCell>
+                          </>
+                        ) : null}
+                        <TableCell className="min-w-[168px] px-4 py-3.5">
+                          <div className="flex items-center gap-2">
                             <Button
                               variant="outline"
                               size="sm"
@@ -2456,20 +2369,22 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                               </span>
                             </Button>
                           </div>
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     );
                   })}
               {!tableLoading && !visible.length && (
                 <TableEmptyState
-                  colSpan={isIos ? 9 : 6}
+                  colSpan={
+                    (isIos ? 8 : 6) + (showSandboxDeleteControls ? 1 : 0)
+                  }
                   icon={CreditCard}
                   title="No transactions found"
                   description="Try changing your filters."
                 />
               )}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
 
         <TablePaginationFooter
@@ -2491,6 +2406,38 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           }}
         />
       ) : null}
+      <AlertDialog
+        open={sandboxDeleteMode !== null}
+        onOpenChange={(open) => {
+          if (!open && !sandboxDeleting) setSandboxDeleteMode(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete sandbox data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {sandboxDeleteMode === "all"
+                ? `This permanently deletes all ${isIos ? "sandbox" : "test"} transactions for this app and their related delivery jobs, checks, and notification events.`
+                : `This permanently deletes ${selectedSandboxIds.size} selected ${isIos ? "sandbox" : "test"} transaction(s) and related records.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={sandboxDeleting}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={sandboxDeleting}
+              onClick={(event) => {
+                event.preventDefault();
+                void deleteSandboxTransactions();
+              }}
+            >
+              {sandboxDeleting ? "Deleting..." : "Delete permanently"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

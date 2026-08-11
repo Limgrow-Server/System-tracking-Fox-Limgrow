@@ -143,7 +143,7 @@ export type IosIapTwoHourCheck = {
   bundle_id: string;
   product_id: string;
   environment: string;
-  app_instance_id: string;
+  app_instance_id: string | null;
   firebase_app_id: string | null;
   ga4_event_name: string;
   check_at: string;

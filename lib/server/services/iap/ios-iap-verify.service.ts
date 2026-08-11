@@ -89,7 +89,8 @@ export async function verifyIosIapTransaction(payload: VerifyIosIapPayload) {
   }
 
   const baseUrl = functionsBaseUrl();
-  const publishableKey = clean(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
+  const publishableKey = clean(process.env.SYSTEM_TRACKING_PUBLIC_API_KEY)
+    || clean(process.env.SYSTEM_TRACKING_PUBLIC_API_KEYS).split(/[,\n]/)[0]?.trim();
 
   if (!baseUrl || !publishableKey) {
     throw new ApiError("Missing System Tracking API URL or publishable key.", 500);

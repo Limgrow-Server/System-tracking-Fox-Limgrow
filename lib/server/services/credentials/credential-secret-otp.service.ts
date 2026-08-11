@@ -23,22 +23,28 @@ function sessionEmail(session: ConsoleSession) {
   return email;
 }
 
-function credentialOtpRecipientEmail() {
-  const email = normalizeEmail(process.env.SMTP_TO || process.env.SMTP_USER);
+function credentialOtpRecipientEmails() {
+  const configuredRecipients = process.env.SMTP_TO || process.env.SMTP_USER || "";
+  const emails = Array.from(
+    new Set(
+      configuredRecipients
+        .split(/[,;\n]/)
+        .map((value) => normalizeEmail(value))
+        .filter(Boolean),
+    ),
+  );
 
-  if (!email) {
+  if (emails.length === 0) {
     throw new ApiError("Credential OTP recipient email is not configured.", 500);
   }
 
-  return email;
+  return emails;
 }
 
 function otpSecret() {
   const secret =
     process.env.CREDENTIAL_OTP_SECRET ||
-    process.env.NEXTAUTH_SECRET ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SECRET_KEY;
+    process.env.NEXTAUTH_SECRET;
 
   if (!secret) {
     throw new ApiError("Credential OTP secret is not configured.", 500);
@@ -92,7 +98,7 @@ async function cleanupExpiredCredentialSecretAccess(now = new Date()) {
 
 async function sendCredentialSecretOtpEmail(input: {
   code: string;
-  email: string;
+  emails: string[];
 }) {
   const user = process.env.SMTP_USER;
   const password = process.env.SMTP_PASS;
@@ -127,7 +133,7 @@ async function sendCredentialSecretOtpEmail(input: {
       html: `<p>Your credential access OTP is <strong>${input.code}</strong>.</p><p>It expires in 10 minutes. After verification, secret access is valid for 1 hour.</p>`,
       subject: "System Tracking credential OTP",
       text: `Your credential access OTP is ${input.code}. It expires in 10 minutes. After verification, secret access is valid for 1 hour.`,
-      to: input.email,
+      to: input.emails,
     });
   } catch (error) {
     throw new ApiError(
@@ -172,7 +178,7 @@ export async function assertCredentialSecretUnlocked(
 
 export async function sendCredentialSecretOtp(session: ConsoleSession) {
   const email = sessionEmail(session);
-  const deliveryEmail = credentialOtpRecipientEmail();
+  const deliveryEmails = credentialOtpRecipientEmails();
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
   const now = new Date();
   const expiresAt = nowPlus(OTP_TTL_MS);
@@ -200,10 +206,10 @@ export async function sendCredentialSecretOtp(session: ConsoleSession) {
     }),
   ]);
 
-  await sendCredentialSecretOtpEmail({ code, email: deliveryEmail });
+  await sendCredentialSecretOtpEmail({ code, emails: deliveryEmails });
 
   return {
-    email: deliveryEmail,
+    email: deliveryEmails.join(", "),
     otpExpiresAt: expiresAt.toISOString(),
   };
 }

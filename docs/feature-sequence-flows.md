@@ -478,7 +478,6 @@ sequenceDiagram
   participant DB as Database
   participant Worker as 2-hour Worker
   participant Firebase as Firebase / GA4
-  participant Adjust as Adjust S2S
 
   User->>Mobile: Mua gói / bắt đầu free trial
   Mobile->>Server: POST verify-ios payload
@@ -491,12 +490,8 @@ sequenceDiagram
     Server->>Firebase: POST purchase_2hour + purchase
     Note over Server,Firebase: value/currency lấy từ ios_iap_transactions
     Firebase-->>Server: HTTP 204 accepted or error
-    opt App mapping có Adjust token và mobile có adjustAdid/idfa/idfv
-      Server->>Adjust: POST S2S event + revenue/currency
-      Adjust-->>Server: HTTP accepted or error
-    end
   else renewed = false
-    Server->>DB: Không gửi GA4/Adjust, mark skipped trong raw_context
+    Server->>DB: Không gửi GA4, mark skipped trong raw_context
   end
   Server->>DB: Mark sent/retrying/failed + raw_context
 ```

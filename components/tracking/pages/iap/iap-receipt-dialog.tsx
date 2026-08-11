@@ -5,6 +5,7 @@ import { FileJson } from "lucide-react";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -24,6 +25,9 @@ export function IapReceiptDialog({
             <FileJson size={18} className="text-primary" />
             <span>Decoded Receipt Details</span>
           </DialogTitle>
+          <DialogDescription>
+            Store receipt payload used for IAP verification and troubleshooting.
+          </DialogDescription>
         </DialogHeader>
         <div className="mt-4 flex-1 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-4 font-mono text-xs text-zinc-300">
           <pre className="whitespace-pre-wrap">

@@ -24,17 +24,6 @@ type Ga4Config = {
   firebaseAppId: string;
 };
 
-type AdjustConfig = {
-  appToken: string;
-  authToken: string | null;
-  eventToken: string;
-};
-
-type AdjustDeviceId = {
-  key: "adid" | "idfa" | "idfv";
-  value: string;
-};
-
 type Ga4ConfigEntry = {
   apiSecret?: unknown;
   api_secret?: unknown;
@@ -105,15 +94,6 @@ function firstEnv(...names: string[]) {
   for (const name of names) {
     const value = clean(process.env[name]);
     if (value) return value;
-  }
-
-  return "";
-}
-
-function firstClean(...values: unknown[]) {
-  for (const value of values) {
-    const cleaned = clean(value);
-    if (cleaned) return cleaned;
   }
 
   return "";
@@ -354,87 +334,6 @@ async function resolveGa4Config(
   return { apiSecret, firebaseAppId };
 }
 
-function resolveAdjustConfig(
-  mappingConfig: IosStoreMappingTwoHourConfig,
-): AdjustConfig | null {
-  const appToken = clean(mappingConfig?.adjustAppToken);
-  const eventToken = clean(mappingConfig?.adjustEventToken);
-
-  if (!appToken || !eventToken) return null;
-
-  return {
-    appToken,
-    authToken:
-      firstEnv("IOS_IAP_2HOUR_ADJUST_AUTH_TOKEN", "ADJUST_S2S_AUTH_TOKEN") ||
-      null,
-    eventToken,
-  };
-}
-
-function adjustEnabled() {
-  return boolEnv("IOS_IAP_2HOUR_ADJUST_ENABLED", true);
-}
-
-function adjustStrictMode() {
-  return boolEnv("IOS_IAP_2HOUR_ADJUST_STRICT", false);
-}
-
-function adjustEndpoint() {
-  return (
-    firstEnv("IOS_IAP_2HOUR_ADJUST_ENDPOINT", "ADJUST_S2S_ENDPOINT") ||
-    "https://s2s.adjust.com/event"
-  );
-}
-
-function adjustEnvironment(value: unknown) {
-  const normalized = clean(value).toLowerCase();
-  return normalized === "sandbox" || normalized === "test"
-    ? "sandbox"
-    : "production";
-}
-
-function isZeroIdfa(value: string) {
-  return /^0{8}-0{4}-0{4}-0{4}-0{12}$/i.test(value);
-}
-
-function adjustDeviceId(
-  check: IosIapTwoHourCheckRecord,
-  transactions: IosIapRenewalEvidenceTransaction[],
-): AdjustDeviceId | null {
-  const transactionAdjustAdid = transactions
-    .map((transaction) => clean(transaction.adjustAdid))
-    .find(Boolean);
-  const transactionIdfa = transactions
-    .map((transaction) => clean(transaction.idfa))
-    .find((value) => value && !isZeroIdfa(value));
-  const transactionIdfv = transactions
-    .map((transaction) => clean(transaction.idfv))
-    .find(Boolean);
-  const checkIdfa = clean(check.idfa);
-
-  const adid = firstClean(check.adjustAdid, transactionAdjustAdid);
-  if (adid) return { key: "adid", value: adid };
-  if (checkIdfa && !isZeroIdfa(checkIdfa)) {
-    return { key: "idfa", value: checkIdfa };
-  }
-  if (transactionIdfa) return { key: "idfa", value: transactionIdfa };
-
-  const idfv = firstClean(check.idfv, transactionIdfv);
-  if (idfv) return { key: "idfv", value: idfv };
-
-  return null;
-}
-
-function adjustCallbackParams(params: Record<string, unknown>) {
-  return JSON.stringify(
-    Object.fromEntries(
-      Object.entries(params)
-        .filter(([, value]) => value !== null && value !== "")
-        .map(([key, value]) => [key, String(value)]),
-    ),
-  );
-}
-
 function measurementEndpoint() {
   return boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY")
     ? "https://www.google-analytics.com/debug/mp/collect"
@@ -598,6 +497,10 @@ async function sendGa4PurchaseTwoHourEvent(
   transactions: IosIapRenewalEvidenceTransaction[],
   mappingConfig?: IosStoreMappingTwoHourConfig,
 ) {
+  const appInstanceId = clean(check.appInstanceId);
+  if (!appInstanceId) {
+    throw new Error("app_instance_id_missing_for_2hour_delivery");
+  }
   const config = await resolveGa4Config(check, mappingConfig);
   const isValidationOnly = boolEnv("IOS_IAP_2HOUR_GA4_VALIDATE_ONLY");
   const url = new URL(
@@ -651,7 +554,7 @@ async function sendGa4PurchaseTwoHourEvent(
 
   const sentEvents = [...events, ...purchaseRevenueEvents];
   const body = {
-    app_instance_id: check.appInstanceId.toLowerCase(),
+    app_instance_id: appInstanceId.toLowerCase(),
     events: sentEvents,
   };
 
@@ -707,128 +610,6 @@ async function sendGa4PurchaseTwoHourEvent(
   };
 }
 
-async function sendAdjustPurchaseTwoHourEvent(
-  check: IosIapTwoHourCheckRecord,
-  decision: RenewalDecision,
-  transactions: IosIapRenewalEvidenceTransaction[],
-  mappingConfig: IosStoreMappingTwoHourConfig,
-  revenue: TwoHourRevenue,
-) {
-  if (!adjustEnabled()) {
-    return {
-      skipped: true,
-      reason: "adjust_disabled",
-    };
-  }
-
-  const config = resolveAdjustConfig(mappingConfig);
-  if (!config) {
-    return {
-      skipped: true,
-      reason: "adjust_config_missing",
-    };
-  }
-
-  const deviceId = adjustDeviceId(check, transactions);
-  if (!deviceId) {
-    return {
-      skipped: true,
-      reason: "adjust_device_id_missing",
-    };
-  }
-
-  const params = new URLSearchParams({
-    s2s: "1",
-    app_token: config.appToken,
-    event_token: config.eventToken,
-    [deviceId.key]: deviceId.value,
-    environment: adjustEnvironment(check.environment),
-  });
-  const hasRevenue =
-    decision.renewed &&
-    Number.isFinite(revenue.value) &&
-    revenue.value >= 0.001;
-
-  if (hasRevenue) {
-    params.set("revenue", String(revenue.value));
-    params.set("currency", revenue.currency);
-  }
-
-  params.set(
-    "callback_params",
-    adjustCallbackParams({
-      bundle_id: check.bundleId,
-      ga4_event_name: check.ga4EventName || "purchase_2hour",
-      original_transaction_id: check.originalTransactionId,
-      product_id: check.productId,
-      renewal_status: decision.renewalStatus,
-      revenue_source: revenue.revenue_source,
-      revenue_transaction_id: revenue.revenue_transaction_id,
-      transaction_id: check.transactionId,
-    }),
-  );
-
-  console.log("[adjust-s2s] sending iOS IAP 2-hour event", {
-    bundleId: check.bundleId,
-    deviceIdType: deviceId.key,
-    environment: adjustEnvironment(check.environment),
-    hasRevenue,
-    productId: check.productId,
-    transactionId: check.transactionId,
-  });
-
-  const headers: Record<string, string> = {
-    "content-type": "application/x-www-form-urlencoded",
-    "user-agent": "system-tracking-ios-iap-adjust/1.0",
-  };
-
-  if (config.authToken) {
-    headers.authorization = `Bearer ${config.authToken}`;
-  }
-
-  const endpoint = rewriteStoreProviderUrl(
-    "adjust",
-    adjustEndpoint(),
-    iosTwoHourProviderContext(check, mappingConfig),
-  );
-  const response = await fetch(endpoint, {
-    body: params.toString(),
-    headers,
-    method: "POST",
-  });
-  const responseText = await response.text();
-  const result = {
-    appTokenConfigured: true,
-    deviceIdType: deviceId.key,
-    endpoint,
-    environment: adjustEnvironment(check.environment),
-    eventTokenConfigured: true,
-    hasAuthToken: Boolean(config.authToken),
-    hasRevenue,
-    responseBody: responseText || null,
-    responseStatus: response.status,
-  };
-
-  if (!response.ok) {
-    const message = responseText || `adjust_s2s_failed_http_${response.status}`;
-
-    if (adjustStrictMode()) {
-      throw new Error(message);
-    }
-
-    return {
-      ...result,
-      error: message,
-      skipped: false,
-    };
-  }
-
-  return {
-    ...result,
-    skipped: false,
-  };
-}
-
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -873,7 +654,6 @@ export async function runIosIapTwoHourGa4Checks(options?: {
     maxAttempts,
   });
   const processed: Array<{
-    adjustResult?: unknown;
     error?: string;
     id: string;
     renewed?: boolean;
@@ -887,7 +667,6 @@ export async function runIosIapTwoHourGa4Checks(options?: {
       const { decision, evidence } = await decideRenewal(check);
       const mappingConfig = await resolveIosTwoHourMappingConfig(check);
       let ga4Result = null;
-      let adjustResult = null;
       if (decision.renewed) {
         ga4Result = await sendGa4PurchaseTwoHourEvent(
           check,
@@ -895,17 +674,9 @@ export async function runIosIapTwoHourGa4Checks(options?: {
           evidence.transactions,
           mappingConfig,
         );
-        adjustResult = await sendAdjustPurchaseTwoHourEvent(
-          check,
-          decision,
-          evidence.transactions,
-          mappingConfig,
-          await ga4RevenueParams(check, decision, evidence.transactions),
-        );
       }
       await markIosIapTwoHourCheckSent(check.id, {
         rawContext: jsonValue({
-          adjust: adjustResult,
           decision,
           ga4: ga4Result,
           skipped: !decision.renewed,
@@ -921,7 +692,6 @@ export async function runIosIapTwoHourGa4Checks(options?: {
         renewed: decision.renewed,
         status: "sent",
         transactionId: check.transactionId,
-        adjustResult,
         ga4Result: ga4Result, // Thêm ga4Result vào đây để handler nhận được log
       });
     } catch (error) {

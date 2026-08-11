@@ -1,10 +1,16 @@
-import { Button } from "@/components/ui/button";
+import { Trash2 } from "lucide-react";
+
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ManagedAccount } from "../types";
@@ -27,17 +33,23 @@ export function DeleteAccountDialog({
   onOpenChange,
 }: DeleteAccountDialogProps) {
   return (
-    <Dialog open={Boolean(account)} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Delete account</DialogTitle>
-        </DialogHeader>
+    <AlertDialog open={Boolean(account)} onOpenChange={onOpenChange}>
+      <AlertDialogContent className="sm:max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogMedia className="bg-destructive/10 text-destructive">
+            <Trash2 />
+          </AlertDialogMedia>
+          <AlertDialogTitle>Delete account</AlertDialogTitle>
+          <AlertDialogDescription>
+            This permanently removes console access and cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
         <div className="space-y-4">
           <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
-            Type the exact Gmail account to confirm deletion.
+            Type the exact account email to confirm deletion.
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="deleteEmail">Gmail account</Label>
+            <Label htmlFor="deleteEmail">Account email</Label>
             <Input
               id="deleteEmail"
               value={confirmEmail}
@@ -48,29 +60,25 @@ export function DeleteAccountDialog({
               Required: {account?.email ?? ""}
             </div>
           </div>
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
               variant="destructive"
               disabled={
                 deleting ||
                 !account ||
                 confirmEmail.trim().toLowerCase() !== account.email.toLowerCase()
               }
-              onClick={onConfirm}
+              onClick={(event) => {
+                event.preventDefault();
+                onConfirm();
+              }}
             >
               {deleting ? "Deleting..." : "Delete account"}
-            </Button>
-          </div>
+            </AlertDialogAction>
+          </AlertDialogFooter>
         </div>
-      </DialogContent>
-    </Dialog>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

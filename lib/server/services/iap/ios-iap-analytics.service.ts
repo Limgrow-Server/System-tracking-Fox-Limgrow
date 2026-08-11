@@ -98,7 +98,9 @@ function isRevokedTransaction(transaction: IosTrialAnalyticsTransaction) {
 }
 
 function paidAmount(transaction: IosTrialAnalyticsTransaction) {
-  return micros(transaction.revenueMicros);
+  const revenueMicros = micros(transaction.revenueMicros);
+  if (revenueMicros > BigInt(0)) return revenueMicros;
+  return micros(transaction.priceMilliunits) * BigInt(1_000);
 }
 
 function isPaidContinuation(

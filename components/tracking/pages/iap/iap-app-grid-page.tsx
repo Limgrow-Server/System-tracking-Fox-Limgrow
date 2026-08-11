@@ -87,12 +87,12 @@ function PlatformBadge({ platform }: { platform: IapAppCard["platform"] }) {
 }
 
 function formatTransactionCount(value: number | null | undefined) {
-  return typeof value === "number" ? compactNumber(value) : "—";
+  return typeof value === "number" ? compactNumber(value) : "-";
 }
 
 function formatRevenue(app: IapAppCard) {
   if (app.revenueMicros === null || app.revenueMicros === undefined) {
-    return "—";
+    return "-";
   }
 
   return microsToMoney(app.revenueMicros, app.revenueCurrency ?? "USD");
@@ -212,8 +212,8 @@ export function IapAppGridPage({ data }: { data: IapAppGridPageData }) {
     <div className="flex h-full flex-col gap-6 p-6">
       <PageHeader
         eyebrow=""
-        title="In-App Purchases"
-        description="Select an application to view its transaction details."
+        title="Applications"
+        description="Select an application, then switch between its transactions and trial conversion analytics."
       />
 
       {/* Filters Row */}

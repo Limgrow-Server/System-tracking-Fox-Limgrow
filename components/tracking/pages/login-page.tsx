@@ -7,10 +7,12 @@ import {
   LockKeyhole,
   Mail,
   ShieldCheck,
+  TriangleAlert,
 } from "lucide-react";
 import { showToast } from "@/lib/client/toast";
 
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -21,10 +23,12 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
+    setErrorMessage(null);
 
     try {
       const response = await fetch("/api/auth/login", {
@@ -41,7 +45,9 @@ export function LoginPage() {
       void showToast("success", payload.message ?? "Signed in.");
       window.location.replace("/dashboard");
     } catch (error) {
-      void showToast("error", error instanceof Error ? error.message : "Login failed.");
+      const message = error instanceof Error ? error.message : "Login failed.";
+      setErrorMessage(message);
+      void showToast("error", message);
       setPending(false);
     }
   }
@@ -112,6 +118,13 @@ export function LoginPage() {
             </CardHeader>
             <CardContent>
               <form className="space-y-4" onSubmit={submit}>
+                {errorMessage ? (
+                  <Alert variant="destructive" aria-live="polite">
+                    <TriangleAlert />
+                    <AlertTitle>Sign in failed</AlertTitle>
+                    <AlertDescription>{errorMessage}</AlertDescription>
+                  </Alert>
+                ) : null}
                 <div className="grid gap-2">
                   <Label htmlFor="email">Email</Label>
                   <div className="relative">
@@ -123,6 +136,7 @@ export function LoginPage() {
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
                       autoComplete="email"
+                      autoFocus
                       placeholder="name@company.com"
                       required
                     />

@@ -6,6 +6,17 @@ import { showToast } from "@/lib/client/toast";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 import { PageHeader, StatusBadge, TableEmptyState, TablePaginationFooter } from "@/components/tracking/primitives";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +24,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
@@ -843,6 +854,9 @@ export function StoreMappingPage({
             >
               <SheetHeader className="border-b px-5 py-4">
                 <SheetTitle>{drawerTitle}</SheetTitle>
+                <SheetDescription>
+                  Configure the store identity and provider settings for this application.
+                </SheetDescription>
               </SheetHeader>
               <form className="flex-1 space-y-5 overflow-y-auto px-5 py-5" onSubmit={submit}>
                 <MappingFormSection title="App mapping">
@@ -966,7 +980,9 @@ export function StoreMappingPage({
                       </div>
                       <div className="grid gap-2">
                         <Label htmlFor="adjustEventToken">
-                          Adjust event token
+                          {isAndroidForm
+                            ? "Adjust event token"
+                            : "Adjust purchase event token"}
                         </Label>
                         <Input
                           id="adjustEventToken"
@@ -978,6 +994,13 @@ export function StoreMappingPage({
                           placeholder="f0ob4r"
                           readOnly={drawerReadOnly}
                         />
+                        {!isAndroidForm ? (
+                          <p className="text-xs text-muted-foreground">
+                            Use the token of the Adjust event named purchase.
+                            It is sent only after a real paid renewal is
+                            confirmed.
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1145,7 +1168,7 @@ export function StoreMappingPage({
         }
       />
 
-      <Dialog
+      <AlertDialog
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => {
           if (!open && !pendingRow) {
@@ -1154,13 +1177,16 @@ export function StoreMappingPage({
           }
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete app mapping?</DialogTitle>
-            <DialogDescription>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete app mapping?</AlertDialogTitle>
+            <AlertDialogDescription>
               This action permanently removes the mapping for {deleteExpectedName || "this app"}. Type the app name to confirm.
-            </DialogDescription>
-          </DialogHeader>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
           <div className="grid gap-2">
             <Label htmlFor="deleteAppMappingConfirmation">Type `{deleteExpectedName}` to confirm</Label>
             <Input
@@ -1171,30 +1197,22 @@ export function StoreMappingPage({
               autoComplete="off"
             />
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={Boolean(pendingRow)}
-              onClick={() => {
-                setDeleteTarget(null);
-                setDeleteConfirmationName("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(pendingRow)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
               variant="destructive"
               disabled={deleteConfirmDisabled}
-              onClick={() => deleteTarget && deleteMapping(deleteTarget)}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteTarget) void deleteMapping(deleteTarget);
+              }}
             >
               {deleteTarget && pendingRow === deleteTarget.id ? <Spinner /> : <Trash2 size={15} />}
               Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog
         open={secretOtpOpen}
@@ -1364,7 +1382,11 @@ export function StoreMappingPage({
                             <Badge variant="outline">Adjust app</Badge>
                           ) : null}
                           {mapping.adjust_event_token ? (
-                            <Badge variant="secondary">Adjust event</Badge>
+                            <Badge variant="secondary">
+                              {mapping.platform === "ios"
+                                ? "Adjust purchase"
+                                : "Adjust event"}
+                            </Badge>
                           ) : null}
                         </div>
                       ) : null}

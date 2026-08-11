@@ -29,34 +29,11 @@ function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function publicApiKeysFromDictionary() {
-  const raw = process.env.SUPABASE_PUBLISHABLE_KEYS ?? process.env.SUPABASE_API_KEYS;
-  if (!raw) return [];
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => clean(item)).filter(Boolean);
-    }
-
-    if (parsed && typeof parsed === "object") {
-      return Object.values(parsed as Record<string, unknown>).map((item) => clean(item)).filter(Boolean);
-    }
-  } catch {
-    return splitKeys(raw);
-  }
-
-  return [];
-}
-
 function configuredPublicApiKeys() {
   return Array.from(new Set([
+    ...splitKeys(process.env.SYSTEM_TRACKING_PUBLIC_API_KEYS),
     ...splitKeys(process.env.MOBILE_DEVICE_TOKEN_API_KEYS),
     ...splitKeys(process.env.MOBILE_NOTIFICATION_EVENT_API_KEYS),
-    ...publicApiKeysFromDictionary(),
-    clean(process.env.SUPABASE_PUBLISHABLE_KEY),
-    clean(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY),
-    clean(process.env.SUPABASE_ANON_KEY),
   ].filter(Boolean)));
 }
 

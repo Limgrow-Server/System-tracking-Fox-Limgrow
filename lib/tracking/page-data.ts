@@ -118,6 +118,37 @@ export type IapTrialConversionCohort = {
 
 export type IapTrialConversionGranularity = "day" | "week" | "month";
 
+export type IapTwoHourConversionCohort = {
+  checked: number;
+  confirmedPaid: number;
+  conversionRate: number;
+  eligible: number;
+  label: string;
+  sent: number;
+};
+
+export type IapTwoHourConversionAnalytics = {
+  checkedCount: number;
+  checkFailedCount: number;
+  cohortUnit: "subscription";
+  cohorts: IapTwoHourConversionCohort[];
+  cohortsByGranularity: Record<
+    IapTrialConversionGranularity,
+    IapTwoHourConversionCohort[]
+  >;
+  confirmedPaidCount: number;
+  conversionRate: number;
+  eligibleForVerificationCount: number;
+  lastCheckedAt: string | null;
+  maturedConversionRate: number;
+  notConvertedCount: number;
+  pendingVerificationCount: number;
+  /** @deprecated Use trialCohortCount. */
+  sentAfterTwoHoursCount: number;
+  trialCohortCount: number;
+  verificationDelayHours: number;
+};
+
 export type IapNotificationEventDto = {
   id: string;
   notificationUuid: string;
@@ -164,6 +195,13 @@ export type IapTrialConversionAnalytics = {
   failedNotificationCount: number;
   trialRevenueMicros: string;
   renewalRevenueMicros: string;
+  twoHourConversion?: IapTwoHourConversionAnalytics;
+};
+
+export type IapTrialConversionPageData = {
+  analytics: IapTrialConversionAnalytics | null;
+  apps: IapAppCard[];
+  selectedApp: IapAppCard | null;
 };
 
 export type IapRevenueBucket = {
