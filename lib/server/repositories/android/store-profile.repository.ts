@@ -44,24 +44,15 @@ export function getAndroidStoreProfileById(id: string) {
   });
 }
 
-export async function updateAndroidStoreProfileMetadata(
+export function updateAndroidStoreProfileMetadata(
   tx: Prisma.TransactionClient,
   id: string,
   data: AndroidStoreProfilePatch
 ) {
-  const profile = await tx.androidStoreProfile.update({
+  return tx.androidStoreProfile.update({
     where: { id },
     data,
   });
-
-  if (data.storeAccountName !== undefined) {
-    await tx.reviewStoreTarget.updateMany({
-      where: { androidStoreProfileId: id },
-      data: { storeAccountName: data.storeAccountName },
-    });
-  }
-
-  return profile;
 }
 
 export function deleteUnusedAndroidStoreProfile(

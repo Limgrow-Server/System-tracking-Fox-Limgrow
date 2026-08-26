@@ -49,6 +49,9 @@ function normalizeIosMappingPayload(payload: StoreMappingPayload) {
     appLink: nullableText(payload.appLink),
     adjustAppToken: nullableText(payload.adjustAppToken),
     adjustEventToken: nullableText(payload.adjustEventToken),
+    adjustTrialStartedEventToken: nullableText(
+      payload.adjustTrialStartedEventToken,
+    ),
     appName: cleanText(payload.appName),
     bundleId: nullableText(payload.bundleId),
     firebaseAnalyticsApiSecret: optionalSecretText(
@@ -156,6 +159,7 @@ export async function saveIosStoreMappingDto(input: {
   appId: string | null;
   adjustAppToken: string | null;
   adjustEventToken: string | null;
+  adjustTrialStartedEventToken: string | null;
   appName: string;
   bundleId: string;
   firebaseAnalyticsApiSecret?: string | null;
@@ -206,6 +210,7 @@ export async function createIosStoreMapping(payload: StoreMappingPayload) {
       appId: row.appId,
       adjustAppToken: row.adjustAppToken,
       adjustEventToken: row.adjustEventToken,
+      adjustTrialStartedEventToken: row.adjustTrialStartedEventToken,
       appName: row.appName,
       bundleId: row.bundleId!,
       firebaseAnalyticsApiSecret: row.firebaseAnalyticsApiSecret ?? null,
@@ -242,6 +247,7 @@ export async function updateIosStoreMapping(payload: StoreMappingPayload) {
       appId: row.appId,
       adjustAppToken: row.adjustAppToken,
       adjustEventToken: row.adjustEventToken,
+      adjustTrialStartedEventToken: row.adjustTrialStartedEventToken,
       appName: row.appName,
       bundleId: row.bundleId!,
       firebaseAnalyticsApiSecret: row.firebaseAnalyticsApiSecret,

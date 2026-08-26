@@ -13,6 +13,9 @@ type SaveAndroidStoreMappingInput = {
   appLink: string | null;
   adjustAppToken: string | null;
   adjustEventToken: string | null;
+  adjustTrialStartedEventToken: string | null;
+  firebaseAnalyticsApiSecret?: string | null;
+  firebaseAppId: string | null;
   appName: string;
   id?: string | null;
   packageName: string;
@@ -62,6 +65,8 @@ function androidStoreMappingWhere(options: AndroidStoreMappingPageOptions): Pris
         { appId: contains },
         { adjustAppToken: contains },
         { adjustEventToken: contains },
+        { adjustTrialStartedEventToken: contains },
+        { firebaseAppId: contains },
         { packageName: contains },
         { storeAccountName: contains },
         { storeProfile: { storeAccountName: contains } },
@@ -107,6 +112,16 @@ export async function getAndroidStoreMappingId(id: string) {
   return mapping?.id ?? null;
 }
 
+export function getAndroidStoreMappingFirebaseAnalyticsSecret(id: string) {
+  return prisma.androidStoreMapping.findUnique({
+    where: { id },
+    select: {
+      firebaseAnalyticsApiSecret: true,
+      id: true,
+    },
+  });
+}
+
 export function getAndroidStoreMappingForListingUpload(id: string) {
   return prisma.androidStoreMapping.findUnique({
     where: { id },
@@ -143,11 +158,16 @@ export async function saveAndroidStoreMapping(
     appLink: input.appLink,
     adjustAppToken: input.adjustAppToken,
     adjustEventToken: input.adjustEventToken,
+    adjustTrialStartedEventToken: input.adjustTrialStartedEventToken,
+    firebaseAppId: input.firebaseAppId,
     appName: input.appName,
     packageName: input.packageName,
     status: input.status,
     storeAccountName: profile.storeAccountName,
     storeProfileId: profile.id,
+    ...(input.firebaseAnalyticsApiSecret !== undefined
+      ? { firebaseAnalyticsApiSecret: input.firebaseAnalyticsApiSecret }
+      : {}),
   };
 
   if (input.id) {
@@ -177,6 +197,19 @@ export async function saveAndroidStoreMapping(
   });
 }
 
-export function deleteAndroidStoreMapping(id: string) {
-  return prisma.androidStoreMapping.delete({ where: { id } });
+export async function deleteAndroidStoreMapping(id: string) {
+  const [rtdnEvents, orders, lifecycleEvents] = await prisma.$transaction([
+    prisma.androidIapRtdnEvent.count({ where: { storeMappingId: id } }),
+    prisma.androidIapOrder.count({ where: { storeMappingId: id } }),
+    prisma.androidIapLifecycleEvent.count({ where: { storeMappingId: id } }),
+  ]);
+  if (rtdnEvents + orders + lifecycleEvents > 0) {
+    await prisma.androidStoreMapping.update({
+      where: { id },
+      data: { status: 'ARCHIVED' },
+    });
+    return { archived: true };
+  }
+  await prisma.androidStoreMapping.delete({ where: { id } });
+  return { archived: false };
 }

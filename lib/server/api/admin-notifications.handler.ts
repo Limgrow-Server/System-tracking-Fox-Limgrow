@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 
 import { Prisma } from "@prisma/client";
 
@@ -15,18 +15,19 @@ import { requireConsoleApiSession } from "@/lib/server/api/auth";
 import { badRequest, forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
-import { enqueueNotificationDeviceJob } from "@/lib/server/services/notifications/notification-batch-queue.service";
+import { enqueueNotificationTopicJob } from "@/lib/server/services/notifications/notification-batch-queue.service";
 import { dispatchDueNotificationsOnServer } from "@/lib/server/services/notifications/notification-dispatcher.service";
-import { sendNotificationPayloadLocal } from "@/lib/server/services/notifications/local-notification-sender.service";
-import { getActiveDeviceIdsForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
 import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import {
-  deviceTokenToTracking,
   notificationJobToTracking,
   notificationScheduleToTracking,
 } from "@/lib/tracking/mappers/notification";
 import { firstAppId } from "@/lib/tracking/identity";
+import {
+  canonicalNotificationLocale,
+  notificationTopicNameFromBase,
+} from "@/lib/tracking/notification-topics";
 
 const LANGUAGES = [
   { topicCode: "zh", label: "Chinese" },
@@ -40,26 +41,21 @@ const LANGUAGES = [
   { topicCode: "en", label: "English" },
   { topicCode: "pt", label: "Portuguese" },
   { topicCode: "sw", label: "Swahili" },
-  { topicCode: "in", label: "Indonesian" },
+  { topicCode: "id", label: "Indonesian" },
   { topicCode: "it", label: "Italian" },
   { topicCode: "ja", label: "Japanese" },
   { topicCode: "de", label: "German" },
   { topicCode: "pa", label: "Punjabi" },
+  { topicCode: "vi", label: "Vietnamese" },
 ] as const;
 
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
 const HCM_OFFSET_MINUTES = 7 * 60;
-const SCHEDULE_DEVICE_TARGET_LIMIT = 5000;
 const notificationManageRoles = ["Admin"] as const;
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function stringArray(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return Array.from(new Set(value.map((item) => clean(item)).filter(Boolean)));
 }
 
 function errorForLog(error: unknown) {
@@ -75,19 +71,13 @@ function errorForLog(error: unknown) {
 }
 
 function notificationRequestContext(body: Record<string, unknown>) {
-  const deviceIds = stringArray(body.deviceIds || body.targetValues);
-  const deviceTokenIds = stringArray(body.deviceTokenIds);
-
   return {
     appId: firstAppId(body.appId, body.productAppId),
     appName: clean(body.appName) || null,
     bundleId: clean(body.bundleId) || null,
-    deviceIdsCount: deviceIds.length,
-    deviceTokenIdsCount: deviceTokenIds.length,
     packageName: clean(body.packageName) || null,
     platform: clean(body.platform) || null,
     scheduleId: clean(body.scheduleId) || null,
-    targetCount: deviceTokenIds.length || deviceIds.length,
     targetType: clean(body.targetType) || null,
   };
 }
@@ -239,7 +229,7 @@ function normalizedNotifications(value: unknown) {
         enabled: record.enabled !== false,
         message: clean(record.message),
         title: clean(record.title),
-        topicCode: topicSegment(record.topicCode || record.languageCode).toLowerCase(),
+        topicCode: canonicalNotificationLocale(record.topicCode || record.languageCode),
       };
     })
     .filter((row) => row.enabled && row.title && row.message && row.topicCode);
@@ -248,7 +238,12 @@ function normalizedNotifications(value: unknown) {
     throw badRequest("At least one notification language is required.");
   }
 
-  return notifications;
+  return Array.from(
+    notifications.reduce<Map<string, (typeof notifications)[number]>>((items, row) => {
+      if (!items.has(row.topicCode)) items.set(row.topicCode, row);
+      return items;
+    }, new Map()).values(),
+  );
 }
 
 function primaryNotification(notifications: ReturnType<typeof normalizedNotifications>) {
@@ -267,19 +262,13 @@ function safeNotifications(payload: Record<string, unknown>) {
 
 function failedSendTargetValues(
   payload: Record<string, unknown>,
-  targetType: "device" | "topic",
   notifications: ReturnType<typeof safeNotifications>,
 ) {
-  if (targetType === "device") {
-    return [
-      ...stringArray(payload.deviceTokenIds),
-      ...stringArray(payload.deviceIds || payload.targetValues),
-    ];
-  }
-
   const topicBase = topicSegment(payload.topicBase) || clean(payload.appName) || "notification";
   return notifications.length
-    ? notifications.map((item) => `${topicBase}-${item.topicCode}`)
+    ? notifications.map((item) =>
+        notificationTopicNameFromBase(topicBase, item.topicCode),
+      )
     : [topicBase];
 }
 
@@ -298,10 +287,10 @@ async function persistFailedSendAttempt(
   requestedBy: string,
   error: unknown,
 ) {
-  const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
+  const targetType = "topic";
   const notifications = safeNotifications(payload);
   const firstNotification = notifications.length ? primaryNotification(notifications) : null;
-  const targetValues = failedSendTargetValues(payload, targetType, notifications);
+  const targetValues = failedSendTargetValues(payload, notifications);
   const appId = firstAppId(payload.appId, payload.productAppId, payload.appName);
   const platform = clean(payload.platform) || "android";
   const errorMessage = error instanceof Error ? error.message : String(error);
@@ -311,6 +300,7 @@ async function persistFailedSendAttempt(
   const job = await prisma.notificationJob.create({
     data: {
       appId,
+      appMappingId: clean(payload.appMappingId) || null,
       appName: clean(payload.appName) || clean(payload.productAppId) || "unknown_app",
       bundleId: platform === "ios" ? clean(payload.bundleId) || null : null,
       credentialRef: clean(payload.credentialRef) || null,
@@ -332,7 +322,8 @@ async function persistFailedSendAttempt(
       targetType,
       targetValues,
       title: firstNotification?.title || null,
-      topicBase: topicSegment(payload.topicBase) || clean(payload.appName) || "device",
+      topicBase:
+        topicSegment(payload.topicBase) || clean(payload.appName) || "notification",
       updatedAt: now,
     },
   });
@@ -370,46 +361,21 @@ export async function handleAdminNotificationSendPost(request: Request) {
     requestPayload = payload;
     await assertNotificationAccess(session, payload);
     canPersistFailedAttempt = true;
-    const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
-    const deviceIds = stringArray(payload.deviceIds || payload.targetValues);
-    if (targetType === "device") {
-      const queued = await enqueueNotificationDeviceJob(
-        {
-          ...payload,
-          deviceIds,
-          queueByApp: Boolean(payload.queueByApp),
-          targetType,
-        },
-        {
-          email: session.email,
-          memberId: session.memberId,
-        },
-      );
-
-      revalidateCacheTags([
-        CACHE_TAGS.notificationJobs,
-      ]);
-
-      return okJson({
-        message: queued.targetCount
-          ? `Notification queued with ${queued.targetCount} selected target(s).`
-          : "Notification queued. Token batches will be prepared in the background.",
-        result: {
-          ...queued,
-          backgroundJob: queued.backgroundJob,
-          job: notificationJobToTracking(queued.job),
-        },
-      });
+    if (clean(payload.targetType) === "device") {
+      throw badRequest("Device targeting has been disabled. Use locale topics.");
     }
-
-    const result = await sendNotificationPayloadLocal(payload, session.email);
-    revalidateCacheTags([
-      CACHE_TAGS.notificationEvents,
-      CACHE_TAGS.notificationJobs,
-    ]);
+    const queued = await enqueueNotificationTopicJob(
+      { ...payload, targetType: "topic" },
+      { email: session.email, memberId: session.memberId },
+    );
+    revalidateCacheTags([CACHE_TAGS.notificationJobs]);
     return okJson({
-      message: "Notification sent.",
-      result,
+      message: `Notification queued for ${queued.targetCount} locale topic(s).`,
+      result: {
+        ...queued,
+        backgroundJob: queued.backgroundJob,
+        job: notificationJobToTracking(queued.job),
+      },
     });
   } catch (error) {
     if (requestPayload && requestedBy && canPersistFailedAttempt) {
@@ -703,30 +669,22 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
       throw badRequest("Schedule type must be once, daily or monthly.");
     }
 
-    const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
-    let targetValues = targetType === "device"
-      ? stringArray(payload.deviceIds || payload.targetValues)
-      : notifications.map((item) => `${topicSegment(payload.topicBase)}-${item.topicCode}`);
-    if (
-      targetType === "device" &&
-      !targetValues.length &&
-      (payload.resolveByApp === true || payload.queueByApp === true || clean(payload.queueMode).toLowerCase() === "app")
-    ) {
-      const resolvedDeviceIds = await getActiveDeviceIdsForNotificationTarget(payload, SCHEDULE_DEVICE_TARGET_LIMIT + 1);
-      if (resolvedDeviceIds.length > SCHEDULE_DEVICE_TARGET_LIMIT) {
-        throw badRequest(`Scheduled device targeting supports up to ${SCHEDULE_DEVICE_TARGET_LIMIT} device(s). Use immediate queued send for larger audiences.`);
-      }
-      targetValues = resolvedDeviceIds;
+    if (clean(payload.targetType) === "device") {
+      throw badRequest("Device targeting has been disabled. Use locale topics.");
     }
-    if (targetType === "device" && !targetValues.length) {
-      throw badRequest("At least one device id is required for device targeting.");
-    }
+    const targetType = "topic";
+    const topicBase = topicSegment(payload.topicBase);
+    if (!topicBase) throw badRequest("Topic base is required.");
+    const targetValues = notifications.map((item) =>
+      notificationTopicNameFromBase(topicBase, item.topicCode),
+    );
 
     const firstNotification = primaryNotification(notifications);
     const appId = firstAppId(payload.appId, payload.productAppId, payload.appName);
     const schedule = await prisma.notificationSchedule.create({
       data: {
         appId,
+        appMappingId: clean(payload.appMappingId) || null,
         appName: clean(payload.appName) || clean(payload.productAppId) || "unknown_app",
         bundleId: clean(payload.bundleId) || null,
         credentialRef: clean(payload.credentialRef) || null,
@@ -750,7 +708,7 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
         targetValues,
         timeOfDay: scheduleType === "once" ? clean(payload.scheduledTime || payload.timeOfDay) || "09:00" : clean(payload.timeOfDay) || "09:00",
         title: firstNotification.title,
-        topicBase: topicSegment(payload.topicBase) || clean(payload.appName) || "notification",
+        topicBase,
       },
     });
 
@@ -773,6 +731,14 @@ export async function handleAdminNotificationSchedulesPatch(request: Request) {
     const id = clean(payload.id);
     const status = clean(payload.status);
     if (!id) throw badRequest("Schedule id is required.");
+    const existingSchedule = await prisma.notificationSchedule.findUnique({
+      where: { id },
+      select: { targetType: true },
+    });
+    if (!existingSchedule) throw badRequest("Notification schedule was not found.");
+    if (existingSchedule.targetType === "device") {
+      throw badRequest("Legacy device schedules cannot be resumed. Create a new topic schedule.");
+    }
 
     const updatePayload: Prisma.NotificationScheduleUpdateInput = {};
     if (status) {
@@ -877,57 +843,5 @@ export async function handleAdminNotificationDispatchPost(request: Request) {
       error: errorForLog(error),
     });
     return errorJson(error, "Dispatch notifications failed.");
-  }
-}
-
-export async function handleAdminNotificationTestDevicePost(request: Request) {
-  try {
-    const session = await requireConsoleApiSession([...notificationManageRoles]);
-    const payload = await parseJsonBody<Record<string, unknown>>(request);
-    await assertNotificationAccess(session, payload);
-    const platform = clean(payload.platform) || "android";
-    const deviceId = clean(payload.deviceId) || `test-device-${Date.now().toString(36)}`;
-    const appId = firstAppId(payload.appId, payload.appName, payload.productAppId) || "test-app";
-    const productAppId = firstAppId(payload.productAppId, appId) || appId;
-    const fakeToken = `test-fcm-token-${deviceId}`;
-    const tokenHash = createHash("sha256").update(fakeToken).digest("hex");
-
-    const device = await prisma.deviceToken.upsert({
-      where: { tokenHash },
-      create: {
-        appId,
-        bundleId: platform === "ios" ? clean(payload.bundleId) || null : null,
-        deviceId,
-        fcmToken: fakeToken,
-        locale: "en",
-        packageName: platform === "android" ? clean(payload.packageName) || null : null,
-        platform,
-        productAppId,
-        status: "active",
-        storeAccountName: clean(payload.storeAccountName) || null,
-        storePlatform: clean(payload.storePlatform) || null,
-        tokenHash,
-        userId: `test:${deviceId}`,
-      },
-      update: {
-        appId,
-        bundleId: platform === "ios" ? clean(payload.bundleId) || null : null,
-        locale: "en",
-        packageName: platform === "android" ? clean(payload.packageName) || null : null,
-        productAppId,
-        status: "active",
-        storeAccountName: clean(payload.storeAccountName) || null,
-        storePlatform: clean(payload.storePlatform) || null,
-      },
-    });
-
-    revalidateCacheTags([CACHE_TAGS.deviceTokens]);
-
-    return okJson({
-      device: deviceTokenToTracking(device),
-      message: "Test device created. Its fake FCM token is expected to fail at FCM and produce an error log.",
-    });
-  } catch (error) {
-    return errorJson(error, "Create test device failed.");
   }
 }

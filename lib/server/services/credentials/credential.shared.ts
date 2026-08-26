@@ -65,7 +65,12 @@ export async function parseCredentialPayload(request: Request): Promise<Credenti
   const contentType = request.headers.get("content-type") ?? "";
 
   if (contentType.toLowerCase().includes("multipart/form-data")) {
-    const form = await request.formData();
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      throw badRequest("Invalid multipart form data.");
+    }
     const secretFile = form.get("secretFile");
 
     return {

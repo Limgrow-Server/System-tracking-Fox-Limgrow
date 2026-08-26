@@ -28,6 +28,10 @@ import {
   valuesMatchSearch as fuzzyValuesMatchSearch,
 } from "@/lib/search";
 import { dateTime } from "@/lib/tracking/format";
+import {
+  canonicalNotificationLocale,
+  notificationTopicBase,
+} from "@/lib/tracking/notification-topics";
 import type { NotificationsPageData } from "@/lib/tracking/page-data";
 import type {
   CredentialSecretMetadata,
@@ -171,11 +175,12 @@ export const LANGUAGES = [
   { topicCode: "en", label: "English" },
   { topicCode: "pt", label: "Portuguese" },
   { topicCode: "sw", label: "Swahili" },
-  { topicCode: "in", label: "Indonesian" },
+  { topicCode: "id", label: "Indonesian" },
   { topicCode: "it", label: "Italian" },
   { topicCode: "ja", label: "Japanese" },
   { topicCode: "de", label: "German" },
   { topicCode: "pa", label: "Punjabi" },
+  { topicCode: "vi", label: "Vietnamese" },
 ] as const;
 
 export function createLocaleRows(): LocaleRow[] {
@@ -198,7 +203,7 @@ export function localeRowsFromPayload(value: unknown, fallbackTitle = "", fallba
 
   payload.forEach((item) => {
     const record = objectRecord(item);
-    const topicCode = String(record.topicCode ?? record.languageCode ?? "").trim().toLowerCase();
+    const topicCode = canonicalNotificationLocale(record.topicCode ?? record.languageCode);
     if (!topicCode) return;
     byTopicCode.set(topicCode, {
       enabled: record.enabled !== false,
@@ -266,18 +271,8 @@ function appInitial(value: string | null | undefined) {
   return (value?.trim().charAt(0) || "A").toUpperCase();
 }
 
-function topicSegment(value: string | null | undefined) {
-  return (value ?? "")
-    .trim()
-    .replace(/^\/topics\//i, "")
-    .replace(/\s+/g, "_")
-    .replace(/[^A-Za-z0-9\-_.~%]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
 export function topicBaseForApp(app: StoreMapping) {
-  return topicSegment(app.app_id || app.app_name || app.package_name || app.bundle_id || app.id);
+  return notificationTopicBase(app.id);
 }
 
 export function appIdentifierForApp(app: StoreMapping) {
@@ -715,7 +710,8 @@ function notificationUniqueEventCount(events: NotificationEvent[], predicate: (e
   const unique = new Set<string>();
   events.forEach((event) => {
     if (!predicate(event)) return;
-    unique.add(event.device_id ?? event.target_value ?? event.id);
+    const metadata = objectRecord(event.metadata);
+    unique.add(String(metadata.clientEventId ?? event.id));
   });
   return unique.size;
 }
@@ -847,11 +843,11 @@ export function DeliveryDashboard({
       value: numberLabel(failed),
     },
     impressions: {
-      sub: `${numberLabel(impressions)} unique token(s)`,
+      sub: `${numberLabel(impressions)} unique client event(s)`,
       value: numberLabel(impressionEvents),
     },
     opened: {
-      sub: `${numberLabel(opened)} unique token(s)`,
+      sub: `${numberLabel(opened)} unique client event(s)`,
       value: numberLabel(openEvents),
     },
     rate: {
@@ -859,7 +855,7 @@ export function DeliveryDashboard({
       value: rateLabel(successRate),
     },
     received: {
-      sub: `${numberLabel(received)} unique token(s)`,
+      sub: `${numberLabel(received)} unique client event(s)`,
       value: numberLabel(receivedEvents),
     },
     requested: {
@@ -1004,8 +1000,6 @@ function AppStatusDot({ status }: { status: string | null | undefined }) {
 export function AppSelectionTable({
   apps,
   credentials,
-  deviceCounts,
-  devices,
   fillHeight = false,
   schedules,
   scheduleStats,
@@ -1016,8 +1010,6 @@ export function AppSelectionTable({
 }: {
   apps: StoreMapping[];
   credentials: NotificationsPageData["credentialSecrets"];
-  deviceCounts?: Record<string, number>;
-  devices: DeviceToken[];
   fillHeight?: boolean;
   schedules: NotificationSchedule[];
   scheduleStats?: NotificationsPageData["notificationScheduleStats"];
@@ -1026,10 +1018,6 @@ export function AppSelectionTable({
   updateAppSelection: (appId: string, checked?: boolean) => void;
   onSearchChange: (value: string) => void;
 }) {
-  const totalDeviceCount = useMemo(
-    () => apps.reduce((total, app) => total + (deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length), 0),
-    [apps, deviceCounts, devices],
-  );
   const filteredApps = useMemo(
     () =>
       apps
@@ -1043,10 +1031,9 @@ export function AppSelectionTable({
             app,
             credentials: matchingFirebaseCredentials(app, credentials),
             totalSchedules: (stat?.total ?? 0) + localSchedules.length,
-            totalTokens: deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length,
           };
         }),
-    [apps, credentials, deviceCounts, devices, scheduleStats, schedules, search],
+    [apps, credentials, scheduleStats, schedules, search],
   );
 
   return (
@@ -1056,7 +1043,7 @@ export function AppSelectionTable({
           <div>
             <CardTitle className="text-sm">Target app</CardTitle>
             <CardDescription className="max-w-3xl text-xs">
-              {apps.length} mapped app(s), {totalDeviceCount} active FCM token(s). Select one or more apps to send together.
+              {apps.length} mapped app(s). Delivery is published only to versioned locale topics.
             </CardDescription>
           </div>
           <div className="w-full lg:w-80">
@@ -1078,14 +1065,14 @@ export function AppSelectionTable({
                 <TableHead className="h-9 w-[30%] min-w-56">App</TableHead>
                 <TableHead className="h-9 w-28">Platform</TableHead>
                 <TableHead className="h-9 w-[32%] min-w-56">Identifier</TableHead>
-                <TableHead className="h-9 w-32">Tokens</TableHead>
+                <TableHead className="h-9 w-44">Topic base</TableHead>
                 <TableHead className="h-9 w-24">Config</TableHead>
                 <TableHead className="h-9 w-24">Schedules</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredApps.length ? (
-                filteredApps.map(({ activeSchedules, app, credentials: appCredentials, totalSchedules, totalTokens }) => {
+                filteredApps.map(({ activeSchedules, app, credentials: appCredentials, totalSchedules }) => {
                   const selected = selectedAppIdSet.has(app.id);
 
                   return (
@@ -1121,8 +1108,10 @@ export function AppSelectionTable({
                         <div className="max-w-full truncate rounded-md bg-muted px-2 py-1 font-mono text-xs">{compactIdentifier(app)}</div>
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm font-medium">{totalTokens}</div>
-                        <div className="text-xs text-muted-foreground">active</div>
+                        <div className="max-w-44 truncate font-mono text-xs" title={topicBaseForApp(app)}>
+                          {topicBaseForApp(app)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">locale topics</div>
                       </TableCell>
                       <TableCell>
                         <Badge

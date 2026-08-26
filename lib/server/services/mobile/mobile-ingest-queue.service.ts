@@ -214,7 +214,8 @@ function notificationEventDedupeKey(payload: NotificationEventRequest) {
   const record = payload as Record<string, unknown>;
   const platform = eventPlatform(record);
   const eventType = notificationEventType(payload.eventType ?? payload.action);
-  const tokenHash = tokenHashFromPayload(record);
+  const clientEventId = clean(payload.clientEventId);
+  if (!clientEventId) throw badRequest("client_event_id_required");
   const notificationId =
     clean(payload.notificationJobId)
     || clean(payload.notificationId)
@@ -225,9 +226,7 @@ function notificationEventDedupeKey(payload: NotificationEventRequest) {
     || normalizePackageName(payload.packageName)
     || normalizeBundleId(payload.bundleId)
     || "unknown";
-  const target = tokenHash || normalizeDeviceId(payload.deviceId) || randomUUID();
-
-  return `notification-event:${platform}:${eventType}:${notificationId}:${target}`;
+  return `notification-event:${platform}:${eventType}:${notificationId}:${clientEventId}`;
 }
 
 function errorMessage(error: unknown) {

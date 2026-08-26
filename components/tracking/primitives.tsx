@@ -150,7 +150,7 @@ export function DataSourceBanner({
       <div className="flex items-start gap-2">
         {connected ? <CheckCircle2 className="mt-0.5 shrink-0" size={16} /> : <AlertCircle className="mt-0.5 shrink-0" size={16} />}
         <div>
-          <div className="font-medium">{connected ? "Connected to Supabase dashboard views" : "Using fallback data"}</div>
+          <div className="font-medium">{connected ? "Connected to the tracking API" : "Tracking API unavailable"}</div>
           <div className="text-xs opacity-80">{error ?? "Secret values are never loaded into the browser."}</div>
         </div>
       </div>

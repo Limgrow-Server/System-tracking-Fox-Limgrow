@@ -41,6 +41,7 @@ model IosStoreMapping {
   firebaseAnalyticsApiSecret String?          @map("firebase_analytics_api_secret") @db.Text
   adjustAppToken             String?          @map("adjust_app_token")
   adjustEventToken           String?          @map("adjust_event_token")
+  adjustTrialStartedEventToken String?        @map("adjust_trial_started_event_token")
   status                     MappingStatus    @default(ACTIVE)
   createdAt                  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                  DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -183,36 +184,43 @@ model IosIapNotificationEvent {
 }
 
 model IosIapTwoHourCheck {
-  id                    String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeProfileId        String?          @map("store_profile_id") @db.Uuid
-  transactionId         String           @unique @map("transaction_id")
-  originalTransactionId String?          @map("original_transaction_id")
-  userId                String?          @map("user_id")
-  bundleId              String           @map("bundle_id")
-  productId             String           @map("product_id")
-  environment           String           @default("production")
-  appInstanceId         String           @map("app_instance_id")
-  firebaseAppId         String?          @map("firebase_app_id")
-  adjustAdid            String?          @map("adjust_adid")
-  idfa                  String?
-  idfv                  String?
-  ga4EventName          String           @default("purchase_2hour") @map("ga4_event_name")
-  checkAt               DateTime         @map("check_at") @db.Timestamptz(6)
-  status                String           @default("pending")
-  renewed               Boolean?
-  renewalStatus         String?          @map("renewal_status")
-  ga4SentAt             DateTime?        @map("ga4_sent_at") @db.Timestamptz(6)
-  attempts              Int              @default(0)
-  lastError             String?          @map("last_error") @db.Text
-  rawContext            Json             @default("{}") @map("raw_context")
-  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
-  storeProfile          IosStoreProfile? @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
+  id                      String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeProfileId          String?          @map("store_profile_id") @db.Uuid
+  transactionId           String           @unique @map("transaction_id")
+  originalTransactionId   String?          @map("original_transaction_id")
+  userId                  String?          @map("user_id")
+  bundleId                String           @map("bundle_id")
+  productId               String           @map("product_id")
+  environment             String           @default("production")
+  appInstanceId           String?          @map("app_instance_id")
+  firebaseAppId           String?          @map("firebase_app_id")
+  adjustAdid              String?          @map("adjust_adid")
+  idfa                    String?
+  idfv                    String?
+  ga4EventName            String           @default("purchase_2hour") @map("ga4_event_name")
+  checkAt                 DateTime         @map("check_at") @db.Timestamptz(6)
+  status                  String           @default("pending")
+  renewed                 Boolean?
+  renewalStatus           String?          @map("renewal_status")
+  ga4SentAt               DateTime?        @map("ga4_sent_at") @db.Timestamptz(6)
+  conversionCheckAt       DateTime?        @map("conversion_check_at") @db.Timestamptz(6)
+  conversionCheckedAt     DateTime?        @map("conversion_checked_at") @db.Timestamptz(6)
+  conversionStatus        String?          @map("conversion_status")
+  conversionTransactionId String?          @map("conversion_transaction_id")
+  conversionAttempts      Int              @default(0) @map("conversion_attempts")
+  conversionLastError     String?          @map("conversion_last_error") @db.Text
+  attempts                Int              @default(0)
+  lastError               String?          @map("last_error") @db.Text
+  rawContext              Json             @default("{}") @map("raw_context")
+  createdAt               DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile            IosStoreProfile? @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
 
   @@index([status, checkAt], map: "ios_iap_two_hour_checks_status_check_idx")
   @@index([bundleId, environment, storeProfileId, checkAt], map: "ios_iap_two_hour_checks_bundle_env_profile_check_idx")
   @@index([originalTransactionId], map: "ios_iap_two_hour_checks_original_idx")
   @@index([storeProfileId, checkAt], map: "ios_iap_two_hour_checks_store_profile_check_idx")
+  @@index([conversionStatus, conversionCheckAt], map: "ios_iap_two_hour_checks_conversion_due_idx")
   @@map("ios_iap_two_hour_checks")
 }
 

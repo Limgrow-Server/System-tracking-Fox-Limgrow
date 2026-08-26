@@ -1,17 +1,15 @@
 import "server-only";
 
-import { createHash } from "crypto";
-
 import type { Prisma } from "@prisma/client";
 
 import { notificationPrisma, prisma } from "@/lib/prisma";
 import { normalizeAppId } from "@/lib/tracking/identity";
+import { notificationTopicName } from "@/lib/tracking/notification-topics";
 import { badRequest } from "@/lib/server/api/errors";
 import {
   clean,
   normalizeAppIdentifier,
   normalizeBundleId,
-  normalizeDeviceId,
   normalizeDeviceType,
   normalizeLocale,
   normalizePackageName,
@@ -26,11 +24,10 @@ export type NotificationEventRequest = {
   app_id?: string;
   appVersion?: string;
   bundleId?: string;
-  deviceId?: string;
+  clientEventId?: string;
   deviceType?: string;
   device_type?: string;
   eventType?: string;
-  fcmToken?: string;
   languageCode?: string;
   language_code?: string;
   locale?: string;
@@ -48,33 +45,10 @@ export type NotificationEventRequest = {
 };
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
-const LAST_SEEN_REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
-
-const deviceEventSelect = {
-  appIdentifier: true,
-  appId: true,
-  bundleId: true,
-  deviceId: true,
-  deviceType: true,
-  fcmToken: true,
-  id: true,
-  lastSeenAt: true,
-  locale: true,
-  packageName: true,
-  platform: true,
-  productAppId: true,
-  status: true,
-  tokenHash: true,
-} satisfies Prisma.DeviceTokenSelect;
-
 type NotificationEventPrisma = Pick<
   typeof prisma,
-  "androidStoreMapping" | "deviceToken" | "iosStoreMapping" | "notificationEvent"
+  "androidStoreMapping" | "iosStoreMapping" | "notificationEvent"
 >;
-
-function sha256Hex(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 function requestAppId(payload: NotificationEventRequest) {
   return normalizeAppId(payload.appId) || normalizeAppId(payload.app_id);
@@ -126,87 +100,6 @@ function uuidOrNull(value: unknown) {
   return uuidPattern.test(cleaned) ? cleaned : null;
 }
 
-function isLastSeenStale(value: unknown, nowMs: number) {
-  const timestamp = value instanceof Date ? value.getTime() : Date.parse(clean(value));
-  return !Number.isFinite(timestamp)
-    || nowMs - timestamp >= LAST_SEEN_REFRESH_INTERVAL_MS;
-}
-
-async function findDeviceToken(
-  db: NotificationEventPrisma,
-  payload: NotificationEventRequest,
-  platform: MobilePlatform,
-  tokenHash: string | null,
-) {
-  if (tokenHash) {
-    const device = await db.deviceToken.findUnique({
-      select: deviceEventSelect,
-      where: { tokenHash },
-    });
-    if (device?.platform === platform) return device;
-  }
-
-  const deviceId = normalizeDeviceId(payload.deviceId);
-  if (!deviceId) return null;
-
-  const appId = requestAppId(payload) || normalizeAppId(payload.productAppId);
-  const packageName = normalizePackageName(payload.packageName);
-  const bundleId = normalizeBundleId(payload.bundleId);
-  const appIdentifier = platform === "android" && packageName
-    ? packageName
-    : platform === "ios" && bundleId
-      ? bundleId
-      : "";
-  const where: Prisma.DeviceTokenWhereInput = {
-    deviceId,
-    platform,
-  };
-
-  if (appIdentifier) {
-    where.appIdentifier = appIdentifier;
-  } else if (appId) {
-    where.OR = [{ appId }, { productAppId: appId }];
-  } else if (platform === "android" && packageName) {
-    where.packageName = packageName;
-  } else if (platform === "ios" && bundleId) {
-    where.bundleId = bundleId;
-  }
-
-  return db.deviceToken.findFirst({
-    orderBy: { lastSeenAt: "desc" },
-    select: deviceEventSelect,
-    where,
-  });
-}
-
-async function touchDeviceToken(
-  db: NotificationEventPrisma,
-  device: Prisma.DeviceTokenGetPayload<{ select: typeof deviceEventSelect }> | null,
-  locale: string,
-) {
-  if (!device?.id) return;
-
-  const nowMs = Date.now();
-  const data: Prisma.DeviceTokenUpdateInput = {};
-
-  if (isLastSeenStale(device.lastSeenAt, nowMs)) {
-    data.lastSeenAt = new Date(nowMs);
-  }
-
-  if (locale && locale !== clean(device.locale)) {
-    data.locale = locale;
-  }
-
-  if (!Object.keys(data).length) return;
-
-  data.updatedAt = new Date(nowMs);
-
-  await db.deviceToken.update({
-    data,
-    where: { id: device.id },
-  });
-}
-
 export async function handleNotificationEventRequest(
   payload: NotificationEventRequest,
   db: NotificationEventPrisma = notificationPrisma,
@@ -228,10 +121,14 @@ export async function handleNotificationEventRequest(
   const locale = requestLocale(payload);
   const eventType = normalizeEventType(payload.eventType ?? payload.action);
   const providerMessageId = clean(payload.providerMessageId) || clean(payload.messageId) || null;
+  const clientEventId = clean(payload.clientEventId);
   const notificationId = clean(payload.notificationJobId) || clean(payload.notificationId) || providerMessageId || appId || productAppId || packageName || bundleId;
 
   if (!notificationId) {
     throw badRequest("notification_id_or_app_identifier_required");
+  }
+  if (!clientEventId) {
+    throw badRequest("client_event_id_required");
   }
 
   const app = await resolveMobileAppConfig(
@@ -247,36 +144,33 @@ export async function handleNotificationEventRequest(
     },
     trackingDb,
   );
-  const fcmToken = clean(payload.fcmToken);
-  const tokenHash = fcmToken ? sha256Hex(fcmToken) : null;
-  const device = await findDeviceToken(db, payload, platform, tokenHash);
-  const deviceId = clean(device?.deviceId) || normalizeDeviceId(payload.deviceId) || null;
-
-  await touchDeviceToken(db, device, locale);
+  if (!app) throw badRequest("notification_app_mapping_not_found");
+  const localeCode = primaryLocaleCode(locale);
+  const topic = notificationTopicName(app.id, localeCode);
 
   const metadata = {
     ...objectMetadata(payload.metadata),
     appId: app?.appId ?? appId ?? null,
-    appIdentifier: appIdentifier || clean(device?.appIdentifier) || null,
-    appMappingId: app?.id ?? null,
-    appName: app?.appName ?? null,
+    appIdentifier: appIdentifier || null,
+    appMappingId: app.id,
+    appName: app.appName,
     appVersion: clean(payload.appVersion) || null,
-    bundleId: app?.bundleId ?? bundleId ?? null,
-    deviceType: deviceType || clean(device?.deviceType) || null,
-    deviceTokenId: clean(device?.id) || null,
-    locale: locale || clean(device?.locale) || null,
-    localeCode: primaryLocaleCode(locale || clean(device?.locale)),
+    bundleId: app.bundleId ?? bundleId ?? null,
+    clientEventId,
+    deviceType,
+    locale: locale || null,
+    localeCode,
     osVersion: clean(payload.osVersion) || null,
-    packageName: app?.packageName ?? packageName ?? null,
-    productAppId: productAppId || clean(device?.productAppId) || null,
-    source: "mobile",
-    tokenHash,
+    packageName: app.packageName ?? packageName ?? null,
+    productAppId: productAppId || null,
+    source: "mobile_topic",
+    topic,
   } satisfies Prisma.InputJsonObject;
 
   const event = await db.notificationEvent.create({
     data: {
-      deviceId,
-      deviceTokenId: clean(device?.id) || null,
+      deviceId: null,
+      deviceTokenId: null,
       eventType,
       jobId: uuidOrNull(payload.notificationJobId) || uuidOrNull(payload.notificationId),
       metadata,
@@ -284,22 +178,23 @@ export async function handleNotificationEventRequest(
       platform,
       providerMessageId,
       status: eventStatus(eventType),
-      targetType: "device",
-      targetValue: deviceId,
+      targetType: "topic",
+      targetValue: topic,
     },
   });
 
   return {
     ok: true,
     event,
-    matchedDevice: Boolean(device),
     normalized: {
-      appId: app?.appId ?? appId ?? null,
-      bundleId: app?.bundleId ?? bundleId ?? null,
-      deviceId,
-      locale: locale || clean(device?.locale) || null,
-      packageName: app?.packageName ?? packageName ?? null,
+      appId: app.appId ?? appId ?? null,
+      appMappingId: app.id,
+      bundleId: app.bundleId ?? bundleId ?? null,
+      clientEventId,
+      locale: locale || null,
+      packageName: app.packageName ?? packageName ?? null,
       platform,
+      topic,
     },
   };
 }

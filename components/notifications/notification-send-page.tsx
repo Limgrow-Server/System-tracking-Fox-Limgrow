@@ -68,7 +68,6 @@ export function NotificationSendPage({
   const [, setJobs] = useState(data.notificationJobs);
   const [, setEvents] = useState(data.notificationEvents);
   const [schedules, setSchedules] = useState(data.notificationSchedules);
-  const deviceCounts = data.notificationDeviceCounts;
   const [lastSendSummaries, setLastSendSummaries] = useState<AppSendSummary[]>([]);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
 
@@ -77,13 +76,9 @@ export function NotificationSendPage({
     () => platformApps.filter((app) => selectedAppIdSet.has(app.id)),
     [platformApps, selectedAppIdSet]
   );
-  const selectedTokenCount = useMemo(
-    () => selectedApps.reduce((total, app) => total + (deviceCounts[app.id] ?? 0), 0),
-    [deviceCounts, selectedApps]
-  );
   const enabledRows = localeRows.filter((row) => row.enabled);
+  const selectedTopicCount = selectedApps.length * enabledRows.length;
   const selectedReadyAppCount = selectedApps.filter((app) => matchingFirebaseCredentials(app, data.credentialSecrets).length).length;
-  const selectedAppsWithDevices = selectedApps.filter((app) => (deviceCounts[app.id] ?? 0) > 0).length;
   const selectedMissingConfigCount = Math.max(selectedApps.length - selectedReadyAppCount, 0);
   const selectedAppHasConfig = selectedApps.length > 0 && selectedMissingConfigCount === 0;
   const canTranslateContent =
@@ -140,24 +135,18 @@ export function NotificationSendPage({
     }));
   }
 
-  function activeTokenCountForApp(app: StoreMapping) {
-    return deviceCounts[app.id] ?? 0;
-  }
-
-  function buildPayloadForApp(app: StoreMapping, options?: { allowQueueByApp?: boolean }) {
+  function buildPayloadForApp(app: StoreMapping) {
     const deliveryRows = rowsForDelivery();
     validateMessageRows(deliveryRows);
-    const allowQueueByApp = options?.allowQueueByApp ?? true;
-    if (!activeTokenCountForApp(app)) throw new Error(`${app.app_name} does not have any active FCM token.`);
 
     const appIdentifier = appIdentifierForApp(app);
 
     return {
       appId: appIdentifier,
+      appMappingId: app.id,
       appName: app.app_name,
       bundleId: app.bundle_id,
       data: {},
-      deviceIds: [],
       notifications: deliveryRows.map((row) => ({
         message: row.message,
         title: row.title,
@@ -166,13 +155,10 @@ export function NotificationSendPage({
       packageName: app.package_name,
       platform: app.platform,
       productAppId: appIdentifier,
-      queueByApp: allowQueueByApp,
-      queueMode: allowQueueByApp ? "app" : undefined,
-      resolveByApp: true,
       storeAccountName: app.store_account_name,
       storePlatform: app.store_platform,
       storeProfileId: app.store_profile_id,
-      targetType: "device",
+      targetType: "topic",
       topicBase: topicBaseForApp(app),
     };
   }
@@ -299,7 +285,7 @@ export function NotificationSendPage({
           const response = await fetch("/api/admin/notifications/send", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(buildPayloadForApp(app, { allowQueueByApp: true })),
+            body: JSON.stringify(buildPayloadForApp(app)),
           });
           const payload = (await response.json()) as SendResponse;
           if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Send notification failed.");
@@ -310,7 +296,7 @@ export function NotificationSendPage({
           const sentCount = queued ? 0 : payload.result?.sentCount ?? results.filter((result) => result.ok).length;
           const errorCount = queued ? 0 : payload.result?.errorCount ?? results.filter((result) => !result.ok).length;
           const totalCount = queued
-            ? Number(payload.result?.targetCount ?? activeTokenCountForApp(app) ?? 0)
+            ? Number(payload.result?.targetCount ?? enabledRows.length)
             : Math.max(results.length, sentCount + errorCount);
           const resultJob = payload.result?.job;
 
@@ -357,7 +343,7 @@ export function NotificationSendPage({
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Send notification failed.";
-          const totalCount = Math.max(activeTokenCountForApp(app), 1);
+          const totalCount = Math.max(enabledRows.length, 1);
           summaries.push({
             appId: appIdentifierForApp(app),
             appName: app.app_name,
@@ -389,7 +375,7 @@ export function NotificationSendPage({
       const queuedApps = summaries.filter((summary) => summary.queued).length;
       const failedApps = summaries.filter((summary) => summary.errorCount > 0).length;
       if (queuedApps && !failedApps) {
-        void showToast("success", `Queued ${totalCount} target(s) across ${queuedApps} app(s).`);
+        void showToast("success", `Queued ${totalCount} locale topic(s) across ${queuedApps} app(s).`);
       } else if (failedApps) {
         void showToast("error", `Send finished with issues: ${sentCount}/${totalCount} target(s) sent, ${errorCount} failed.`);
       } else {
@@ -431,7 +417,7 @@ export function NotificationSendPage({
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              ...buildPayloadForApp(app, { allowQueueByApp: false }),
+              ...buildPayloadForApp(app),
               data: canAutoGenerateSchedule
                 ? {
                   [SCHEDULE_DATA_KEY]: {
@@ -494,7 +480,7 @@ export function NotificationSendPage({
       <PageHeader
         eyebrow="Messaging"
         title="Notification send"
-        description="Choose one or more mapped apps, then send now or save a schedule. Notifications are sent only to saved FCM tokens."
+        description="Choose one or more mapped apps, then publish now or save a schedule. Notifications are delivered only through versioned locale topics."
       />
 
       <section className="w-full min-w-0">
@@ -507,8 +493,6 @@ export function NotificationSendPage({
               <AppSelectionTable
                 apps={platformApps}
                 credentials={data.credentialSecrets}
-                deviceCounts={deviceCounts}
-                devices={[]}
                 fillHeight
                 schedules={schedules}
                 scheduleStats={data.notificationScheduleStats}
@@ -641,12 +625,12 @@ export function NotificationSendPage({
                   </div>
                   <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
                     <div className="rounded-md bg-muted/35 p-2">
-                      <div className="text-muted-foreground">Active tokens</div>
-                      <div className="mt-0.5 font-mono text-base font-semibold tabular-nums">{selectedTokenCount}</div>
+                      <div className="text-muted-foreground">Locale topics</div>
+                      <div className="mt-0.5 font-mono text-base font-semibold tabular-nums">{selectedTopicCount}</div>
                     </div>
                     <div className="rounded-md bg-muted/35 p-2">
-                      <div className="text-muted-foreground">With tokens</div>
-                      <div className="mt-0.5 font-mono text-base font-semibold tabular-nums">{selectedAppsWithDevices}/{selectedApps.length || 0}</div>
+                      <div className="text-muted-foreground">Selected apps</div>
+                      <div className="mt-0.5 font-mono text-base font-semibold tabular-nums">{selectedApps.length}</div>
                     </div>
                     <div className="rounded-md bg-muted/35 p-2">
                       <div className="text-muted-foreground">Config</div>
@@ -675,7 +659,7 @@ export function NotificationSendPage({
                   <Button
                     className="h-9 px-3 text-xs"
                     onClick={saveSchedule}
-                    disabled={pendingAction !== null || !selectedApps.length || !selectedTokenCount}
+                    disabled={pendingAction !== null || !selectedApps.length || !selectedTopicCount || !selectedAppHasConfig}
                   >
                     {pendingAction === "schedule" || pendingAction === "send" ? <Spinner /> : scheduleMode === "now" ? <Send size={16} /> : <Clock3 size={16} />}
                     {scheduleMode === "now" ? "Send" : "Save"}

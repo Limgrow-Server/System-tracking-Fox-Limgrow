@@ -7,6 +7,7 @@ import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
   deleteAndroidStoreMapping,
+  getAndroidStoreMappingFirebaseAnalyticsSecret,
   getAndroidStoreMappingId,
   getAndroidStoreMappings,
   getAndroidStoreMappingsPage,
@@ -29,6 +30,12 @@ function nullableText(value: unknown) {
   return cleaned || null;
 }
 
+function optionalSecretText(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.trim();
+  return cleaned || undefined;
+}
+
 const mappingStatusMap: Record<string, MappingStatus> = {
   active: MappingStatus.ACTIVE,
   inactive: MappingStatus.INACTIVE,
@@ -42,7 +49,14 @@ function normalizeAndroidMappingPayload(payload: StoreMappingPayload) {
     appLink: nullableText(payload.appLink),
     adjustAppToken: nullableText(payload.adjustAppToken),
     adjustEventToken: nullableText(payload.adjustEventToken),
+    adjustTrialStartedEventToken: nullableText(
+      payload.adjustTrialStartedEventToken,
+    ),
     appName: cleanText(payload.appName),
+    firebaseAnalyticsApiSecret: optionalSecretText(
+      payload.firebaseAnalyticsApiSecret,
+    ),
+    firebaseAppId: nullableText(payload.firebaseAppId),
     packageName: nullableText(payload.packageName),
     status: mappingStatusMap[cleanText(payload.status).toLowerCase()] ?? MappingStatus.ACTIVE,
     storeAccountName: cleanText(payload.storeAccountName),
@@ -121,13 +135,29 @@ export async function androidStoreMappingExists(id: string) {
   return Boolean(await getAndroidStoreMappingId(id));
 }
 
+export async function revealAndroidStoreMappingFirebaseAnalyticsSecret(id: string) {
+  const cleanedId = cleanText(id);
+  if (!cleanedId) throw badRequest("Mapping id is required.");
+
+  const mapping = await getAndroidStoreMappingFirebaseAnalyticsSecret(cleanedId);
+  if (!mapping) throw notFound("Android mapping was not found.");
+
+  return {
+    firebaseAnalyticsApiSecret: mapping.firebaseAnalyticsApiSecret ?? "",
+    id: mapping.id,
+  };
+}
+
 export async function saveAndroidStoreMappingDto(input: {
   appIconUrl: string | null;
   appLink: string | null;
   appId: string | null;
   adjustAppToken: string | null;
   adjustEventToken: string | null;
+  adjustTrialStartedEventToken: string | null;
   appName: string;
+  firebaseAnalyticsApiSecret?: string | null;
+  firebaseAppId: string | null;
   id?: string;
   packageName: string;
   status: MappingStatus;
@@ -175,7 +205,10 @@ export async function createAndroidStoreMapping(payload: StoreMappingPayload) {
       appId: row.appId,
       adjustAppToken: row.adjustAppToken,
       adjustEventToken: row.adjustEventToken,
+      adjustTrialStartedEventToken: row.adjustTrialStartedEventToken,
       appName: row.appName,
+      firebaseAnalyticsApiSecret: row.firebaseAnalyticsApiSecret ?? null,
+      firebaseAppId: row.firebaseAppId,
       packageName: row.packageName!,
       status: row.status,
       storeAccountName: row.storeAccountName,
@@ -209,7 +242,10 @@ export async function updateAndroidStoreMapping(payload: StoreMappingPayload) {
       appId: row.appId,
       adjustAppToken: row.adjustAppToken,
       adjustEventToken: row.adjustEventToken,
+      adjustTrialStartedEventToken: row.adjustTrialStartedEventToken,
       appName: row.appName,
+      firebaseAnalyticsApiSecret: row.firebaseAnalyticsApiSecret,
+      firebaseAppId: row.firebaseAppId,
       id,
       packageName: row.packageName!,
       status: row.status,
@@ -234,7 +270,12 @@ export async function deleteAndroidStoreMappingConfig(payload: StoreMappingPaylo
     throw notFound("Android mapping was not found.");
   }
 
-  await deleteAndroidStoreMappingById(id);
+  const result = await deleteAndroidStoreMappingById(id);
 
-  return { deleted: id, message: "Android app mapping deleted." };
+  return {
+    deleted: id,
+    message: result.archived
+      ? "Android app mapping archived; IAP financial history was preserved."
+      : "Android app mapping deleted.",
+  };
 }

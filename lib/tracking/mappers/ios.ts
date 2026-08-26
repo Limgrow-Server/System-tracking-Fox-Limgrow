@@ -1,13 +1,21 @@
 import { enumValue, iso } from "@/lib/tracking/mappers/shared";
 import type {
   CredentialSecretMetadata,
+  IapOutboundDeliveryDto,
   IosIapTwoHourCheck,
   IosIapTransactionSummary,
   StoreMapping,
 } from "@/lib/tracking/types";
 
-import type { IosCredential, IosIapTransaction, IosStoreMapping } from "@prisma/client";
-import type { IosIapTwoHourCheckRecord } from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
+import type {
+  IosCredential,
+  IosIapTransaction,
+  IosStoreMapping,
+} from "@prisma/client";
+import type {
+  IosIapDeliveryJobRecord,
+  IosIapTwoHourCheckRecord,
+} from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
 
 export type IosStoreMappingRecord = IosStoreMapping & {
   storeProfile?: { storeAccountName: string } | null;
@@ -134,12 +142,15 @@ function iosTrialConversionStatus(transaction: IosIapTransactionSummaryRecord) {
   return "not_converted" as const;
 }
 
-export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): StoreMapping {
+export function iosStoreMappingToTracking(
+  mapping: IosStoreMappingRecord,
+): StoreMapping {
   return {
     id: mapping.id,
     store_profile_id: mapping.storeProfileId,
     store_platform: "apple_app_store",
-    store_account_name: mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
+    store_account_name:
+      mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
     app_id: mapping.appId,
     app_name: mapping.appName,
     app_icon_url: mapping.appIconUrl,
@@ -153,20 +164,29 @@ export function iosStoreMappingToTracking(mapping: IosStoreMappingRecord): Store
     ),
     adjust_app_token: mapping.adjustAppToken,
     adjust_event_token: mapping.adjustEventToken,
+    adjust_trial_started_event_token: mapping.adjustTrialStartedEventToken,
     status: enumValue(mapping.status),
     created_at: mapping.createdAt.toISOString(),
     updated_at: mapping.updatedAt.toISOString(),
   };
 }
 
-export function iosCredentialToMetadata(credential: IosCredentialRecord): CredentialSecretMetadata {
+export function iosCredentialToMetadata(
+  credential: IosCredentialRecord,
+): CredentialSecretMetadata {
   return {
     id: credential.id,
     store_profile_id: credential.storeProfileId,
     credential_ref: credential.credentialRef,
-    credential_purpose: enumValue(credential.credentialPurpose) as CredentialSecretMetadata["credential_purpose"],
-    secret_type: enumValue(credential.secretType) as CredentialSecretMetadata["secret_type"],
-    secret_format: enumValue(credential.secretFormat) as CredentialSecretMetadata["secret_format"],
+    credential_purpose: enumValue(
+      credential.credentialPurpose,
+    ) as CredentialSecretMetadata["credential_purpose"],
+    secret_type: enumValue(
+      credential.secretType,
+    ) as CredentialSecretMetadata["secret_type"],
+    secret_format: enumValue(
+      credential.secretFormat,
+    ) as CredentialSecretMetadata["secret_format"],
     vault_secret_id: credential.vaultSecretId,
     vault_secret_name: credential.vaultSecretName,
     vault_secret_version: credential.vaultSecretVersion,
@@ -233,6 +253,7 @@ export function iosIapTransactionToSummary(
 
 export function iosIapTwoHourCheckToTracking(
   check: IosIapTwoHourCheckRecord,
+  deliveryJobs: IosIapDeliveryJobRecord[] = [],
 ): IosIapTwoHourCheck {
   return {
     id: check.id,
@@ -251,9 +272,41 @@ export function iosIapTwoHourCheckToTracking(
     renewal_status: check.renewalStatus,
     ga4_sent_at: iso(check.ga4SentAt),
     attempts: check.attempts,
+    deliveries: deliveryJobs.map(iosIapDeliveryJobToTracking),
     last_error: check.lastError,
     raw_context: check.rawContext,
     created_at: check.createdAt.toISOString(),
     updated_at: check.updatedAt.toISOString(),
+  };
+}
+
+function deliverySkipReason(result: unknown) {
+  const record = jsonRecord(result);
+  const provider = jsonRecord(record?.provider);
+  const reason = record?.reason ?? provider?.reason;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+}
+
+export function iosIapDeliveryJobToTracking(
+  job: IosIapDeliveryJobRecord,
+): IapOutboundDeliveryDto {
+  return {
+    attempts: job.deliveryAttempts,
+    deliveredAt: iso(job.deliveredAt),
+    deliveryAttempts: job.deliveryAttempts,
+    destination: job.destination,
+    error: job.lastError,
+    eventName: job.eventName,
+    id: job.id,
+    lastError: job.lastError,
+    maxAttempts: job.maxAttempts,
+    processingAt: iso(job.lockedAt),
+    publishAttempts: job.publishAttempts,
+    publishedAt: iso(job.publishedAt),
+    responseStatus: job.responseStatus,
+    sentAt: iso(job.deliveredAt),
+    skipReason: deliverySkipReason(job.result),
+    status: job.status,
+    updatedAt: job.updatedAt.toISOString(),
   };
 }

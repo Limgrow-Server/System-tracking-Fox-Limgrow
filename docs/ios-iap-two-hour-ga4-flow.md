@@ -96,12 +96,16 @@ Payload nên gửi để flow 2-hour GA4 chạy đầy đủ:
 | `appInstanceId` | Cần cho GA4 2-hour | Firebase Analytics app instance id; thiếu field này thì không schedule được GA4 2-hour |
 | `firebaseAppId` | Không bắt buộc | Firebase app id của app; nếu thiếu server resolve từ app mapping/global config |
 | `adjustAdid` | Nên có cho Adjust | Adjust device id lấy từ Adjust SDK, dùng để gửi Adjust S2S sau này |
+| `adid` | Không bắt buộc | Alias tương thích cũ của `adjustAdid`; nếu gửi cả hai thì server ưu tiên `adjustAdid` |
 | `idfa` | Không bắt buộc | iOS IDFA, chỉ có khi user ATT authorized |
 | `idfv` | Nên có cho iOS | iOS IDFV, dùng để đối chiếu thiết bị/app khi không có IDFA |
 | `userId` | Không bắt buộc | App user/account id để đối chiếu sau này |
 
 Mobile không cần gửi giá gói nếu transaction trong `ios_iap_transactions` đã có `revenue_micros`, `price_milliunits`, và `currency`.
-Ba field `adjustAdid`, `idfa`, `idfv` sẽ được lưu vào cả `ios_iap_transactions` và `ios_iap_two_hour_checks` để server có đủ dữ liệu bắn Adjust S2S sau mốc 2 giờ.
+Ba giá trị Adjust/IDFA/IDFV sẽ được lưu vào cả `ios_iap_transactions` và
+`ios_iap_two_hour_checks` để server có đủ dữ liệu bắn Adjust S2S sau mốc 2 giờ.
+Mobile nên dùng tên `adjustAdid`; tên `adid` được backend chấp nhận để không làm
+hỏng các bản app cũ.
 
 ## Server Lưu Gì Khi Verify
 
@@ -449,11 +453,10 @@ Kỳ vọng khi user đã cancel/disable/refund/revoke:
 | `IOS_IAP_2HOUR_GA4_VALIDATE_ONLY` | Dùng endpoint validate/debug của GA4 |
 | `IOS_IAP_2HOUR_GA4_SEND_PURCHASE_EVENT` | Bật/tắt event chuẩn `purchase`; mặc định true |
 | `IOS_IAP_2HOUR_GA4_EVENT_NAME` | Tên custom event, mặc định `purchase_2hour` |
-| `IOS_IAP_2HOUR_ADJUST_ENABLED` | Bật/tắt gửi Adjust S2S; mặc định true |
-| `IOS_IAP_2HOUR_ADJUST_AUTH_TOKEN` | Optional Bearer token nếu Adjust S2S Security đang bật |
+| `IOS_IAP_CONVERSION_ADJUST_ENABLED` | Bật/tắt Adjust `purchase` sau khi confirm paid; mặc định true |
+| `IOS_IAP_CONVERSION_ADJUST_AUTH_TOKEN` | Optional Bearer token nếu Adjust S2S Security đang bật |
 | `ADJUST_S2S_AUTH_TOKEN` | Fallback optional Bearer token |
-| `IOS_IAP_2HOUR_ADJUST_ENDPOINT` | Override endpoint Adjust khi cần test |
-| `IOS_IAP_2HOUR_ADJUST_STRICT` | Nếu true, lỗi Adjust làm check retry/failed; mặc định false |
+| `IOS_IAP_CONVERSION_ADJUST_ENDPOINT` | Override endpoint Adjust khi cần test |
 
 ## Kết Luận Nhanh
 
@@ -463,6 +466,6 @@ Flow chuẩn hiện tại:
 2. Server verify với Apple và lưu transaction.
 3. Server tạo pending check sau 2 giờ.
 4. Worker sau 2 giờ lấy evidence + giá từ `ios_iap_transactions`.
-5. Nếu còn renew hoặc không có cancel signal, server gửi `purchase_2hour`, `purchase`, và Adjust S2S nếu app mapping có đủ Adjust config.
-6. Nếu đã cancel/disable/refund/revoke, server không gửi GA4/Adjust và mark `raw_context.skipped=true`.
-7. Kiểm tra thành công bằng `responseStatus = 204`, `raw_context.ga4.eventNames`, `raw_context.adjust`, DB check status, server log, DebugView cho `purchase_2hour`, GA4 report cho `purchase`, và Adjust event report/callback.
+5. Nếu còn renew hoặc không có cancel signal, server chỉ chạy delivery GA4 của flow 2 giờ; không gửi Adjust ở mốc này.
+6. Nếu đã cancel/disable/refund/revoke, server không gửi GA4 và mark `raw_context.skipped=true`.
+7. Adjust chỉ nhận event `purchase` sau khi worker 3 ngày xác nhận có paid renewal thật; kiểm tra `raw_context.adjustPurchaseDelivery` và Adjust event report/callback.

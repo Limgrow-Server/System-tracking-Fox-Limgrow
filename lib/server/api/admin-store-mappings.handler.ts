@@ -11,6 +11,7 @@ import {
   createAndroidStoreMapping,
   deleteAndroidStoreMappingConfig,
   getAndroidStoreMappingPageResult,
+  revealAndroidStoreMappingFirebaseAnalyticsSecret,
   updateAndroidStoreMapping,
 } from "@/lib/server/services/store-mappings/android-store-mapping.service";
 import {
@@ -50,16 +51,16 @@ export async function handleAdminStoreMappingsGet(request: Request) {
     const platform = platformFromSearch(clean(url.searchParams.get("platform")));
 
     if (url.searchParams.get("reveal") === "firebaseAnalyticsApiSecret") {
-      if (platform !== "ios") {
-        throw badRequest("Firebase Analytics secret is only available for iOS mappings.");
-      }
-
       await assertCredentialSecretUnlocked(admin);
 
       return okJson(
-        await revealIosStoreMappingFirebaseAnalyticsSecret(
-          clean(url.searchParams.get("id")),
-        ),
+        platform === "android"
+          ? await revealAndroidStoreMappingFirebaseAnalyticsSecret(
+              clean(url.searchParams.get("id")),
+            )
+          : await revealIosStoreMappingFirebaseAnalyticsSecret(
+              clean(url.searchParams.get("id")),
+            ),
       );
     }
 

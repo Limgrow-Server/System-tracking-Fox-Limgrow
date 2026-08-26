@@ -35,6 +35,16 @@ import {
   TablePaginationFooter,
 } from "@/components/tracking/primitives";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -496,7 +506,7 @@ function SecretContentViewer({
     ? revealed
       ? "Hide key"
       : "Show key"
-    : "Load key from Vault";
+    : "Load encrypted key";
 
   async function fetchVaultSecret() {
     const params = new URLSearchParams({
@@ -518,7 +528,7 @@ function SecretContentViewer({
       !payload.ok ||
       typeof payload.secretText !== "string"
     ) {
-      throw new Error(payload.error ?? "Could not load Vault secret.");
+      throw new Error(payload.error ?? "Could not load encrypted key.");
     }
 
     onSecretLoaded(credential.id, payload.secretText);
@@ -541,7 +551,7 @@ function SecretContentViewer({
         await fetchVaultSecret();
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Could not load Vault secret.";
+          error instanceof Error ? error.message : "Could not load encrypted key.";
 
         if (!message.toLowerCase().includes("otp")) {
           throw error;
@@ -554,7 +564,7 @@ function SecretContentViewer({
       }
     } catch (error) {
       void showToast("error",
-        error instanceof Error ? error.message : "Could not load Vault secret.",
+        error instanceof Error ? error.message : "Could not load encrypted key.",
       );
     } finally {
       setPending(false);
@@ -1854,7 +1864,7 @@ export function CredentialConfigs({
     setSheetOpen(false);
     resetIosCredentialForm();
     setVaultSecretCache({});
-    void showToast("success", "iOS credential vault has been saved.");
+    void showToast("success", "iOS credential has been saved.");
     await loadCredentialPage(credentialPagination.page);
   }
 
@@ -2029,7 +2039,7 @@ export function CredentialConfigs({
       <PageHeader
         eyebrow={`Configs / ${platformLabel} / Credentials`}
         title={`${platformLabel} credential config`}
-        description={`Create ${platformLabel} provider credentials by store name, store secrets in Vault, then attach them to ${platformLabel} App Mapping.`}
+        description={`Create encrypted ${platformLabel} provider credentials by store name, then attach them to ${platformLabel} App Mapping.`}
         action={
           <Sheet open={sheetOpen} onOpenChange={handleSheetOpenChange}>
             <SheetTrigger asChild>
@@ -2046,6 +2056,9 @@ export function CredentialConfigs({
             >
               <SheetHeader className="border-b px-5 py-4">
                 <SheetTitle>Credential config form</SheetTitle>
+                <SheetDescription>
+                  Add or rotate an encrypted provider credential for this platform.
+                </SheetDescription>
               </SheetHeader>
 
               <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
@@ -2379,7 +2392,7 @@ export function CredentialConfigs({
                     <Alert className="border-amber-200 bg-amber-50 text-amber-900">
                       <AlertTitle>Delete impact</AlertTitle>
                       <AlertDescription className="text-amber-900">
-                        Deleting the credential revokes its Vault secret and may
+                        Deleting the credential revokes its encrypted key and may
                         remove readiness/runtime credentials from mappings that
                         still reference it.
                       </AlertDescription>
@@ -2398,7 +2411,7 @@ export function CredentialConfigs({
                       ? "Processing..."
                       : effectiveAction === "delete"
                         ? "Delete credential"
-                        : "Save Vault credential"}
+                        : "Save credential"}
                   </Button>
                 </form>
               </div>
@@ -2418,7 +2431,7 @@ export function CredentialConfigs({
           <SheetHeader className="border-b px-5 py-4">
             <SheetTitle>Credential config details</SheetTitle>
             <SheetDescription>
-              Config fields mirror the add form. Vault key content loads only
+              Config fields mirror the add form. Encrypted key content loads only
               when an Admin requests it.
             </SheetDescription>
           </SheetHeader>
@@ -2566,7 +2579,7 @@ export function CredentialConfigs({
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <AlertDialog
         open={Boolean(hardDeleteTarget)}
         onOpenChange={(open) => {
           if (!open && !pendingActionId) {
@@ -2575,15 +2588,15 @@ export function CredentialConfigs({
           }
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Hard delete credential config?</DialogTitle>
-            <DialogDescription>
-              This will delete the Vault secret and permanently delete the
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hard delete credential config?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will delete the encrypted key and permanently delete the
               credential record from the app database. To confirm, type the
               exact store name below.
-            </DialogDescription>
-          </DialogHeader>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
           <div className="grid gap-2">
             <Label htmlFor="hardDeleteConfirmationName">
               Type `{hardDeleteExpectedName}` to confirm
@@ -2600,10 +2613,8 @@ export function CredentialConfigs({
               data-1p-ignore="true"
             />
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
+          <AlertDialogFooter>
+            <AlertDialogCancel
               disabled={Boolean(pendingActionId)}
               onClick={() => {
                 setHardDeleteTarget(null);
@@ -2611,12 +2622,14 @@ export function CredentialConfigs({
               }}
             >
               Cancel
-            </Button>
-            <Button
-              type="button"
+            </AlertDialogCancel>
+            <AlertDialogAction
               variant="destructive"
               disabled={hardDeleteConfirmDisabled}
-              onClick={confirmHardDelete}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmHardDelete();
+              }}
             >
               {pendingActionId === hardDeleteTargetId ? (
                 <Spinner />
@@ -2624,10 +2637,10 @@ export function CredentialConfigs({
                 <Trash2 size={15} />
               )}
               Hard delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {isAndroidConfigCredentialView ? (
         <Card className="rounded-lg">
@@ -2654,13 +2667,12 @@ export function CredentialConfigs({
             </div>
           </CardHeader>
           <CardContent className="overflow-x-auto px-0">
-            <Table className="min-w-[1040px]">
+            <Table className="min-w-[900px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-4">Avatar</TableHead>
                   <TableHead>Store name</TableHead>
                   <TableHead>Service account JSON</TableHead>
-                  <TableHead>Vault</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Updated at</TableHead>
                   <TableHead className="w-[208px]">Action</TableHead>
@@ -2693,22 +2705,6 @@ export function CredentialConfigs({
                         </div>
                       </TableCell>
                       <TableCell>{keyPresence(secret)}</TableCell>
-                      <TableCell>
-                        {secret.vault_secret_name ? (
-                          <>
-                            <div className="max-w-[220px] truncate font-mono text-xs text-muted-foreground">
-                              {secret.vault_secret_name}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              v{secret.vault_secret_version}
-                            </div>
-                          </>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">
-                            N/A
-                          </span>
-                        )}
-                      </TableCell>
                       <TableCell>
                         <StatusBadge
                           status={displayCredentialStatus(secret.status)}
@@ -2845,7 +2841,7 @@ export function CredentialConfigs({
             </div>
           </CardHeader>
           <CardContent className="overflow-x-auto px-0">
-            <Table className="min-w-[1240px]">
+            <Table className="min-w-[1080px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-4">Avatar</TableHead>
@@ -2854,7 +2850,6 @@ export function CredentialConfigs({
                   <TableHead>Key IAP</TableHead>
                   <TableHead>Key Review</TableHead>
                   <TableHead>Key Firebase</TableHead>
-                  <TableHead>Vault</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Updated at</TableHead>
                   <TableHead className="w-[208px]">Action</TableHead>
@@ -2893,26 +2888,6 @@ export function CredentialConfigs({
                     <TableCell>{keyPresence(group.keyIap)}</TableCell>
                     <TableCell>{keyPresence(group.keyReview)}</TableCell>
                     <TableCell>{keyPresence(group.keyFirebase)}</TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        {group.credentials.length ? (
-                          group.credentials.slice(0, 3).map((credential) => (
-                            <div
-                              key={credential.id}
-                              className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
-                            >
-                              {credential.vault_secret_name
-                                ? `${credential.vault_secret_name} v${credential.vault_secret_version}`
-                                : "N/A"}
-                            </div>
-                          ))
-                        ) : (
-                          <span className="text-sm text-muted-foreground">
-                            N/A
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
                     <TableCell>
                       <StatusBadge status={credentialGroupStatus(group)} />
                     </TableCell>

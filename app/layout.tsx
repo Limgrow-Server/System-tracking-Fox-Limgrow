@@ -16,9 +16,17 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "LimGrow Tracking",
+  applicationName: "LimGrow Tracking",
+  title: {
+    default: "LimGrow Tracking",
+    template: "%s | LimGrow Tracking",
+  },
   description:
-    "Supabase-backed tracking for purchases, store credentials, and notifications",
+    "Operations console for mobile events, in-app purchases and Firebase topics",
+  robots: {
+    follow: false,
+    index: false,
+  },
 };
 
 export default function RootLayout({
