@@ -20,6 +20,7 @@ import {
   PanelLeftOpen,
   Settings2,
   Search,
+  Send,
   Smartphone,
   UserCog,
   UsersRound,
@@ -137,6 +138,32 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         href: "/events",
         icon: <ListChecks size={17} />,
         roles: ["Admin", "Dev", "Marketing"],
+      },
+      {
+        title: "Notifications",
+        href: "/notifications/send",
+        icon: <BellRing size={17} />,
+        roles: ["Admin"],
+        children: [
+          {
+            title: "Send by topic",
+            href: "/notifications/send",
+            icon: <Send size={15} />,
+            roles: ["Admin"],
+          },
+          {
+            title: "Schedules",
+            href: "/notifications/schedules",
+            icon: <BellRing size={15} />,
+            roles: ["Admin"],
+          },
+          {
+            title: "History",
+            href: "/notifications/history",
+            icon: <ListChecks size={15} />,
+            roles: ["Admin"],
+          },
+        ],
       },
       {
         title: "Event analytics",
