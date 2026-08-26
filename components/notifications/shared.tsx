@@ -272,7 +272,7 @@ function appInitial(value: string | null | undefined) {
 }
 
 export function topicBaseForApp(app: StoreMapping) {
-  return notificationTopicBase(app.id);
+  return notificationTopicBase(app.app_id);
 }
 
 export function appIdentifierForApp(app: StoreMapping) {

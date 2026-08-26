@@ -388,12 +388,13 @@ export async function enqueueNotificationTopicJob(
   const notifications = normalizedNotifications(payload.notifications);
   const firstNotification = primaryNotification(notifications);
   const appId = notificationAppId(payload);
+  const topicAppId = firstAppId(payload.appId, payload.productAppId);
   const appMappingId = clean(payload.appMappingId);
   const topicBase =
     topicSegment(payload.topicBase) ||
-    (appMappingId ? notificationTopicBase(appMappingId) : "");
+    (topicAppId ? notificationTopicBase(topicAppId) : "");
   if (!topicBase) {
-    throw badRequest("Topic queue requires an app mapping id or topic base.");
+    throw badRequest("Topic queue requires an app id or topic base.");
   }
 
   const targetValues = notifications.map((notification) =>
@@ -694,8 +695,8 @@ function edgePayloadFromJob(job: NotificationJob, batch: NotificationBatchRow) {
   if (job.targetType === "topic") {
     const topic = clean(batch.target_values[0]);
     const localeCode = canonicalNotificationLocale(
-      topic.startsWith(`${job.topicBase}-lang-`)
-        ? topic.slice(`${job.topicBase}-lang-`.length)
+      topic.startsWith(`${job.topicBase}-`)
+        ? topic.slice(`${job.topicBase}-`.length)
         : "en",
     );
     const notifications = (Array.isArray(job.localePayload)

@@ -145,8 +145,9 @@ export async function handleNotificationEventRequest(
     trackingDb,
   );
   if (!app) throw badRequest("notification_app_mapping_not_found");
+  if (!app.appId) throw badRequest("notification_app_id_required");
   const localeCode = primaryLocaleCode(locale);
-  const topic = notificationTopicName(app.id, localeCode);
+  const topic = notificationTopicName(app.appId, localeCode);
 
   const metadata = {
     ...objectMetadata(payload.metadata),

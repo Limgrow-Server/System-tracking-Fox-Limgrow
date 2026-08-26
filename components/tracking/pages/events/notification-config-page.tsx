@@ -71,15 +71,15 @@ const languageOptions = [
 
 let topicRowId = 0;
 
-function suggestedTopic(mappingId: string, language: string) {
-  return notificationTopicName(mappingId, language === "default" ? "en" : language);
+function suggestedTopic(appId: string, language: string) {
+  return notificationTopicName(appId, language === "default" ? "en" : language);
 }
 
-function initialRows(mappingId: string): TopicRow[] {
+function initialRows(appId: string): TopicRow[] {
   return ["default", "vi", "en"].map((language) => ({
     id: ++topicRowId,
     language,
-    topic: suggestedTopic(mappingId, language),
+    topic: suggestedTopic(appId, language),
   }));
 }
 
@@ -112,7 +112,7 @@ export function NotificationConfigPage({ apps }: { apps: AppConfigOption[] }) {
     setSelectedApp(app);
     setConfigState("loading");
     setEnabled(false);
-    setTopicRows(initialRows(app.mappingId));
+    setTopicRows(initialRows(app.appId));
     setFirebaseServiceAccount("");
     setHasFirebaseAccount(false);
 
@@ -152,7 +152,7 @@ export function NotificationConfigPage({ apps }: { apps: AppConfigOption[] }) {
       {
         id: ++topicRowId,
         language,
-        topic: suggestedTopic(selectedApp.mappingId, language),
+        topic: suggestedTopic(selectedApp.appId, language),
       },
     ]);
   }
@@ -301,8 +301,8 @@ export function NotificationConfigPage({ apps }: { apps: AppConfigOption[] }) {
                               language,
                               topic:
                                 selectedApp &&
-                                row.topic === suggestedTopic(selectedApp.mappingId, row.language)
-                                  ? suggestedTopic(selectedApp.mappingId, language)
+                                row.topic === suggestedTopic(selectedApp.appId, row.language)
+                                  ? suggestedTopic(selectedApp.appId, language)
                                   : row.topic,
                             });
                           }}
@@ -342,7 +342,7 @@ export function NotificationConfigPage({ apps }: { apps: AppConfigOption[] }) {
                             value={row.topic}
                             onChange={(event) => updateRow(row.id, { topic: event.target.value })}
                             className="pl-8 font-mono text-xs"
-                            placeholder={suggestedTopic(selectedApp.mappingId, row.language)}
+                            placeholder={suggestedTopic(selectedApp.appId, row.language)}
                             required={enabled}
                           />
                         </div>

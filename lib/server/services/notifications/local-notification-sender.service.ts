@@ -1296,6 +1296,8 @@ export async function sendNotificationPayloadLocal(
 ): Promise<LocalNotificationSendResult> {
   const platform = inferPlatform(payload);
   const appId = notificationAppId(payload);
+  const topicAppId =
+    normalizeAppId(payload.appId) || normalizeAppId(payload.productAppId);
   const targetType = normalizeTargetType(payload.targetType);
   const locales = normalizeLocaleNotifications(payload);
   const dataPayload = objectPayload(payload.data);
@@ -1310,8 +1312,8 @@ export async function sendNotificationPayloadLocal(
     : "device_id";
   const topicBase = topicSegment(
     clean(payload.topicBase) ||
-      (clean(payload.appMappingId)
-        ? notificationTopicBase(payload.appMappingId)
+      (topicAppId
+        ? notificationTopicBase(topicAppId)
         : "") ||
       appId ||
       clean(payload.appName) ||

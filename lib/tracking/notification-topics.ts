@@ -53,18 +53,18 @@ export function canonicalNotificationLocale(value: unknown) {
     : NOTIFICATION_TOPIC_FALLBACK_LOCALE;
 }
 
-export function notificationTopicBase(appMappingId: unknown) {
-  const mappingKey = notificationTopicSegment(appMappingId).toLowerCase();
-  if (!mappingKey) throw new Error("notification_app_mapping_id_required");
-  return `ntf-v${NOTIFICATION_TOPIC_SCHEMA_VERSION}-${mappingKey}`;
+export function notificationTopicBase(appId: unknown) {
+  const appKey = notificationTopicSegment(appId).toLowerCase();
+  if (!appKey) throw new Error("notification_app_id_required");
+  return appKey;
 }
 
-export function notificationTopicName(appMappingId: unknown, locale: unknown) {
-  return `${notificationTopicBase(appMappingId)}-lang-${canonicalNotificationLocale(locale)}`;
+export function notificationTopicName(appId: unknown, locale: unknown) {
+  return `${notificationTopicBase(appId)}-${canonicalNotificationLocale(locale)}`;
 }
 
 export function notificationTopicNameFromBase(topicBase: unknown, locale: unknown) {
   const base = notificationTopicSegment(topicBase);
   if (!base) throw new Error("notification_topic_base_required");
-  return `${base}-lang-${canonicalNotificationLocale(locale)}`;
+  return `${base}-${canonicalNotificationLocale(locale)}`;
 }
