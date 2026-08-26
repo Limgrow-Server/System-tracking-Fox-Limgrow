@@ -2,11 +2,13 @@ import "server-only";
 
 import { fetchSystemTrackingApi } from "@/lib/server-api";
 import type {
+  AndroidRtdnHistoryPageData,
   IapAppDetailPageData,
   IapRevenueGranularity,
 } from "@/lib/tracking/page-data";
 
 const IAP_TRANSACTION_PAGE_SIZE = 10;
+const ANDROID_RTDN_EVENT_PAGE_SIZE = 8;
 
 const EMPTY_METRICS: IapAppDetailPageData["metrics"] = {
   activeCount: 0,
@@ -20,6 +22,81 @@ const EMPTY_METRICS: IapAppDetailPageData["metrics"] = {
   totalCount: 0,
   totalRevenue: 0,
 };
+
+function unavailableAndroidRtdnHistory(
+  error: string | null = null,
+): AndroidRtdnHistoryPageData {
+  return {
+    available: false,
+    error,
+    events: [],
+    pagination: {
+      page: 1,
+      pageSize: ANDROID_RTDN_EVENT_PAGE_SIZE,
+      total: 0,
+      totalPages: 0,
+    },
+    summary: null,
+  };
+}
+
+async function loadAndroidRtdnHistory(
+  mappingId: string,
+): Promise<AndroidRtdnHistoryPageData> {
+  try {
+    const params = new URLSearchParams({
+      mappingId,
+      page: "1",
+      pageSize: String(ANDROID_RTDN_EVENT_PAGE_SIZE),
+    });
+    const response = await fetchSystemTrackingApi(
+      `/api/admin/android-iap/rtdn-events?${params.toString()}`,
+    );
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          data?: AndroidRtdnHistoryPageData["events"];
+          error?: string;
+          page?: number;
+          pageSize?: number;
+          success?: boolean;
+          summary?: AndroidRtdnHistoryPageData["summary"];
+          total?: number;
+          totalPages?: number;
+        }
+      | null;
+
+    if (
+      !response.ok ||
+      payload?.success === false ||
+      !Array.isArray(payload?.data)
+    ) {
+      return unavailableAndroidRtdnHistory(
+        response.status === 404
+          ? null
+          : payload?.error ?? "Android RTDN history is unavailable.",
+      );
+    }
+
+    return {
+      available: true,
+      error: null,
+      events: payload.data,
+      pagination: {
+        page: payload.page ?? 1,
+        pageSize: payload.pageSize ?? ANDROID_RTDN_EVENT_PAGE_SIZE,
+        total: payload.total ?? payload.data.length,
+        totalPages: payload.totalPages ?? (payload.data.length ? 1 : 0),
+      },
+      summary: payload.summary ?? null,
+    };
+  } catch (error) {
+    return unavailableAndroidRtdnHistory(
+      error instanceof Error
+        ? error.message
+        : "Android RTDN history is unavailable.",
+    );
+  }
+}
 
 type IapAppDetailOptions = {
   adjustStatus?: string;
@@ -52,22 +129,6 @@ function revenueGranularity(value: string | undefined): IapRevenueGranularity {
     : "month";
 }
 
-function todayInputDate(timeZone = "Asia/Ho_Chi_Minh") {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    day: "2-digit",
-    month: "2-digit",
-    timeZone,
-    year: "numeric",
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(
-    parts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
 export async function getIapAppDetailPageData(
   mappingId: string,
   platform: string,
@@ -77,12 +138,12 @@ export async function getIapAppDetailPageData(
   const adjustStatus = clean(options?.adjustStatus) || "all";
   const conversionStatus = clean(options?.conversionStatus) || "all";
   const state = clean(options?.state) || "all";
-  const kind = clean(options?.kind) || "all";
+  const requestedKind = clean(options?.kind) || "all";
+  const kind = requestedKind === "inapp" ? "product" : requestedKind;
   const environment = clean(options?.environment) || "production";
   const firebaseStatus = clean(options?.firebaseStatus) || "all";
-  const defaultPurchaseDate = todayInputDate();
-  const purchaseDateFrom = clean(options?.purchaseDateFrom) || defaultPurchaseDate;
-  const purchaseDateTo = clean(options?.purchaseDateTo) || defaultPurchaseDate;
+  const purchaseDateFrom = clean(options?.purchaseDateFrom);
+  const purchaseDateTo = clean(options?.purchaseDateTo);
   const selectedRevenueGranularity = revenueGranularity(
     options?.revenueGranularity,
   );
@@ -112,9 +173,14 @@ export async function getIapAppDetailPageData(
     twoHourStatus,
     trial,
   });
-  const response = await fetchSystemTrackingApi(
-    `/api/admin/iap/app-transactions?${params.toString()}`,
-  );
+  const [response, androidRtdnHistory] = await Promise.all([
+    fetchSystemTrackingApi(
+      `/api/admin/iap/app-transactions?${params.toString()}`,
+    ),
+    platform === "android"
+      ? loadAndroidRtdnHistory(mappingId)
+      : Promise.resolve(null),
+  ]);
   const payload = await response.json() as {
     app?: IapAppDetailPageData["app"];
     data?: IapAppDetailPageData["transactions"];
@@ -134,6 +200,7 @@ export async function getIapAppDetailPageData(
   }
 
   return {
+    androidRtdnHistory,
     app: payload.app,
     filters: {
       adjustStatus,

@@ -57,10 +57,28 @@ const iosIapRenewalEvidenceEventSelect = {
   status: true,
 } satisfies Prisma.IosIapNotificationEventSelect;
 
-export type IosIapTwoHourCheckRecord =
-  Prisma.IosIapTwoHourCheckGetPayload<{
-    select: typeof iosIapTwoHourCheckSelect;
-  }>;
+export type IosIapTwoHourCheckRecord = Prisma.IosIapTwoHourCheckGetPayload<{
+  select: typeof iosIapTwoHourCheckSelect;
+}>;
+
+export type IosIapDeliveryJobRecord = {
+  checkId: string;
+  deliveredAt: Date | null;
+  deliveryAttempts: number;
+  destination: string;
+  eventName: string;
+  id: string;
+  lastError: string | null;
+  lockedAt: Date | null;
+  maxAttempts: number;
+  publishAttempts: number;
+  publishedAt: Date | null;
+  responseStatus: number | null;
+  result: Prisma.JsonValue;
+  status: string;
+  transactionId: string;
+  updatedAt: Date;
+};
 
 export type IosIapRenewalEvidenceTransaction =
   Prisma.IosIapTransactionGetPayload<{
@@ -113,11 +131,42 @@ export function getIosIapTwoHourChecksForTransactions(
   });
 }
 
+export async function getIosIapDeliveryJobsForTransactions(
+  transactionIds: string[],
+) {
+  if (!transactionIds.length) return Promise.resolve([]);
+
+  return prisma.$queryRaw<IosIapDeliveryJobRecord[]>(Prisma.sql`
+    SELECT
+      id,
+      check_id AS "checkId",
+      transaction_id AS "transactionId",
+      destination,
+      event_name AS "eventName",
+      status,
+      published_at AS "publishedAt",
+      publish_attempts AS "publishAttempts",
+      delivery_attempts AS "deliveryAttempts",
+      max_attempts AS "maxAttempts",
+      locked_at AS "lockedAt",
+      response_status AS "responseStatus",
+      last_error AS "lastError",
+      result,
+      delivered_at AS "deliveredAt",
+      updated_at AS "updatedAt"
+    FROM public.iap_delivery_jobs
+    WHERE transaction_id IN (${Prisma.join(transactionIds)})
+    ORDER BY updated_at DESC
+  `);
+}
+
 export async function claimDueIosIapTwoHourChecks(input: {
   limit: number;
   maxAttempts: number;
 }) {
-  const rows = await prisma.$queryRaw<ClaimedIosIapTwoHourCheckRow[]>(Prisma.sql`
+  const rows = await prisma.$queryRaw<
+    ClaimedIosIapTwoHourCheckRow[]
+  >(Prisma.sql`
     WITH next_jobs AS (
       SELECT id
       FROM public.ios_iap_two_hour_checks

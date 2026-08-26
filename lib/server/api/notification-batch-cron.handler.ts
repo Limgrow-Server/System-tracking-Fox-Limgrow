@@ -2,6 +2,7 @@ import "server-only";
 
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import { runNotificationBatchQueue } from "@/lib/server/services/notifications/notification-batch-queue.service";
+import { dispatchDueNotificationsOnServer } from "@/lib/server/services/notifications/notification-dispatcher.service";
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -9,7 +10,7 @@ function clean(value: unknown) {
 
 function assertQueueCronSecret(request: Request) {
   const expected = clean(process.env.NOTIFICATION_DISPATCH_SECRET) || clean(process.env.NOTIFICATION_QUEUE_SECRET);
-  if (!expected) return;
+  if (!expected) throw new Error("notification_queue_secret_not_configured");
 
   const provided =
     clean(request.headers.get("x-dispatch-secret")) ||
@@ -29,8 +30,13 @@ function limitFromRequest(request: Request) {
 export async function handleNotificationBatchCronGet(request: Request) {
   try {
     assertQueueCronSecret(request);
+    const dispatched = await dispatchDueNotificationsOnServer({
+      actorEmail: clean(process.env.NOTIFICATION_SCHEDULER_ACTOR_EMAIL) || "notification-scheduler@system.local",
+      limit: limitFromRequest(request),
+    });
 
     return okJson({
+      dispatched,
       result: await runNotificationBatchQueue({ limit: limitFromRequest(request) }),
     });
   } catch (error) {

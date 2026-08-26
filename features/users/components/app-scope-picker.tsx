@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -331,6 +332,9 @@ export function AppScopePicker({
       <DialogContent className="max-h-[90svh] overflow-hidden p-0 sm:max-w-4xl">
         <DialogHeader className="border-b px-5 py-4">
           <DialogTitle>Assign apps</DialogTitle>
+          <DialogDescription>
+            Select the Android and iOS applications this member can access.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 overflow-y-auto px-5 py-4">

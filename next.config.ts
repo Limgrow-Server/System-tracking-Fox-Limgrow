@@ -6,6 +6,7 @@ const systemTrackingApiUrl =
   `http://127.0.0.1:${process.env.SYSTEM_TRACKING_API_PORT || "2156"}`;
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   turbopack: {
     root: process.cwd(),
   },

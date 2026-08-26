@@ -1,44 +1,55 @@
 model AndroidStoreProfile {
-  id               String                @id @default(uuid()) @db.Uuid
-  storeAccountName String                @unique @map("store_account_name")
-  linkStore        String?               @map("link_store")
-  avatarUrl        String?               @map("avatar_url")
-  contactEmail     String?               @map("contact_email")
-  supportPhone     String?               @map("support_phone")
-  websiteUrl       String?               @map("website_url")
-  status           MappingStatus         @default(ACTIVE)
-  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
-  mappings         AndroidStoreMapping[]
-  credentials      AndroidCredential[]
-  iapTransactions  IapAndroid[]
-  reviewTarget     ReviewStoreTarget?
+  id                 String                     @id @default(uuid()) @db.Uuid
+  storeAccountName   String                     @unique @map("store_account_name")
+  linkStore          String?                    @map("link_store")
+  avatarUrl          String?                    @map("avatar_url")
+  contactEmail       String?                    @map("contact_email")
+  supportPhone       String?                    @map("support_phone")
+  websiteUrl         String?                    @map("website_url")
+  status             MappingStatus              @default(ACTIVE)
+  createdAt          DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  mappings           AndroidStoreMapping[]
+  credentials        AndroidCredential[]
+  iapTransactions    IapAndroid[]
+  rtdnConfig         AndroidRtdnConfig?
+  rtdnEvents         AndroidIapRtdnEvent[]
+  iapOrders          AndroidIapOrder[]
+  iapLifecycleEvents AndroidIapLifecycleEvent[]
+  reviewTarget       ReviewStoreTarget?
 
   @@index([status, storeAccountName], map: "android_store_profiles_status_name_idx")
   @@map("android_store_profiles")
 }
 
 model AndroidStoreMapping {
-  id                  String                            @id @default(uuid()) @db.Uuid
-  storeProfileId      String                            @map("store_profile_id") @db.Uuid
-  storeAccountName    String                            @map("store_account_name")
-  appId               String?                           @map("app_id")
-  appName             String                            @map("app_name")
-  appIconUrl          String?                           @map("app_icon_url")
-  appLink             String?                           @map("app_link")
-  packageName         String                            @map("package_name")
-  adjustAppToken      String?                           @map("adjust_app_token")
-  adjustEventToken    String?                           @map("adjust_event_token")
-  status              MappingStatus                     @default(ACTIVE)
-  createdAt           DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime                          @updatedAt @map("updated_at") @db.Timestamptz(6)
-  storeProfile        AndroidStoreProfile               @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
-  reviews             AndroidStoreReview[]
-  reviewSyncState     AndroidStoreReviewSyncState?
-  reviewFetchRuns     AndroidStoreReviewFetchRun[]
-  reviewFetchSchedule AndroidStoreReviewFetchSchedule?
-  replyTemplates      AndroidStoreReviewReplyTemplate[]
-  reviewTarget        ReviewAppTarget?
+  id                         String                            @id @default(uuid()) @db.Uuid
+  storeProfileId             String                            @map("store_profile_id") @db.Uuid
+  storeAccountName           String                            @map("store_account_name")
+  appId                      String?                           @map("app_id")
+  appName                    String                            @map("app_name")
+  appIconUrl                 String?                           @map("app_icon_url")
+  appLink                    String?                           @map("app_link")
+  packageName                String                            @map("package_name")
+  firebaseAppId              String?                           @map("firebase_app_id")
+  firebaseAnalyticsApiSecret String?                           @map("firebase_analytics_api_secret") @db.Text
+  adjustAppToken             String?                           @map("adjust_app_token")
+  adjustEventToken           String?                           @map("adjust_event_token")
+  adjustTrialStartedEventToken String?                         @map("adjust_trial_started_event_token")
+  status                     MappingStatus                     @default(ACTIVE)
+  createdAt                  DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime                          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile               AndroidStoreProfile               @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+  reviews                    AndroidStoreReview[]
+  reviewSyncState            AndroidStoreReviewSyncState?
+  reviewFetchRuns            AndroidStoreReviewFetchRun[]
+  reviewFetchSchedule        AndroidStoreReviewFetchSchedule?
+  replyTemplates             AndroidStoreReviewReplyTemplate[]
+  reviewTarget               ReviewAppTarget?
+  iapTransactions            IapAndroid[]
+  rtdnEvents                 AndroidIapRtdnEvent[]
+  iapOrders                  AndroidIapOrder[]
+  iapLifecycleEvents         AndroidIapLifecycleEvent[]
 
   @@unique([storeProfileId, appName], map: "android_store_mappings_profile_app_name_key")
   @@unique([storeProfileId, appId], map: "android_store_mappings_profile_app_id_key")
@@ -222,32 +233,58 @@ model AndroidCredential {
 }
 
 model IapAndroid {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  storeProfileId      String?   @map("store_profile_id") @db.Uuid
-  packageName         String    @map("package_name")
-  productId           String    @map("product_id")
-  purchaseKind        String    @map("purchase_kind")
-  purchaseToken       String    @map("purchase_token")
-  orderId             String?   @map("order_id")
-  linkedPurchaseToken String?   @map("linked_purchase_token")
-  state               String
-  acknowledged        Boolean   @default(false)
-  consumed            Boolean?
-  autoRenewing        Boolean?  @map("auto_renewing")
-  purchaseDate        DateTime? @map("purchase_date") @db.Timestamptz(6)
-  expiresDate         DateTime? @map("expires_date") @db.Timestamptz(6)
-  revenueMicros       BigInt?   @map("revenue_micros")
-  currency            String?
-  regionCode          String?   @map("region_code")
-  basePlanId          String?   @map("base_plan_id")
-  offerId             String?   @map("offer_id")
-  isTestPurchase      Boolean   @default(false) @map("is_test_purchase")
-  rawReceipt          Json?     @map("raw_receipt")
-  verifiedAt          DateTime  @map("verified_at") @db.Timestamptz(6)
-  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id                        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storeProfileId            String?   @map("store_profile_id") @db.Uuid
+  storeMappingId            String?   @map("store_mapping_id") @db.Uuid
+  packageName               String    @map("package_name")
+  productId                 String    @map("product_id")
+  purchaseKind              String    @map("purchase_kind")
+  purchaseToken             String    @map("purchase_token")
+  orderId                   String?   @map("order_id")
+  linkedPurchaseToken       String?   @map("linked_purchase_token")
+  state                     String
+  acknowledged              Boolean   @default(false)
+  consumed                  Boolean?
+  autoRenewing              Boolean?  @map("auto_renewing")
+  purchaseDate              DateTime? @map("purchase_date") @db.Timestamptz(6)
+  expiresDate               DateTime? @map("expires_date") @db.Timestamptz(6)
+  revenueMicros             BigInt?   @map("revenue_micros")
+  currency                  String?
+  regionCode                String?   @map("region_code")
+  basePlanId                String?   @map("base_plan_id")
+  offerId                   String?   @map("offer_id")
+  currentOrderId            String?   @map("current_order_id")
+  offerPhase                String?   @map("offer_phase")
+  isTrial                   Boolean   @default(false) @map("is_trial")
+  trialStartedAt            DateTime? @map("trial_started_at") @db.Timestamptz(6)
+  trialEndsAt               DateTime? @map("trial_ends_at") @db.Timestamptz(6)
+  hadFreeTrial              Boolean   @default(false) @map("had_free_trial")
+  ingestionSource           String    @default("client") @map("ingestion_source")
+  externalAccountId         String?   @map("external_account_id")
+  externalProfileId         String?   @map("external_profile_id")
+  userId                    String?   @map("user_id")
+  appInstanceId             String?   @map("app_instance_id")
+  installationId            String?   @map("installation_id")
+  adjustAdid                String?   @map("adjust_adid")
+  gpsAdid                   String?   @map("gps_adid")
+  lastNotificationAt        DateTime? @map("last_notification_at") @db.Timestamptz(6)
+  lastRtdnEventId           String?   @map("last_rtdn_event_id") @db.Uuid
+  providerEtag              String?   @map("provider_etag")
+  lastProviderSyncAt        DateTime? @map("last_provider_sync_at") @db.Timestamptz(6)
+  entitlementActive         Boolean?  @map("entitlement_active")
+  supersededByPurchaseToken String?   @map("superseded_by_purchase_token")
+  isTestPurchase            Boolean   @default(false) @map("is_test_purchase")
+  rawReceipt                Json?     @map("raw_receipt")
+  verifiedAt                DateTime  @map("verified_at") @db.Timestamptz(6)
+  createdAt                 DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  storeProfile AndroidStoreProfile? @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
+  storeProfile    AndroidStoreProfile?       @relation(fields: [storeProfileId], references: [id], onDelete: SetNull)
+  storeMapping    AndroidStoreMapping?       @relation(fields: [storeMappingId], references: [id], onDelete: SetNull)
+  lineItems       AndroidIapLineItem[]
+  orders          AndroidIapOrder[]
+  rtdnEvents      AndroidIapRtdnEvent[]
+  lifecycleEvents AndroidIapLifecycleEvent[]
 
   @@unique([packageName, purchaseToken])
   @@index([packageName, productId])
@@ -255,5 +292,236 @@ model IapAndroid {
   @@index([packageName, storeProfileId, purchaseDate], map: "iap_android_package_profile_purchase_idx")
   @@index([state, purchaseDate])
   @@index([storeProfileId])
+  @@index([storeMappingId, lastNotificationAt(sort: Desc)], map: "iap_android_mapping_notification_idx")
+  @@index([currentOrderId], map: "iap_android_current_order_idx")
+  @@index([lastRtdnEventId], map: "iap_android_last_rtdn_event_idx")
   @@map("iap_android")
+}
+
+model AndroidRtdnConfig {
+  id                      String              @id @default(uuid()) @db.Uuid
+  storeProfileId          String              @unique @map("store_profile_id") @db.Uuid
+  projectId               String              @map("project_id")
+  topicName               String              @map("topic_name")
+  subscriptionName        String              @unique @map("subscription_name")
+  oidcAudience            String              @map("oidc_audience")
+  pushServiceAccountEmail String              @map("push_service_account_email")
+  enabled                 Boolean             @default(false)
+  createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile            AndroidStoreProfile @relation(fields: [storeProfileId], references: [id], onDelete: Cascade)
+
+  @@index([enabled, projectId], map: "android_rtdn_configs_enabled_project_idx")
+  @@index([oidcAudience, enabled], map: "android_rtdn_configs_audience_enabled_idx")
+  @@index([topicName], map: "android_rtdn_configs_topic_idx")
+  @@map("android_rtdn_configs")
+}
+
+model AndroidIapRtdnEvent {
+  id                          String                     @id @default(uuid()) @db.Uuid
+  storeProfileId              String                     @map("store_profile_id") @db.Uuid
+  storeMappingId              String?                    @map("store_mapping_id") @db.Uuid
+  purchaseId                  String?                    @map("purchase_id") @db.Uuid
+  topicName                   String                     @map("topic_name")
+  subscriptionName            String                     @map("subscription_name")
+  pubsubMessageId             String                     @map("pubsub_message_id")
+  publishTime                 DateTime?                  @map("publish_time") @db.Timestamptz(6)
+  deliveryAttempt             Int?                       @map("delivery_attempt")
+  packageName                 String?                    @map("package_name")
+  eventTime                   DateTime                   @map("event_time") @db.Timestamptz(6)
+  notificationKind            String                     @map("notification_kind")
+  source                      String                     @default("google_play_rtdn")
+  notificationType            Int?                       @map("notification_type")
+  notificationName            String?                    @map("notification_name")
+  purchaseToken               String?                    @map("purchase_token") @db.Text
+  pendingRefundTokenEncrypted Json?                      @map("pending_refund_token_encrypted")
+  productId                   String?                    @map("product_id")
+  orderId                     String?                    @map("order_id")
+  requiresAction              Boolean                    @default(false) @map("requires_action")
+  actionStatus                String?                    @map("action_status")
+  actionDueAt                 DateTime?                  @map("action_due_at") @db.Timestamptz(6)
+  status                      String                     @default("queued")
+  attemptCount                Int                        @default(0) @map("attempt_count")
+  maxAttempts                 Int                        @default(8) @map("max_attempts")
+  nextAttemptAt               DateTime                   @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  lockedAt                    DateTime?                  @map("locked_at") @db.Timestamptz(6)
+  lockedBy                    String?                    @map("locked_by")
+  lastError                   String?                    @map("last_error") @db.Text
+  rawPayload                  Json                       @map("raw_payload")
+  attributes                  Json                       @default("{}")
+  payloadSha256               String                     @map("payload_sha256")
+  receivedAt                  DateTime                   @default(now()) @map("received_at") @db.Timestamptz(6)
+  processedAt                 DateTime?                  @map("processed_at") @db.Timestamptz(6)
+  createdAt                   DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  storeProfile                AndroidStoreProfile        @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+  storeMapping                AndroidStoreMapping?       @relation(fields: [storeMappingId], references: [id], onDelete: Restrict)
+  purchase                    IapAndroid?                @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  queueOutbox                 AndroidIapQueueOutbox?
+  lifecycleEvents             AndroidIapLifecycleEvent[]
+
+  @@unique([topicName, pubsubMessageId], map: "android_iap_rtdn_events_topic_message_key")
+  @@index([status, nextAttemptAt, receivedAt], map: "android_iap_rtdn_events_status_due_idx")
+  @@index([packageName, eventTime(sort: Desc)], map: "android_iap_rtdn_events_package_event_idx")
+  @@index([purchaseToken], map: "android_iap_rtdn_events_purchase_token_idx")
+  @@index([orderId], map: "android_iap_rtdn_events_order_idx")
+  @@index([requiresAction, actionDueAt], map: "android_iap_rtdn_events_action_due_idx")
+  @@index([storeMappingId, receivedAt(sort: Desc)], map: "android_iap_rtdn_events_mapping_received_idx")
+  @@map("android_iap_rtdn_events")
+}
+
+model AndroidIapLineItem {
+  id                      String     @id @default(uuid()) @db.Uuid
+  purchaseId              String     @map("purchase_id") @db.Uuid
+  lineItemKey             String     @map("line_item_key")
+  productId               String     @map("product_id")
+  basePlanId              String?    @map("base_plan_id")
+  offerId                 String?    @map("offer_id")
+  purchaseOptionId        String?    @map("purchase_option_id")
+  planType                String?    @map("plan_type")
+  offerPhase              String?    @map("offer_phase")
+  expiryTime              DateTime?  @map("expiry_time") @db.Timestamptz(6)
+  latestSuccessfulOrderId String?    @map("latest_successful_order_id")
+  autoRenewEnabled        Boolean?   @map("auto_renew_enabled")
+  quantity                Int?
+  refundableQuantity      Int?       @map("refundable_quantity")
+  consumptionState        String?    @map("consumption_state")
+  rawLineItem             Json       @map("raw_line_item")
+  createdAt               DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  purchase                IapAndroid @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  @@unique([purchaseId, lineItemKey], map: "android_iap_line_items_purchase_key")
+  @@index([productId], map: "android_iap_line_items_product_idx")
+  @@index([latestSuccessfulOrderId], map: "android_iap_line_items_order_idx")
+  @@map("android_iap_line_items")
+}
+
+model AndroidIapOrder {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  purchaseId             String?                 @map("purchase_id") @db.Uuid
+  storeProfileId         String                  @map("store_profile_id") @db.Uuid
+  storeMappingId         String                  @map("store_mapping_id") @db.Uuid
+  packageName            String                  @map("package_name")
+  purchaseToken          String?                 @map("purchase_token") @db.Text
+  orderId                String                  @map("order_id")
+  productId              String?                 @map("product_id")
+  orderKind              String                  @map("order_kind")
+  classification         String?
+  offerPhase             String?                 @map("offer_phase")
+  state                  String
+  createdAtProvider      DateTime?               @map("created_at_provider") @db.Timestamptz(6)
+  processedAt            DateTime?               @map("processed_at") @db.Timestamptz(6)
+  refundedAt             DateTime?               @map("refunded_at") @db.Timestamptz(6)
+  lastEventAt            DateTime?               @map("last_event_at") @db.Timestamptz(6)
+  grossAmountMicros      BigInt?                 @map("gross_amount_micros")
+  taxMicros              BigInt?                 @map("tax_micros")
+  developerRevenueMicros BigInt?                 @map("developer_revenue_micros")
+  refundedAmountMicros   BigInt?                 @map("refunded_amount_micros")
+  currency               String?
+  quantity               Int?
+  refundedQuantity       Int?                    @map("refunded_quantity")
+  isTrial                Boolean                 @default(false) @map("is_trial")
+  rawOrder               Json                    @map("raw_order")
+  lastSyncedAt           DateTime                @map("last_synced_at") @db.Timestamptz(6)
+  createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  purchase               IapAndroid?             @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  storeProfile           AndroidStoreProfile     @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+  storeMapping           AndroidStoreMapping     @relation(fields: [storeMappingId], references: [id], onDelete: Restrict)
+  deliveryJobs           AndroidIapDeliveryJob[]
+
+  @@unique([packageName, orderId], map: "android_iap_orders_package_order_key")
+  @@index([purchaseId, createdAtProvider(sort: Desc)], map: "android_iap_orders_purchase_created_idx")
+  @@index([packageName, createdAtProvider(sort: Desc)], map: "android_iap_orders_package_created_idx")
+  @@index([state, lastEventAt], map: "android_iap_orders_state_event_idx")
+  @@map("android_iap_orders")
+}
+
+model AndroidIapLifecycleEvent {
+  id               String                  @id @default(uuid()) @db.Uuid
+  purchaseId       String?                 @map("purchase_id") @db.Uuid
+  rtdnEventId      String?                 @map("rtdn_event_id") @db.Uuid
+  storeProfileId   String                  @map("store_profile_id") @db.Uuid
+  storeMappingId   String                  @map("store_mapping_id") @db.Uuid
+  packageName      String                  @map("package_name")
+  eventKey         String                  @unique @map("event_key")
+  eventType        String                  @map("event_type")
+  notificationType Int?                    @map("notification_type")
+  orderId          String?                 @map("order_id")
+  occurredAt       DateTime                @map("occurred_at") @db.Timestamptz(6)
+  previousState    String?                 @map("previous_state")
+  newState         String?                 @map("new_state")
+  amountMicros     BigInt?                 @map("amount_micros")
+  currency         String?
+  payload          Json
+  createdAt        DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+  purchase         IapAndroid?             @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  rtdnEvent        AndroidIapRtdnEvent?    @relation(fields: [rtdnEventId], references: [id], onDelete: SetNull)
+  storeProfile     AndroidStoreProfile     @relation(fields: [storeProfileId], references: [id], onDelete: Restrict)
+  storeMapping     AndroidStoreMapping     @relation(fields: [storeMappingId], references: [id], onDelete: Restrict)
+  deliveryJobs     AndroidIapDeliveryJob[]
+
+  @@index([purchaseId, occurredAt(sort: Desc)], map: "android_iap_lifecycle_purchase_occurred_idx")
+  @@index([storeMappingId, occurredAt(sort: Desc)], map: "android_iap_lifecycle_mapping_occurred_idx")
+  @@index([eventType, occurredAt(sort: Desc)], map: "android_iap_lifecycle_type_occurred_idx")
+  @@index([rtdnEventId], map: "android_iap_lifecycle_rtdn_event_idx")
+  @@map("android_iap_lifecycle_events")
+}
+
+model AndroidIapQueueOutbox {
+  id              String              @id @default(uuid()) @db.Uuid
+  rtdnEventId     String              @unique @map("rtdn_event_id") @db.Uuid
+  messageType     String              @default("android-iap.reconcile.v1") @map("message_type")
+  dedupeKey       String              @unique @map("dedupe_key")
+  payload         Json
+  status          String              @default("pending")
+  availableAt     DateTime            @default(now()) @map("available_at") @db.Timestamptz(6)
+  publishedAt     DateTime?           @map("published_at") @db.Timestamptz(6)
+  publishAttempts Int                 @default(0) @map("publish_attempts")
+  lockedAt        DateTime?           @map("locked_at") @db.Timestamptz(6)
+  lockedBy        String?             @map("locked_by")
+  lastError       String?             @map("last_error") @db.Text
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  rtdnEvent       AndroidIapRtdnEvent @relation(fields: [rtdnEventId], references: [id], onDelete: Cascade)
+
+  @@index([status, availableAt, createdAt], map: "android_iap_queue_outbox_publish_due_idx")
+  @@index([lockedAt], map: "android_iap_queue_outbox_locked_idx")
+  @@map("android_iap_queue_outbox")
+}
+
+model AndroidIapDeliveryJob {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  lifecycleEventId   String                   @map("lifecycle_event_id") @db.Uuid
+  orderId            String?                  @map("order_id") @db.Uuid
+  destination        String
+  eventName          String                   @default("purchase") @map("event_name")
+  amountMicros       BigInt?                  @map("amount_micros")
+  currency           String?
+  purchaseOccurredAt DateTime?                @map("purchase_occurred_at") @db.Timestamptz(6)
+  status             String                   @default("pending")
+  availableAt        DateTime                 @default(now()) @map("available_at") @db.Timestamptz(6)
+  publishedAt        DateTime?                @map("published_at") @db.Timestamptz(6)
+  publishAttempts    Int                      @default(0) @map("publish_attempts")
+  deliveryAttempts   Int                      @default(0) @map("delivery_attempts")
+  maxAttempts        Int                      @default(5) @map("max_attempts")
+  lockedAt           DateTime?                @map("locked_at") @db.Timestamptz(6)
+  lockedBy           String?                  @map("locked_by")
+  responseStatus     Int?                     @map("response_status")
+  lastError          String?                  @map("last_error") @db.Text
+  result             Json                     @default("{}")
+  deliveredAt        DateTime?                @map("delivered_at") @db.Timestamptz(6)
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(6)
+  lifecycleEvent     AndroidIapLifecycleEvent @relation(fields: [lifecycleEventId], references: [id], onDelete: Cascade)
+  order              AndroidIapOrder?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([lifecycleEventId, destination, eventName], map: "android_iap_delivery_jobs_lifecycle_destination_event_key")
+  @@unique([orderId, destination, eventName], map: "android_iap_delivery_jobs_order_destination_event_key")
+  @@index([status, availableAt, createdAt], map: "android_iap_delivery_jobs_publish_due_idx")
+  @@index([orderId], map: "android_iap_delivery_jobs_order_idx")
+  @@index([lockedAt], map: "android_iap_delivery_jobs_locked_idx")
+  @@map("android_iap_delivery_jobs")
 }

@@ -3,6 +3,69 @@ export type NumberLike = number | string | null;
 export type StaffRole = "Admin" | "Dev" | "Marketing";
 export type Platform = "google_play" | "apple_app_store";
 
+export type IapOutboundDeliveryDto = {
+  id: string;
+  destination: "ga4" | "adjust" | string;
+  eventName: string | null;
+  status: string;
+  attempts?: number | null;
+  publishAttempts: number | null;
+  deliveryAttempts: number | null;
+  maxAttempts: number | null;
+  responseStatus: number | null;
+  error?: string | null;
+  lastError: string | null;
+  skipReason?: string | null;
+  publishedAt?: string | null;
+  processingAt?: string | null;
+  sentAt?: string | null;
+  deliveredAt: string | null;
+  updatedAt: string | null;
+};
+
+export type AndroidRtdnEventDto = {
+  actionDueAt: string | null;
+  actionOverdue: boolean;
+  actionStatus: string | null;
+  id: string;
+  messageId: string | null;
+  packageName: string | null;
+  category: string;
+  notificationType: number | null;
+  notificationTypeName: string | null;
+  purchaseToken: string | null;
+  productId: string | null;
+  orderId: string | null;
+  pendingRefundTokenStored: boolean;
+  eventTime: string | null;
+  status: string;
+  receivedAt: string;
+  processedAt: string | null;
+  errorMessage: string | null;
+  rawPayload: unknown | null;
+  requiresAction: boolean;
+};
+
+export type AndroidRtdnSummary = {
+  total?: number | null;
+  totalCount?: number | null;
+  received?: number | null;
+  receivedCount?: number | null;
+  processing?: number | null;
+  processingCount?: number | null;
+  processed?: number | null;
+  processedCount?: number | null;
+  ignored?: number | null;
+  ignoredCount?: number | null;
+  failed?: number | null;
+  failedCount?: number | null;
+  pendingActionCount?: number | null;
+  overdueActionCount?: number | null;
+  lastNotificationAt?: string | null;
+  lastReceivedAt?: string | null;
+  lastEventAt?: string | null;
+};
+
 export type BackgroundJob = {
   id: string;
   app_id: string | null;
@@ -60,6 +123,7 @@ export type StoreMapping = {
   firebase_analytics_api_secret_configured: boolean;
   adjust_app_token: string | null;
   adjust_event_token: string | null;
+  adjust_trial_started_event_token: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -71,10 +135,7 @@ export type CredentialSecretMetadata = {
   credential_ref: string;
   credential_purpose: "firebase_admin" | "review" | "iap" | null;
   secret_type:
-    | "firebase_service_account"
-    | "apple_asc_p8"
-    | "apple_iap_p8"
-    | null;
+    "firebase_service_account" | "apple_asc_p8" | "apple_iap_p8" | null;
   secret_format: "json" | "p8" | null;
   vault_secret_id: string | null;
   vault_secret_name: string | null;
@@ -143,7 +204,7 @@ export type IosIapTwoHourCheck = {
   bundle_id: string;
   product_id: string;
   environment: string;
-  app_instance_id: string;
+  app_instance_id: string | null;
   firebase_app_id: string | null;
   ga4_event_name: string;
   check_at: string;
@@ -152,6 +213,7 @@ export type IosIapTwoHourCheck = {
   renewal_status: string | null;
   ga4_sent_at: string | null;
   attempts: number;
+  deliveries: IapOutboundDeliveryDto[];
   last_error: string | null;
   raw_context: unknown;
   created_at: string;

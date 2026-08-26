@@ -5,6 +5,11 @@ import { randomUUID } from "crypto";
 import type { BackgroundJobStatus, NotificationJob, Prisma } from "@prisma/client";
 
 import { firstAppId } from "@/lib/tracking/identity";
+import {
+  canonicalNotificationLocale,
+  notificationTopicBase,
+  notificationTopicNameFromBase,
+} from "@/lib/tracking/notification-topics";
 import { notificationPrisma as prisma } from "@/lib/prisma";
 import { badRequest } from "@/lib/server/api/errors";
 import {
@@ -143,18 +148,24 @@ function topicSegment(value: unknown) {
 
 function normalizedNotifications(value: unknown): LocaleNotification[] {
   const rows = Array.isArray(value) ? value : [];
-  const notifications = rows
+  const normalizedRows = rows
     .map((row) => {
       const record = row as Record<string, unknown>;
       return {
         enabled: record.enabled !== false,
         message: clean(record.message),
         title: clean(record.title),
-        topicCode: topicSegment(record.topicCode || record.languageCode).toLowerCase(),
+        topicCode: canonicalNotificationLocale(record.topicCode || record.languageCode),
       };
     })
     .filter((row) => row.enabled && row.title && row.message && row.topicCode)
     .map(({ message, title, topicCode }) => ({ message, title, topicCode }));
+  const notifications = Array.from(
+    normalizedRows.reduce<Map<string, LocaleNotification>>((items, row) => {
+      if (!items.has(row.topicCode)) items.set(row.topicCode, row);
+      return items;
+    }, new Map()).values(),
+  );
 
   if (!notifications.length) {
     throw badRequest("At least one notification language is required.");
@@ -366,6 +377,93 @@ export async function enqueueNotificationDeviceJob(
     job,
     queued: true,
     targetCount: deviceIds.length || null,
+  };
+}
+
+export async function enqueueNotificationTopicJob(
+  payload: Record<string, unknown>,
+  actor: QueueActor,
+) {
+  const normalizedActor = normalizeActor(actor);
+  const notifications = normalizedNotifications(payload.notifications);
+  const firstNotification = primaryNotification(notifications);
+  const appId = notificationAppId(payload);
+  const appMappingId = clean(payload.appMappingId);
+  const topicBase =
+    topicSegment(payload.topicBase) ||
+    (appMappingId ? notificationTopicBase(appMappingId) : "");
+  if (!topicBase) {
+    throw badRequest("Topic queue requires an app mapping id or topic base.");
+  }
+
+  const targetValues = notifications.map((notification) =>
+    notificationTopicNameFromBase(topicBase, notification.topicCode),
+  );
+  const job = await prisma.notificationJob.create({
+    data: {
+      appId,
+      appMappingId: appMappingId || null,
+      appName: clean(payload.appName) || clean(payload.productAppId) || "unknown_app",
+      bundleId: clean(payload.bundleId) || null,
+      credentialRef: clean(payload.credentialRef) || null,
+      dataPayload: jsonObject(payload.data) as Prisma.InputJsonValue,
+      imageUrl: clean(payload.imageUrl) || null,
+      localePayload: notifications as Prisma.InputJsonValue,
+      message: firstNotification.message,
+      packageName: clean(payload.packageName) || null,
+      platform: clean(payload.platform) || "android",
+      requestedBy: normalizedActor.email,
+      scheduleId: clean(payload.scheduleId) || null,
+      status: "queued",
+      storeAccountName: clean(payload.storeAccountName) || null,
+      storePlatform: clean(payload.storePlatform) || null,
+      storeProfileId: clean(payload.storeProfileId) || null,
+      targetType: "topic",
+      targetValues,
+      title: firstNotification.title,
+      topicBase,
+    },
+  });
+
+  await createBatchRows({
+    jobId: job.id,
+    rows: targetValues.map((topic, batchIndex) => ({
+      batchIndex,
+      targetValues: [topic],
+    })),
+  });
+
+  const backgroundJob = normalizedActor.memberId
+    ? await createBackgroundJob({
+        appId,
+        appName: job.appName,
+        createdBy: normalizedActor.email,
+        description: `${targetValues.length} locale topic(s) will be published in the background.`,
+        memberId: normalizedActor.memberId,
+        metadata: {
+          notificationJobId: job.id,
+          topicBase,
+          topicCount: targetValues.length,
+        },
+        platform: job.platform,
+        progressTotal: targetValues.length,
+        sourceJobId: job.id,
+        status: "QUEUED",
+        storeAccountName: job.storeAccountName,
+        title: `Publish notification topics · ${job.appName}`,
+        type: "NOTIFICATION_SEND",
+      })
+    : null;
+
+  return {
+    backgroundJob,
+    batchCount: targetValues.length,
+    batchSize: 1,
+    job,
+    queued: true,
+    targetCount: targetValues.length,
+    targetType: "topic" as const,
+    topics: targetValues,
   };
 }
 
@@ -593,6 +691,48 @@ async function recoverStaleNotificationBatches(now: Date) {
 
 function edgePayloadFromJob(job: NotificationJob, batch: NotificationBatchRow) {
   const dataPayload = jsonObject(job.dataPayload);
+  if (job.targetType === "topic") {
+    const topic = clean(batch.target_values[0]);
+    const localeCode = canonicalNotificationLocale(
+      topic.startsWith(`${job.topicBase}-lang-`)
+        ? topic.slice(`${job.topicBase}-lang-`.length)
+        : "en",
+    );
+    const notifications = (Array.isArray(job.localePayload)
+      ? job.localePayload
+      : []
+    ).filter((item) => {
+      const row = item as Record<string, unknown>;
+      return canonicalNotificationLocale(row.topicCode) === localeCode;
+    });
+    if (!topic || notifications.length !== 1) {
+      throw new Error("Topic batch must contain exactly one topic and locale payload.");
+    }
+
+    return {
+      appId: job.appId,
+      appMappingId: job.appMappingId,
+      appName: job.appName,
+      bundleId: job.bundleId,
+      credentialRef: job.credentialRef,
+      data: dataPayload,
+      imageUrl: job.imageUrl,
+      jobId: job.id,
+      notifications,
+      packageName: job.packageName,
+      platform: job.platform,
+      productAppId: job.appId,
+      queuedBatchId: batch.id,
+      scheduleId: job.scheduleId,
+      storeAccountName: job.storeAccountName,
+      storePlatform: job.storePlatform,
+      storeProfileId: job.storeProfileId,
+      targetType: "topic",
+      topic,
+      topicBase: job.topicBase,
+      topicCode: localeCode,
+    };
+  }
   const targetKind = clean(dataPayload[QUEUE_TARGET_KIND_KEY]) === "device_token_id"
     ? "device_token_id"
     : "device_id";
@@ -652,6 +792,17 @@ function compactResultPayload(result: EdgeFunctionResult) {
 
 async function callSendNotificationBatch(job: NotificationJob, batch: NotificationBatchRow) {
   return sendNotificationPayloadLocal(edgePayloadFromJob(job, batch));
+}
+
+function shouldRetryNotificationResult(result: EdgeFunctionResult) {
+  if (Number(result.sentCount ?? 0) > 0 || Number(result.errorCount ?? 0) <= 0) {
+    return false;
+  }
+
+  return (result.results ?? []).some((item) => {
+    const status = Number(item.status ?? 0);
+    return status === 408 || status === 429 || status >= 500;
+  });
 }
 
 async function updateParentJobAggregate(jobId: string) {
@@ -729,9 +880,6 @@ export async function pauseNotificationQueueJob(jobId: string) {
     select: { id: true, status: true, targetType: true },
   });
   if (!job) throw badRequest("Notification job was not found.");
-  if (job.targetType !== "device") {
-    throw badRequest("Only device notification jobs can be paused.");
-  }
   if (["sent", "sent_with_issues", "failed"].includes(job.status)) {
     throw badRequest("Finished notification jobs cannot be paused.");
   }
@@ -780,9 +928,6 @@ export async function resumeNotificationQueueJob(jobId: string) {
     select: { id: true, status: true, targetType: true },
   });
   if (!job) throw badRequest("Notification job was not found.");
-  if (job.targetType !== "device") {
-    throw badRequest("Only device notification jobs can be resumed.");
-  }
   if (job.status !== "paused") {
     throw badRequest("Only paused notification jobs can be resumed.");
   }
@@ -920,6 +1065,9 @@ async function processNotificationBatch(
 
   try {
     const result = await callSendNotificationBatch(job, batch);
+    if (shouldRetryNotificationResult(result)) {
+      throw new Error("Transient FCM topic delivery failure.");
+    }
     await finishBatchSuccess(batch, result, options);
     return {
       batchId: batch.id,

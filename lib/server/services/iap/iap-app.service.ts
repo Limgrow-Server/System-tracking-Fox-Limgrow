@@ -20,6 +20,10 @@ import {
   getIosTransactionsListPageByMappingId,
 } from "@/lib/server/repositories/iap/iap-app.repository";
 import {
+  getIosIapDeliveryJobsForTransactions,
+  type IosIapTwoHourCheckRecord,
+} from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
+import {
   paginatedResult,
   type PaginatedResult,
   type PaginationQuery,
@@ -270,6 +274,24 @@ function emptyIapAppMetrics(): IapAppMetrics {
   };
 }
 
+async function mapIosTwoHourChecksWithDeliveries(
+  checks: IosIapTwoHourCheckRecord[],
+) {
+  const jobs = await getIosIapDeliveryJobsForTransactions(
+    checks.map((check) => check.transactionId),
+  );
+  const jobsByCheckId = new Map<string, typeof jobs>();
+  for (const job of jobs) {
+    const current = jobsByCheckId.get(job.checkId) ?? [];
+    current.push(job);
+    jobsByCheckId.set(job.checkId, current);
+  }
+
+  return checks.map((check) =>
+    iosIapTwoHourCheckToTracking(check, jobsByCheckId.get(check.id) ?? []),
+  );
+}
+
 export async function getIapAppTransactionsPage(
   mappingId: string,
   platform: string,
@@ -389,7 +411,7 @@ export async function getIapAppTransactionsPage(
           total ?? fallbackTotal,
           options,
         ),
-        twoHourChecks: twoHourChecks.map(iosIapTwoHourCheckToTracking),
+        twoHourChecks: await mapIosTwoHourChecksWithDeliveries(twoHourChecks),
       };
     }
 
@@ -423,20 +445,19 @@ export async function getIapAppTransactionsPage(
       { total, transactions: rawTransactions, twoHourChecks },
       metrics,
       transactionStates,
-    ] =
-      await Promise.all([
-        loadTransactionPage(),
-        getIosTransactionsByBundleIdMetrics(
-          mapping.bundleId,
-          mapping.storeProfileId,
-          scopedOptions,
-        ),
-        getIosTransactionStatesByBundleId(
-          mapping.bundleId,
-          mapping.storeProfileId,
-          scopedOptions,
-        ),
-      ]);
+    ] = await Promise.all([
+      loadTransactionPage(),
+      getIosTransactionsByBundleIdMetrics(
+        mapping.bundleId,
+        mapping.storeProfileId,
+        scopedOptions,
+      ),
+      getIosTransactionStatesByBundleId(
+        mapping.bundleId,
+        mapping.storeProfileId,
+        scopedOptions,
+      ),
+    ]);
 
     return {
       appCard,
@@ -449,7 +470,7 @@ export async function getIapAppTransactionsPage(
         total ?? 0,
         options,
       ),
-      twoHourChecks: twoHourChecks.map(iosIapTwoHourCheckToTracking),
+      twoHourChecks: await mapIosTwoHourChecksWithDeliveries(twoHourChecks),
     };
   }
 
@@ -644,7 +665,7 @@ export async function getIapAppDetail(
           total ?? 0,
           options,
         ),
-        twoHourChecks: twoHourChecks.map(iosIapTwoHourCheckToTracking),
+        twoHourChecks: await mapIosTwoHourChecksWithDeliveries(twoHourChecks),
       };
     }
 
@@ -679,11 +700,7 @@ export async function getIapAppDetail(
             mapping.storeProfileId,
           );
     const [
-      {
-        total,
-        transactions: rawTransactions,
-        twoHourChecks,
-      },
+      { total, transactions: rawTransactions, twoHourChecks },
       metrics,
       transactionStates,
       trialAnalytics,
@@ -714,7 +731,7 @@ export async function getIapAppDetail(
         total ?? 0,
         options,
       ),
-      twoHourChecks: twoHourChecks.map(iosIapTwoHourCheckToTracking),
+      twoHourChecks: await mapIosTwoHourChecksWithDeliveries(twoHourChecks),
     };
   }
 

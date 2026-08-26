@@ -4,7 +4,8 @@ import { randomUUID } from "crypto";
 import type { NotificationSchedule, Prisma } from "@prisma/client";
 
 import { notificationPrisma as prisma } from "@/lib/prisma";
-import { sendNotificationPayloadLocal, type LocaleNotificationInput, type SendNotificationRequest } from "@/lib/server/services/notifications/local-notification-sender.service";
+import type { LocaleNotificationInput, SendNotificationRequest } from "@/lib/server/services/notifications/local-notification-sender.service";
+import { enqueueNotificationTopicJob } from "@/lib/server/services/notifications/notification-batch-queue.service";
 
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
@@ -23,11 +24,12 @@ const LANGUAGES = [
   { topicCode: "en", label: "English" },
   { topicCode: "pt", label: "Portuguese" },
   { topicCode: "sw", label: "Swahili" },
-  { topicCode: "in", label: "Indonesian" },
+  { topicCode: "id", label: "Indonesian" },
   { topicCode: "it", label: "Italian" },
   { topicCode: "ja", label: "Japanese" },
   { topicCode: "de", label: "German" },
   { topicCode: "pa", label: "Punjabi" },
+  { topicCode: "vi", label: "Vietnamese" },
 ] as const;
 
 const FALLBACK_TEMPLATES = [
@@ -221,11 +223,11 @@ function scheduleDeliveryData(row: NotificationSchedule) {
 function scheduleToPayload(row: NotificationSchedule): SendNotificationRequest {
   return {
     appId: clean(row.appId) || clean(row.appName),
+    appMappingId: row.appMappingId,
     appName: clean(row.appName),
     bundleId: row.bundleId,
     credentialRef: row.credentialRef,
     data: scheduleDeliveryData(row),
-    deviceIds: row.targetValues,
     imageUrl: row.imageUrl,
     notifications: Array.isArray(row.localePayload) ? row.localePayload : [],
     packageName: row.packageName,
@@ -234,7 +236,7 @@ function scheduleToPayload(row: NotificationSchedule): SendNotificationRequest {
     scheduleId: row.id,
     storeAccountName: row.storeAccountName,
     storeProfileId: row.storeProfileId,
-    targetType: clean(row.targetType) === "device" ? "device" : "topic",
+    targetType: "topic",
     topicBase: clean(row.topicBase),
   };
 }
@@ -348,9 +350,21 @@ export async function dispatchDueNotificationsOnServer(input: {
 }) {
   const now = input.now ? new Date(input.now) : new Date();
   const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
+  await prisma.notificationSchedule.updateMany({
+    where: {
+      status: "dispatching",
+      updatedAt: { lt: new Date(now.getTime() - 10 * 60_000) },
+    },
+    data: {
+      lastError: "Recovered a stale schedule dispatch lock.",
+      lastStatus: "retrying",
+      status: "active",
+      updatedAt: new Date(),
+    },
+  });
   const schedules = await prisma.notificationSchedule.findMany({
     where: clean(input.scheduleId)
-      ? { id: clean(input.scheduleId) }
+      ? { id: clean(input.scheduleId), status: "active" }
       : { nextRunAt: { lte: now }, status: "active" },
     orderBy: { nextRunAt: "asc" },
     take: limit,
@@ -358,59 +372,71 @@ export async function dispatchDueNotificationsOnServer(input: {
   const dispatched = [];
 
   for (const schedule of schedules) {
-    const prepared = await prepareSchedulePayload(schedule, scheduleToPayload(schedule), now);
-    const result = await sendNotificationPayloadLocal(prepared.payload, input.actorEmail);
-    const hasErrors = Number(result.errorCount ?? 0) > 0;
-    const hasSent = Number(result.sentCount ?? 0) > 0;
-    const failed = hasErrors && !hasSent;
+    const claim = await prisma.notificationSchedule.updateMany({
+      where: { id: schedule.id, status: "active" },
+      data: { lastStatus: "dispatching", status: "dispatching", updatedAt: new Date() },
+    });
+    if (!claim.count) continue;
 
-    if (hasErrors) {
-      console.error("[notification-dispatcher] scheduled notification completed with failed targets", {
-        errorCount: result.errorCount,
-        firstError: result.results.find((item) => !item.ok)?.error ?? null,
-        jobId: result.job?.id ?? null,
+    try {
+      const prepared = await prepareSchedulePayload(schedule, scheduleToPayload(schedule), now);
+      const result = await enqueueNotificationTopicJob(
+        { ...prepared.payload, targetType: "topic" },
+        input.actorEmail,
+      );
+      const nextRunAt = nextRunAfter(schedule, now);
+      const nextStatus = schedule.scheduleType === "once" ? "completed" : "active";
+      const primaryGenerated = prepared.generatedNotifications
+        ? primaryGeneratedNotification(prepared.generatedNotifications)
+        : null;
+      const updatePayload: Prisma.NotificationScheduleUpdateInput = {
+        lastError: null,
+        lastRunAt: now,
+        lastStatus: "queued",
+        nextRunAt,
+        runCount: schedule.runCount + 1,
+        status: nextStatus,
+        updatedAt: new Date(),
+      };
+
+      if (prepared.generatedNotifications) {
+        updatePayload.localePayload = prepared.generatedNotifications as unknown as Prisma.InputJsonValue;
+        updatePayload.message = clean(primaryGenerated?.message) || null;
+        updatePayload.title = clean(primaryGenerated?.title) || null;
+      }
+
+      await prisma.notificationSchedule.update({
+        where: { id: schedule.id },
+        data: updatePayload,
+      });
+      dispatched.push({
+        errorCount: 0,
+        job: result.job,
         scheduleId: schedule.id,
-        sentCount: result.sentCount,
+        sentCount: 0,
+        status: "queued",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await prisma.notificationSchedule.update({
+        where: { id: schedule.id },
+        data: {
+          lastError: message.slice(0, 1000),
+          lastStatus: "failed",
+          nextRunAt: new Date(now.getTime() + 60_000),
+          status: "active",
+          updatedAt: new Date(),
+        },
+      });
+      dispatched.push({
+        error: message,
+        errorCount: 1,
+        job: null,
+        scheduleId: schedule.id,
+        sentCount: 0,
+        status: "failed",
       });
     }
-
-    const nextRunAt = nextRunAfter(schedule, now);
-    const nextStatus =
-      schedule.scheduleType === "once"
-        ? failed ? "failed" : "completed"
-        : schedule.status === "paused" ? "paused" : "active";
-    const lastError = result.results.find((item) => !item.ok)?.error ?? null;
-    const primaryGenerated = prepared.generatedNotifications
-      ? primaryGeneratedNotification(prepared.generatedNotifications)
-      : null;
-    const updatePayload: Prisma.NotificationScheduleUpdateInput = {
-      lastError,
-      lastRunAt: now,
-      lastStatus: hasSent ? "sent" : "failed",
-      nextRunAt,
-      runCount: schedule.runCount + 1,
-      status: nextStatus,
-      updatedAt: new Date(),
-    };
-
-    if (prepared.generatedNotifications) {
-      updatePayload.localePayload = prepared.generatedNotifications as unknown as Prisma.InputJsonValue;
-      updatePayload.message = clean(primaryGenerated?.message) || null;
-      updatePayload.title = clean(primaryGenerated?.title) || null;
-    }
-
-    await prisma.notificationSchedule.update({
-      where: { id: schedule.id },
-      data: updatePayload,
-    });
-
-    dispatched.push({
-      errorCount: result.errorCount,
-      job: result.job,
-      scheduleId: schedule.id,
-      sentCount: result.sentCount,
-      status: hasSent ? "sent" : "failed",
-    });
   }
 
   return {

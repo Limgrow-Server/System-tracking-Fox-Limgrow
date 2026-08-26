@@ -6,6 +6,17 @@ import { showToast } from "@/lib/client/toast";
 import { useDebouncedCallback } from "@/lib/hooks/use-debounced-callback";
 
 import { PageHeader, StatusBadge, TableEmptyState, TablePaginationFooter } from "@/components/tracking/primitives";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +24,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,6 +39,7 @@ type StoreMappingForm = {
   adjustAppToken: string;
   adjustConfigText: string;
   adjustEventToken: string;
+  adjustTrialStartedEventToken: string;
   storeAccountName: string;
   storeProfileId: string;
   appName: string;
@@ -125,6 +137,7 @@ function createEmptyForm(platform: StoreMappingPlatformFilter): StoreMappingForm
     adjustAppToken: "",
     adjustConfigText: "",
     adjustEventToken: "",
+    adjustTrialStartedEventToken: "",
     storeAccountName: "",
     storeProfileId: "",
     appName: "",
@@ -150,6 +163,9 @@ function formFromMapping(mapping: StoreMapping): StoreMappingForm {
     adjustAppToken: value(mapping.adjust_app_token),
     adjustConfigText: "",
     adjustEventToken: value(mapping.adjust_event_token),
+    adjustTrialStartedEventToken: value(
+      mapping.adjust_trial_started_event_token,
+    ),
     storeAccountName: mapping.store_account_name,
     storeProfileId: mapping.store_profile_id,
     appName: mapping.app_name,
@@ -211,6 +227,7 @@ function parseAdjustConfigText(text: string) {
   const config = {
     adjustAppToken: "",
     adjustEventToken: "",
+    adjustTrialStartedEventToken: "",
   };
 
   text.split(/\r?\n/).forEach((line) => {
@@ -227,6 +244,13 @@ function parseAdjustConfigText(text: string) {
     if (key === "event_token" || key === "adjust_event_token") {
       config.adjustEventToken = parsedValue;
     }
+
+    if (
+      key === "trial_started_event_token" ||
+      key === "adjust_trial_started_event_token"
+    ) {
+      config.adjustTrialStartedEventToken = parsedValue;
+    }
   });
 
   return config;
@@ -235,8 +259,13 @@ function parseAdjustConfigText(text: string) {
 function hasAdjustConfigValue(config: {
   adjustAppToken: string;
   adjustEventToken: string;
+  adjustTrialStartedEventToken: string;
 }) {
-  return Boolean(config.adjustAppToken || config.adjustEventToken);
+  return Boolean(
+    config.adjustAppToken ||
+      config.adjustEventToken ||
+      config.adjustTrialStartedEventToken,
+  );
 }
 
 function MappingFormSection({ title, children }: { title: string; children: ReactNode }) {
@@ -359,6 +388,9 @@ export function StoreMappingPage({
       adjustAppToken: parsed.adjustAppToken || current.adjustAppToken,
       adjustConfigText: hasParsedValue ? "" : nextValue,
       adjustEventToken: parsed.adjustEventToken || current.adjustEventToken,
+      adjustTrialStartedEventToken:
+        parsed.adjustTrialStartedEventToken ||
+        current.adjustTrialStartedEventToken,
     }));
   }
 
@@ -570,7 +602,7 @@ export function StoreMappingPage({
 
       const params = new URLSearchParams({
         id: editingId,
-        platform: "ios",
+        platform: form.platform,
         reveal: "firebaseAnalyticsApiSecret",
       });
       const response = await fetch(
@@ -843,6 +875,9 @@ export function StoreMappingPage({
             >
               <SheetHeader className="border-b px-5 py-4">
                 <SheetTitle>{drawerTitle}</SheetTitle>
+                <SheetDescription>
+                  Configure the store identity and provider settings for this application.
+                </SheetDescription>
               </SheetHeader>
               <form className="flex-1 space-y-5 overflow-y-auto px-5 py-5" onSubmit={submit}>
                 <MappingFormSection title="App mapping">
@@ -942,6 +977,7 @@ export function StoreMappingPage({
                           placeholder={[
                             "app_token=4w565xzmb54d",
                             "event_token=f0ob4r",
+                            "trial_started_event_token=t1a1ab",
                           ].join("\n")}
                           autoComplete="off"
                           rows={3}
@@ -966,7 +1002,9 @@ export function StoreMappingPage({
                       </div>
                       <div className="grid gap-2">
                         <Label htmlFor="adjustEventToken">
-                          Adjust event token
+                          {isAndroidForm
+                            ? "Adjust event token"
+                            : "Adjust purchase event token"}
                         </Label>
                         <Input
                           id="adjustEventToken"
@@ -978,13 +1016,40 @@ export function StoreMappingPage({
                           placeholder="f0ob4r"
                           readOnly={drawerReadOnly}
                         />
+                        <p className="text-xs text-muted-foreground">
+                          Use the token of the Adjust event named purchase. It
+                          is sent only after {isAndroidForm ? "Google Play" : "App Store"}
+                          {" "}confirms a paid order.
+                        </p>
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="adjustTrialStartedEventToken">
+                          Adjust trial_started event token
+                        </Label>
+                        <Input
+                          id="adjustTrialStartedEventToken"
+                          value={form.adjustTrialStartedEventToken}
+                          onChange={(event) =>
+                            updateField(
+                              "adjustTrialStartedEventToken",
+                              event.target.value,
+                            )
+                          }
+                          autoComplete="off"
+                          placeholder="t1a1ab"
+                          readOnly={drawerReadOnly}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Use a separate Adjust event token for trial_started.
+                          The purchase token above is never reused for this
+                          event.
+                        </p>
                       </div>
                     </div>
                   </div>
                 </MappingFormSection>
 
-                {!isAndroidForm ? (
-                  <MappingFormSection title="Firebase Analytics">
+                <MappingFormSection title="Firebase Analytics">
                     <div className="grid gap-4">
                       {drawerReadOnly ? null : (
                         <div className="grid gap-2">
@@ -1000,7 +1065,9 @@ export function StoreMappingPage({
                               )
                             }
                             placeholder={[
-                              "FIREBASE_APP_ID=1:1234567890:ios:abcdef123456",
+                              `FIREBASE_APP_ID=1:1234567890:${
+                                isAndroidForm ? "android" : "ios"
+                              }:abcdef123456`,
                               "FIREBASE_ANALYTICS_API_SECRET=...",
                             ].join("\n")}
                             autoComplete="off"
@@ -1026,7 +1093,9 @@ export function StoreMappingPage({
                               }
                               autoComplete="new-password"
                               className="pr-11"
-                              placeholder="1:1234567890:ios:abcdef123456"
+                              placeholder={`1:1234567890:${
+                                isAndroidForm ? "android" : "ios"
+                              }:abcdef123456`}
                               readOnly={drawerReadOnly}
                             />
                             <Button
@@ -1130,8 +1199,7 @@ export function StoreMappingPage({
                         </div>
                       </div>
                     </div>
-                  </MappingFormSection>
-                ) : null}
+                </MappingFormSection>
 
                 {drawerReadOnly ? null : (
                   <Button disabled={pending} className="w-full">
@@ -1145,7 +1213,7 @@ export function StoreMappingPage({
         }
       />
 
-      <Dialog
+      <AlertDialog
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => {
           if (!open && !pendingRow) {
@@ -1154,13 +1222,16 @@ export function StoreMappingPage({
           }
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete app mapping?</DialogTitle>
-            <DialogDescription>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete app mapping?</AlertDialogTitle>
+            <AlertDialogDescription>
               This action permanently removes the mapping for {deleteExpectedName || "this app"}. Type the app name to confirm.
-            </DialogDescription>
-          </DialogHeader>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
           <div className="grid gap-2">
             <Label htmlFor="deleteAppMappingConfirmation">Type `{deleteExpectedName}` to confirm</Label>
             <Input
@@ -1171,30 +1242,22 @@ export function StoreMappingPage({
               autoComplete="off"
             />
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={Boolean(pendingRow)}
-              onClick={() => {
-                setDeleteTarget(null);
-                setDeleteConfirmationName("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(pendingRow)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
               variant="destructive"
               disabled={deleteConfirmDisabled}
-              onClick={() => deleteTarget && deleteMapping(deleteTarget)}
+              onClick={(event) => {
+                event.preventDefault();
+                if (deleteTarget) void deleteMapping(deleteTarget);
+              }}
             >
               {deleteTarget && pendingRow === deleteTarget.id ? <Spinner /> : <Trash2 size={15} />}
               Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog
         open={secretOtpOpen}
@@ -1349,7 +1412,8 @@ export function StoreMappingPage({
                       <div className="max-w-[260px] truncate font-mono text-sm">{runtimeId ?? "N/A"}</div>
                       {mapping.platform === "ios" ||
                       mapping.adjust_app_token ||
-                      mapping.adjust_event_token ? (
+                      mapping.adjust_event_token ||
+                      mapping.adjust_trial_started_event_token ? (
                         <div className="mt-1 flex max-w-[260px] flex-wrap gap-1">
                           {mapping.platform === "ios" && mapping.firebase_app_id ? (
                             <Badge variant="outline" className="font-mono">
@@ -1364,7 +1428,16 @@ export function StoreMappingPage({
                             <Badge variant="outline">Adjust app</Badge>
                           ) : null}
                           {mapping.adjust_event_token ? (
-                            <Badge variant="secondary">Adjust event</Badge>
+                            <Badge variant="secondary">
+                              {mapping.platform === "ios"
+                                ? "Adjust purchase"
+                                : "Adjust event"}
+                            </Badge>
+                          ) : null}
+                          {mapping.adjust_trial_started_event_token ? (
+                            <Badge variant="outline">
+                              Adjust trial_started
+                            </Badge>
                           ) : null}
                         </div>
                       ) : null}

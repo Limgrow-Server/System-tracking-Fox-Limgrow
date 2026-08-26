@@ -16,6 +16,7 @@ type SaveIosStoreMappingInput = {
   appLink: string | null;
   adjustAppToken: string | null;
   adjustEventToken: string | null;
+  adjustTrialStartedEventToken: string | null;
   appName: string;
   bundleId: string;
   firebaseAnalyticsApiSecret?: string | null;
@@ -67,6 +68,7 @@ function iosStoreMappingWhere(options: IosStoreMappingPageOptions): Prisma.IosSt
         { appId: contains },
         { adjustAppToken: contains },
         { adjustEventToken: contains },
+        { adjustTrialStartedEventToken: contains },
         { bundleId: contains },
         { firebaseAppId: contains },
         { storeAccountName: contains },
@@ -143,6 +145,7 @@ export async function saveIosStoreMapping(
     appLink: input.appLink,
     adjustAppToken: input.adjustAppToken,
     adjustEventToken: input.adjustEventToken,
+    adjustTrialStartedEventToken: input.adjustTrialStartedEventToken,
     appName: input.appName,
     bundleId: input.bundleId,
     firebaseAppId: input.firebaseAppId,
@@ -193,6 +196,7 @@ export async function getIosStoreMappingGa4Config(input: {
   const select = {
     adjustAppToken: true,
     adjustEventToken: true,
+    adjustTrialStartedEventToken: true,
     firebaseAnalyticsApiSecret: true,
     firebaseAppId: true,
   } satisfies Prisma.IosStoreMappingSelect;

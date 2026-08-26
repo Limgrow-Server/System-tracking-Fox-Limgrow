@@ -2,59 +2,52 @@
 
 import Image from "next/image";
 import Link, { useLinkStatus } from "next/link";
-import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Apple,
-  Bell,
+  Activity,
+  BellRing,
   Cable,
-  CalendarClock,
+  ChartSpline,
   ChevronRight,
   Command,
   CreditCard,
   Gauge,
-  History,
-  LayoutDashboard,
+  ListChecks,
   LogOut,
   Menu,
-  MessageSquareReply,
-  MessageSquareText,
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
   Search,
-  Send,
   Smartphone,
   UserCog,
   UsersRound,
-  X,
 } from "lucide-react";
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Command as CommandMenu,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import { showToast } from "@/lib/client/toast";
 import { cn } from "@/lib/utils";
 import type { StaffRole } from "@/lib/tracking/types";
-
-const BackgroundJobTray = dynamic(
-  () =>
-    import("@/components/tracking/background-job-tray").then(
-      (mod) => mod.BackgroundJobTray,
-    ),
-  { loading: () => null, ssr: false },
-);
-
-type IdleLoaderWindow = Window &
-  typeof globalThis & {
-    requestIdleCallback?: (
-      callback: () => void,
-      options?: { timeout?: number },
-    ) => number;
-    cancelIdleCallback?: (handle: number) => void;
-  };
 
 type NavItem = {
   title: string;
@@ -114,6 +107,18 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         roles: ["Admin"],
         children: [
           {
+            title: "Event catalog & GA4",
+            href: "/configs/events",
+            icon: <Activity size={15} />,
+            roles: ["Admin"],
+          },
+          {
+            title: "Notification topics",
+            href: "/configs/notifications",
+            icon: <BellRing size={15} />,
+            roles: ["Admin"],
+          },
+          {
             title: "Android",
             href: "/configs/android",
             icon: <Smartphone size={15} />,
@@ -128,36 +133,16 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         ],
       },
       {
-        title: "Notifications",
-        href: "/notifications/overview",
-        icon: <Bell size={17} />,
+        title: "Incoming events",
+        href: "/events",
+        icon: <ListChecks size={17} />,
         roles: ["Admin", "Dev", "Marketing"],
-        children: [
-          {
-            title: "Overview",
-            href: "/notifications/overview",
-            icon: <LayoutDashboard size={15} />,
-            roles: ["Admin", "Dev", "Marketing"],
-          },
-          {
-            title: "Send",
-            href: "/notifications/send",
-            icon: <Send size={15} />,
-            roles: ["Admin"],
-          },
-          {
-            title: "Schedules",
-            href: "/notifications/schedules",
-            icon: <CalendarClock size={15} />,
-            roles: ["Admin", "Dev", "Marketing"],
-          },
-          {
-            title: "History",
-            href: "/notifications/history",
-            icon: <History size={15} />,
-            roles: ["Admin", "Dev", "Marketing"],
-          },
-        ],
+      },
+      {
+        title: "Event analytics",
+        href: "/analytics/events",
+        icon: <ChartSpline size={17} />,
+        roles: ["Admin", "Dev", "Marketing"],
       },
     ],
   },
@@ -168,29 +153,6 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         title: "IAP",
         href: "/iap",
         icon: <CreditCard size={17} />,
-        roles: ["Admin", "Dev", "Marketing"],
-      },
-    ],
-  },
-  {
-    title: "Comments & Reply",
-    items: [
-      {
-        title: "Comments",
-        href: "/comments",
-        icon: <MessageSquareText size={17} />,
-        roles: ["Admin", "Dev", "Marketing"],
-      },
-      {
-        title: "Schedule",
-        href: "/comments-schedule",
-        icon: <CalendarClock size={17} />,
-        roles: ["Admin", "Dev", "Marketing"],
-      },
-      {
-        title: "Reply",
-        href: "/reply",
-        icon: <MessageSquareReply size={17} />,
         roles: ["Admin", "Dev", "Marketing"],
       },
     ],
@@ -216,6 +178,20 @@ function visibleNavGroups(role: StaffRole) {
       items: visibleNavItems(group.items, role),
     }))
     .filter((group) => group.items.length > 0);
+}
+
+function searchableItems(role: StaffRole) {
+  const items = visibleNavGroups(role).flatMap((group) =>
+    group.items.flatMap((item) => [
+      { ...item, group: group.title },
+      ...(item.children ?? []).map((child) => ({
+        ...child,
+        group: item.title,
+      })),
+    ]),
+  );
+
+  return Array.from(new Map(items.map((item) => [item.href, item])).values());
 }
 
 function NavPendingDot({ className }: { className?: string }) {
@@ -307,12 +283,17 @@ function SidebarContent({
             <div className="space-y-1">
               {group.items.map((item) => {
                 const hasChildren = Boolean(item.children?.length);
+                const activeChildHref = hasChildren
+                  ? item
+                      .children!.filter(
+                        (child) =>
+                          pathname === child.href ||
+                          pathname.startsWith(`${child.href}/`),
+                      )
+                      .sort((a, b) => b.href.length - a.href.length)[0]?.href
+                  : null;
                 const active = hasChildren
-                  ? item.children!.some(
-                      (c) =>
-                        pathname === c.href ||
-                        pathname.startsWith(`${c.href}/`),
-                    )
+                  ? Boolean(activeChildHref)
                   : pathname === item.href ||
                     pathname.startsWith(`${item.href}/`);
                 const expanded = hasChildren
@@ -393,8 +374,7 @@ function SidebarContent({
                               ?.filter((child) => child.roles.includes(role))
                               .map((child) => {
                                 const childActive =
-                                  pathname === child.href ||
-                                  pathname.startsWith(`${child.href}/`);
+                                  child.href === activeChildHref;
 
                                 return (
                                   <Link
@@ -407,6 +387,9 @@ function SidebarContent({
                                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
                                     )}
+                                    aria-current={
+                                      childActive ? "page" : undefined
+                                    }
                                   >
                                     {child.icon}
                                     <span className="truncate">
@@ -438,6 +421,7 @@ function SidebarContent({
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
                     )}
+                    aria-current={active ? "page" : undefined}
                   >
                     <span
                       className={cn(
@@ -548,29 +532,20 @@ export function AppShell({
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [backgroundTrayReady, setBackgroundTrayReady] = useState(false);
+  const searchItems = useMemo(() => searchableItems(role), [role]);
 
   useEffect(() => {
-    let cancelled = false;
-    let timeoutId: number | undefined;
-    let idleId: number | undefined;
-    const idleWindow = window as IdleLoaderWindow;
-    const loadTray = () => {
-      if (!cancelled) setBackgroundTrayReady(true);
-    };
-
-    if (typeof idleWindow.requestIdleCallback === "function") {
-      idleId = idleWindow.requestIdleCallback(loadTray, { timeout: 1600 });
-    } else {
-      timeoutId = idleWindow.setTimeout(loadTray, 1000);
+    function openSearch(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== "k" || (!event.metaKey && !event.ctrlKey))
+        return;
+      event.preventDefault();
+      setSearchOpen((current) => !current);
     }
 
-    return () => {
-      cancelled = true;
-      if (idleId !== undefined) idleWindow.cancelIdleCallback?.(idleId);
-      if (timeoutId !== undefined) idleWindow.clearTimeout(timeoutId);
-    };
+    document.addEventListener("keydown", openSearch);
+    return () => document.removeEventListener("keydown", openSearch);
   }, []);
 
   async function logout() {
@@ -587,6 +562,12 @@ export function AppShell({
 
   return (
     <div className="min-h-svh bg-muted/30 text-foreground">
+      <a
+        href="#main-content"
+        className="fixed left-3 top-3 z-50 -translate-y-20 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-transform focus:translate-y-0"
+      >
+        Skip to content
+      </a>
       <div
         className={cn(
           "grid min-h-svh transition-[grid-template-columns] duration-300 ease-in-out",
@@ -607,48 +588,33 @@ export function AppShell({
         <div className="flex h-svh min-w-0 flex-col overflow-y-auto overscroll-contain">
           <header className="sticky top-0 z-40 h-16 shrink-0 border-b bg-background/90 backdrop-blur">
             <div className="flex h-full items-center gap-3 px-4">
-              <Button
-                variant="outline"
-                size="icon"
-                className="lg:hidden"
-                aria-label="Open navigation"
-                onClick={() => setOpen(true)}
-              >
-                <Menu size={16} />
-              </Button>
-              {open ? (
-                <div className="fixed inset-0 z-50 lg:hidden">
-                  <button
-                    type="button"
-                    aria-label="Close navigation"
-                    className="absolute inset-0 bg-black/10"
-                    onClick={() => setOpen(false)}
-                  />
-                  <div
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="Navigation"
-                    className="absolute inset-y-0 left-0 flex w-72 flex-col border-r bg-sidebar shadow-lg"
+              <Sheet open={open} onOpenChange={setOpen}>
+                <SheetTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="lg:hidden"
+                    aria-label="Open navigation"
                   >
-                    <div className="absolute right-3 top-3 z-10">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => setOpen(false)}
-                        aria-label="Close navigation"
-                      >
-                        <X size={15} />
-                      </Button>
-                    </div>
-                    <SidebarContent
-                      role={role}
-                      session={session}
-                      onLogout={logout}
-                      onNavigate={() => setOpen(false)}
-                    />
-                  </div>
-                </div>
-              ) : null}
+                    <Menu size={16} />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent
+                  side="left"
+                  className="w-72 gap-0 bg-sidebar p-0 sm:max-w-72 lg:hidden"
+                >
+                  <SheetTitle className="sr-only">Navigation</SheetTitle>
+                  <SheetDescription className="sr-only">
+                    Primary navigation for the administration console.
+                  </SheetDescription>
+                  <SidebarContent
+                    role={role}
+                    session={session}
+                    onLogout={logout}
+                    onNavigate={() => setOpen(false)}
+                  />
+                </SheetContent>
+              </Sheet>
 
               <Button
                 type="button"
@@ -667,35 +633,67 @@ export function AppShell({
 
               <div className="hidden h-6 w-px bg-border lg:block" />
 
-              <label className="relative min-w-0 flex-1 md:max-w-md">
-                <Search
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                  size={15}
-                />
-                <Input
-                  className="h-9 bg-muted/40 pl-9 pr-16"
-                  placeholder="Search app mappings, stores, credentials..."
-                />
-                <span className="absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground sm:flex">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 min-w-0 flex-1 justify-start bg-muted/40 text-muted-foreground md:max-w-md"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Search size={15} />
+                <span className="truncate">Search pages and operations</span>
+                <span className="ml-auto hidden items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground sm:flex">
                   <Command size={11} /> K
                 </span>
-              </label>
-
-              <Button variant="outline" size="icon">
-                <Bell size={16} />
               </Button>
             </div>
           </header>
 
           <main
+            id="main-content"
             key={pathname}
-            className="flex-1 p-4 motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 sm:p-6"
+            tabIndex={-1}
+            className="mx-auto w-full max-w-[1600px] flex-1 p-4 outline-none motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 sm:p-6"
           >
             {children}
           </main>
-          {backgroundTrayReady ? <BackgroundJobTray /> : null}
         </div>
       </div>
+
+      <CommandDialog
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        title="Navigate the tracking console"
+        description="Search pages and operational tools."
+        showCloseButton
+      >
+        <CommandMenu>
+          <CommandInput
+            autoFocus
+            placeholder="Search pages and operations..."
+          />
+          <CommandList>
+            <CommandEmpty>No matching page found.</CommandEmpty>
+            <CommandGroup heading="Navigation">
+              {searchItems.map((item) => (
+                <CommandItem
+                  key={item.href}
+                  value={`${item.title} ${item.group}`}
+                  onSelect={() => {
+                    setSearchOpen(false);
+                    router.push(item.href);
+                  }}
+                >
+                  {item.icon}
+                  <span className="flex-1">{item.title}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {item.group}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </CommandMenu>
+      </CommandDialog>
     </div>
   );
 }

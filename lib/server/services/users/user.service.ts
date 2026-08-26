@@ -1,8 +1,9 @@
 import "server-only";
 
 import { Prisma } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+import { hash } from "bcryptjs";
 
-import { syncConsoleAuthMetadata } from "@/lib/auth/auth-metadata";
 import type { ConsoleSession } from "@/lib/auth/rbac";
 import {
   cleanText,
@@ -11,7 +12,8 @@ import {
   teamMemberStatusToPrismaStatus,
   teamMemberToTracking,
 } from "@/lib/auth/team-members";
-import { ApiError, badRequest, conflict } from "@/lib/server/api/errors";
+import { badRequest, conflict } from "@/lib/server/api/errors";
+import { prisma } from "@/lib/prisma";
 import {
   createTeamMember,
   deleteTeamMember,
@@ -20,7 +22,6 @@ import {
   updateTeamMember,
 } from "@/lib/server/repositories/auth/team-member.repository";
 import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { normalizeScopeKey, normalizeScopeList } from "@/lib/tracking/identity";
 import type { StaffRole, TeamMember } from "@/lib/tracking/types";
 
@@ -67,56 +68,11 @@ function passwordValue(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function isDuplicateAuthUserError(errorMessage: string) {
-  const normalized = errorMessage.toLowerCase();
-  return normalized.includes("already") || normalized.includes("registered");
-}
-
-async function createVerifiedAuthUser(email: string, name: string, password: string) {
-  const supabase = createAdminClient();
-  if (!supabase) {
-    throw new ApiError(
-      "SUPABASE_SERVICE_ROLE_KEY is required to create Supabase Auth users.",
-      500,
-    );
-  }
-
-  const { data, error } = await supabase.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: {
-      display_name: name,
-      name,
-    },
-    app_metadata: {
-      account_type: "console",
-    },
-  });
-
-  if (error || !data.user?.id) {
-    const message = error?.message ?? "Supabase Auth user could not be created.";
-    if (isDuplicateAuthUserError(message)) {
-      throw conflict("A Supabase Auth user with this email already exists.");
-    }
-
-    throw new ApiError(message, error?.status ?? 500);
-  }
-
+async function createVerifiedAuthUser(password: string) {
   return {
-    authUserId: data.user.id,
-    supabase,
+    authUserId: randomUUID(),
+    passwordHash: await hash(password, 12),
   };
-}
-
-async function deleteAuthUserBestEffort(input: Awaited<ReturnType<typeof createVerifiedAuthUser>>) {
-  const { error } = await input.supabase.auth.admin.deleteUser(input.authUserId);
-  if (error) {
-    console.error(
-      "Failed to rollback Supabase Auth user after team member create failed.",
-      error,
-    );
-  }
 }
 
 export async function getConsoleUsers() {
@@ -158,12 +114,13 @@ export async function createConsoleUser(payload: UserPayload, admin: ConsoleSess
     throw badRequest("Password must contain at least 6 characters.");
   }
 
-  const authUser = await createVerifiedAuthUser(email, name, password);
+  const authUser = await createVerifiedAuthUser(password);
   const access = accessForRole(role, payload);
 
   try {
     const user = await createTeamMember({
       authUserId: authUser.authUserId,
+      passwordHash: authUser.passwordHash,
       name,
       email,
       role: staffRoleToPrismaRole[role],
@@ -175,18 +132,12 @@ export async function createConsoleUser(payload: UserPayload, admin: ConsoleSess
       invitedAt: null,
     });
     const dto = teamMemberToTracking(user);
-    const metadataWarning = await syncConsoleAuthMetadata(dto.auth_user_id, dto);
-    const message = metadataWarning
-      ? `User ${email} created. Metadata sync warning: ${metadataWarning}`
-      : `User ${email} created.`;
 
     return {
       user: dto,
-      message,
+      message: `User ${email} created.`,
     };
   } catch (error) {
-    await deleteAuthUserBestEffort(authUser);
-
     if (isPrismaUniqueError(error)) {
       throw conflict("A user with this email already exists.");
     }
@@ -218,10 +169,20 @@ export async function updateConsoleUser(payload: UserPayload) {
     if (Array.isArray(payload.appScope)) data.appScope = arrayScope(payload.appScope);
     if (Array.isArray(payload.storeScope)) data.storeScope = arrayScope(payload.storeScope);
   }
+  const password = passwordValue(payload.password);
+  if (password) {
+    if (password.length < 8) throw badRequest("Password must contain at least 8 characters.");
+    data.passwordHash = await hash(password, 12);
+  }
 
   const user = await updateTeamMember(id, data);
   const dto = teamMemberToTracking(user);
-  await syncConsoleAuthMetadata(dto.auth_user_id, dto);
+  if (password) {
+    await prisma.consoleSession.updateMany({
+      where: { memberId: id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
 
   return { user: dto, message: "User updated." };
 }

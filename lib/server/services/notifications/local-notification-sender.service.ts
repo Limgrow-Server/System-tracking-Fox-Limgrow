@@ -10,6 +10,11 @@ import {
 } from "@/lib/server/outbound/store-provider-endpoints";
 import { getCredentialVaultSecret } from "@/lib/server/repositories/vault/secret.repository";
 import { normalizeAppId } from "@/lib/tracking/identity";
+import {
+  canonicalNotificationLocale,
+  notificationTopicBase,
+  notificationTopicNameFromBase,
+} from "@/lib/tracking/notification-topics";
 
 type MobilePlatform = "android" | "ios";
 type TargetType = "device" | "topic";
@@ -24,6 +29,7 @@ export type LocaleNotificationInput = {
 
 export type SendNotificationRequest = {
   appId?: string | null;
+  appMappingId?: string | null;
   appName?: string | null;
   bundleId?: string | null;
   credentialRef?: string | null;
@@ -41,7 +47,9 @@ export type SendNotificationRequest = {
   storeAccountName?: string | null;
   storeProfileId?: string | null;
   targetType?: TargetType | string | null;
+  topic?: string | null;
   topicBase?: string | null;
+  topicCode?: string | null;
 };
 
 type LocaleNotification = {
@@ -99,6 +107,7 @@ export type LocalNotificationSendResult = {
 
 type ResolvedMobileApp = {
   appId: string | null;
+  appMappingId: string;
   appName: string;
   bundleId: string | null;
   packageName: string | null;
@@ -233,17 +242,23 @@ function notificationAppId(payload: SendNotificationRequest) {
 function normalizeLocaleNotifications(
   payload: SendNotificationRequest,
 ): LocaleNotification[] {
-  const rows = Array.isArray(payload.notifications)
+  const normalizedRows = Array.isArray(payload.notifications)
     ? payload.notifications
         .filter((item) => item.enabled !== false)
         .map((item) => ({
           body: clean(item.message),
           title: clean(item.title),
-          topicCode: topicSegment(
+          topicCode: canonicalNotificationLocale(
             clean(item.topicCode) || clean(item.languageCode),
-          ).toLowerCase(),
+          ),
         }))
     : [];
+  const rows = Array.from(
+    normalizedRows.reduce<Map<string, LocaleNotification>>((items, row) => {
+      if (!items.has(row.topicCode)) items.set(row.topicCode, row);
+      return items;
+    }, new Map()).values(),
+  );
 
   if (!rows.length) throw new Error("notification_payload_required");
 
@@ -396,6 +411,7 @@ async function findMobileApp(
       if (app) {
         return {
           appId: app.appId,
+          appMappingId: app.id,
           appName: app.appName,
           bundleId: null,
           packageName: app.packageName,
@@ -437,6 +453,7 @@ async function findMobileApp(
     if (app) {
       return {
         appId: app.appId,
+        appMappingId: app.id,
         appName: app.appName,
         bundleId: app.bundleId,
         packageName: null,
@@ -1193,6 +1210,7 @@ async function createNotificationJobForLocalSend(input: {
   return notificationPrisma.notificationJob.create({
     data: {
       appId,
+      appMappingId: clean(input.payload.appMappingId) || null,
       appName,
       bundleId:
         input.platform === "ios" ? clean(input.payload.bundleId) || null : null,
@@ -1286,11 +1304,15 @@ export async function sendNotificationPayloadLocal(
   const deviceTokenIds = stringArray(payload.deviceTokenIds);
   const deviceIds = stringArray(payload.deviceIds);
   const deviceTargetValues = deviceTokenIds.length ? deviceTokenIds : deviceIds;
+  const explicitTopic = topicSegment(payload.topic);
   const targetValueKind = deviceTokenIds.length
     ? "device_token_id"
     : "device_id";
   const topicBase = topicSegment(
     clean(payload.topicBase) ||
+      (clean(payload.appMappingId)
+        ? notificationTopicBase(payload.appMappingId)
+        : "") ||
       appId ||
       clean(payload.appName) ||
       clean(payload.productAppId) ||
@@ -1302,13 +1324,19 @@ export async function sendNotificationPayloadLocal(
   const initialTargetValues =
     targetType === "device"
       ? deviceTargetValues
-      : locales.map((locale) => `${topicBase}-${locale.topicCode}`);
+      : explicitTopic
+        ? [explicitTopic]
+        : locales.map((locale) =>
+            notificationTopicNameFromBase(topicBase, locale.topicCode),
+          );
   const queuedJobId = clean(payload.jobId);
 
   if (targetType === "device" && !deviceTargetValues.length)
     throw new Error("device_targets_required");
   if (targetType === "topic" && !topicBase)
     throw new Error("topic_base_required");
+  if (targetType === "topic" && explicitTopic && locales.length !== 1)
+    throw new Error("explicit_topic_requires_exactly_one_locale");
 
   const createdJob = queuedJobId
     ? null
@@ -1339,6 +1367,7 @@ export async function sendNotificationPayloadLocal(
     const resolvedPayload = {
       ...payload,
       appId: config.app?.appId ?? payload.appId,
+      appMappingId: config.app?.appMappingId ?? payload.appMappingId,
       appName: config.app?.appName ?? payload.appName,
       bundleId: config.app?.bundleId ?? payload.bundleId,
       packageName: config.app?.packageName ?? payload.packageName,
@@ -1381,6 +1410,9 @@ export async function sendNotificationPayloadLocal(
 
     if (targetType === "topic") {
       for (const locale of locales) {
+        const targetTopic =
+          explicitTopic ||
+          notificationTopicNameFromBase(topicBase, locale.topicCode);
         results.push(
           await sendFcm({
             accessToken,
@@ -1395,7 +1427,7 @@ export async function sendNotificationPayloadLocal(
             platform,
             projectId,
             targetType,
-            targetValue: `${topicBase}-${locale.topicCode}`,
+            targetValue: targetTopic,
             title: locale.title,
             topicCode: locale.topicCode,
           }),
@@ -1563,8 +1595,8 @@ export async function sendNotificationPayloadLocal(
       topicBase,
     });
 
-    const failedTargets = deviceTargetValues.length
-      ? deviceTargetValues
+    const failedTargets = initialTargetValues.length
+      ? initialTargetValues
       : [topicBase];
     const results = failedTargets.map((targetValue) =>
       failedResult({

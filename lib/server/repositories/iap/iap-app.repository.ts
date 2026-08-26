@@ -32,12 +32,45 @@ const androidTransactionListSelect = {
   regionCode: true,
   basePlanId: true,
   offerId: true,
+  offerPhase: true,
+  isTrial: true,
+  hadFreeTrial: true,
+  trialStartedAt: true,
+  trialEndsAt: true,
+  ingestionSource: true,
+  lastNotificationAt: true,
   isTestPurchase: true,
   verifiedAt: true,
   createdAt: true,
   updatedAt: true,
   storeProfile: {
     select: { storeAccountName: true },
+  },
+  lifecycleEvents: {
+    orderBy: { occurredAt: "desc" },
+    take: 10,
+    select: {
+      eventType: true,
+      deliveryJobs: {
+        orderBy: { updatedAt: "desc" },
+        select: {
+          deliveredAt: true,
+          deliveryAttempts: true,
+          destination: true,
+          eventName: true,
+          id: true,
+          lastError: true,
+          lockedAt: true,
+          maxAttempts: true,
+          publishAttempts: true,
+          publishedAt: true,
+          responseStatus: true,
+          result: true,
+          status: true,
+          updatedAt: true,
+        },
+      },
+    },
   },
 } satisfies Prisma.IapAndroidSelect;
 
@@ -156,6 +189,7 @@ type IapAppMappingPageOptions = IapAppMappingOptions & {
 
 type IapAppMappingRow = IapAppCard & {
   appId: string | null;
+  revenueByCurrency?: unknown;
 };
 
 type CountRow = {
@@ -165,6 +199,37 @@ type CountRow = {
 type StoreNameRow = {
   storeAccountName: string | null;
 };
+
+function revenueByCurrency(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    const currency =
+      typeof record.currency === "string"
+        ? record.currency.trim().toUpperCase()
+        : "";
+    const revenueMicros = Number(record.revenueMicros);
+    return currency && Number.isFinite(revenueMicros) && revenueMicros >= 0
+      ? [{ currency, revenueMicros }]
+      : [];
+  });
+}
+
+async function appGridRevenueMicros(row: IapAppMappingRow) {
+  if (row.platform !== "android") return row.revenueMicros;
+  const converted = await Promise.all(
+    revenueByCurrency(row.revenueByCurrency).map((bucket) =>
+      convertCurrencyAmountToVnd(
+        bucket.revenueMicros / 1_000_000,
+        bucket.currency,
+      ),
+    ),
+  );
+  return Math.round(
+    converted.reduce((total, amount) => total + amount, 0) * 1_000_000,
+  );
+}
 
 function activeStatusSql() {
   return Prisma.sql`'active'::mapping_status`;
@@ -204,11 +269,48 @@ function androidIapAppSelectSql(options?: IapAppMappingOptions) {
       coalesce(profile."store_account_name", mapping."store_account_name") AS "storeAccountName",
       mapping."store_profile_id"::text AS "storeProfileId",
       NULL::numeric AS "revenueMicros",
-      NULL::text AS "revenueCurrency",
-      NULL::integer AS "transactionCount"
+      CASE
+        WHEN coalesce(finance."transactionCount", 0) > 0 THEN 'VND'
+        ELSE NULL
+      END AS "revenueCurrency",
+      coalesce(finance."transactionCount", 0)::integer AS "transactionCount",
+      coalesce(finance."revenueByCurrency", '[]'::jsonb) AS "revenueByCurrency"
     FROM "android_store_mappings" mapping
     LEFT JOIN "android_store_profiles" profile
       ON profile."id" = mapping."store_profile_id"
+    LEFT JOIN LATERAL (
+      SELECT
+        coalesce(sum(currency_rollup."transactionCount"), 0)::integer AS "transactionCount",
+        coalesce(
+          jsonb_agg(
+            jsonb_build_object(
+              'currency', currency_rollup.currency,
+              'revenueMicros', currency_rollup."revenueMicros"
+            )
+            ORDER BY currency_rollup.currency
+          ),
+          '[]'::jsonb
+        ) AS "revenueByCurrency"
+      FROM (
+        SELECT
+          upper(coalesce(nullif(trim(orders.currency), ''), 'VND')) AS currency,
+          count(*)::integer AS "transactionCount",
+          sum(
+            greatest(
+              coalesce(orders.gross_amount_micros, 0)
+                - coalesce(orders.refunded_amount_micros, 0),
+              0
+            )
+          )::text AS "revenueMicros"
+        FROM "android_iap_orders" orders
+        INNER JOIN "iap_android" purchase
+          ON purchase."id" = orders."purchase_id"
+        WHERE orders."store_mapping_id" = mapping."id"
+          AND orders."processed_at" IS NOT NULL
+          AND purchase."is_test_purchase" IS FALSE
+        GROUP BY upper(coalesce(nullif(trim(orders.currency), ''), 'VND'))
+      ) currency_rollup
+    ) finance ON TRUE
     WHERE mapping."status" = ${activeStatusSql()}
       ${storeAccountSql(options?.storeAccountName)}
       ${searchSql(options?.search, [
@@ -235,7 +337,8 @@ function iosIapAppSelectSql(options?: IapAppMappingOptions) {
       mapping."store_profile_id"::text AS "storeProfileId",
       NULL::numeric AS "revenueMicros",
       NULL::text AS "revenueCurrency",
-      NULL::integer AS "transactionCount"
+      NULL::integer AS "transactionCount",
+      NULL::jsonb AS "revenueByCurrency"
     FROM "ios_store_mappings" mapping
     LEFT JOIN "ios_store_profiles" profile
       ON profile."id" = mapping."store_profile_id"
@@ -398,20 +501,24 @@ export async function getActiveIapAppMappingsPage(
   ]);
   const total = Number(countRows[0]?.total ?? 0);
 
-  return {
-    apps: rows.map((row) => ({
+  const apps = await Promise.all(
+    rows.map(async (row) => ({
       appIconUrl: row.appIconUrl,
       appLink: row.appLink,
       appName: row.appName,
       identifier: row.identifier,
       mappingId: row.mappingId,
       platform: row.platform,
-      revenueCurrency: row.revenueCurrency,
-      revenueMicros: row.revenueMicros,
+      revenueCurrency: row.platform === "android" ? "VND" : row.revenueCurrency,
+      revenueMicros: await appGridRevenueMicros(row),
       storeAccountName: row.storeAccountName,
       storeProfileId: row.storeProfileId,
       transactionCount: row.transactionCount,
     })),
+  );
+
+  return {
+    apps,
     total,
   };
 }
@@ -771,6 +878,17 @@ async function getIapMetrics(
   return iapMetricsFromRows(metricsRows, revenueRows, bucketRows);
 }
 
+export function normalizeAndroidPurchaseKindFilter(value: string | undefined) {
+  const kind = value?.trim().toLowerCase() ?? "";
+  if (["inapp", "one-time", "one_time", "product"].includes(kind)) {
+    return "product";
+  }
+  if (["subs", "subscription", "subscriptions"].includes(kind)) {
+    return "subscription";
+  }
+  return kind;
+}
+
 function androidTransactionWhere(
   packageName: string,
   storeProfileId: string,
@@ -782,7 +900,7 @@ function androidTransactionWhere(
   };
   const environment = options?.environment?.trim();
   const state = options?.state?.trim();
-  const kind = options?.kind?.trim();
+  const kind = normalizeAndroidPurchaseKindFilter(options?.kind);
   const purchaseDate = purchaseDateRange(
     options?.purchaseDateFrom,
     options?.purchaseDateTo,
@@ -861,19 +979,42 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
   storeProfileId: string,
   options: Partial<AndroidTransactionPageOptions>,
 ) {
+  const sourceSql = Prisma.sql`(
+    select
+      orders.state,
+      orders.processed_at as purchase_date,
+      greatest(
+        coalesce(orders.gross_amount_micros, 0)
+          - coalesce(orders.refunded_amount_micros, 0),
+        0
+      ) as revenue_micros,
+      orders.currency,
+      purchase.is_test_purchase,
+      orders.package_name,
+      orders.store_profile_id,
+      orders.order_kind as purchase_kind
+    from public.android_iap_orders orders
+    inner join public.iap_android purchase
+      on purchase.id = orders.purchase_id
+    where orders.processed_at is not null
+      and purchase.is_test_purchase is false
+  ) android_order_metrics`;
   const conditions = [
     Prisma.sql`package_name = ${packageName}`,
     Prisma.sql`store_profile_id = ${storeProfileId}::uuid`,
   ];
   const environment = options.environment?.trim();
   const state = options.state?.trim();
-  const kind = options.kind?.trim();
+  const kind = normalizeAndroidPurchaseKindFilter(options.kind);
+  const purchaseDate = purchaseDateRange(
+    options.purchaseDateFrom,
+    options.purchaseDateTo,
+  );
 
-  if (environment === "production") {
-    conditions.push(Prisma.sql`not is_test_purchase`);
-  }
+  // Android financial aggregates intentionally exclude test purchases. A test
+  // filter therefore returns an empty metric scope instead of production data.
   if (environment === "test") {
-    conditions.push(Prisma.sql`is_test_purchase`);
+    conditions.push(Prisma.sql`false`);
   }
   if (state && state !== "all") {
     conditions.push(Prisma.sql`lower(state) = ${state.toLowerCase()}`);
@@ -881,13 +1022,19 @@ export function getAndroidTransactionsByPackageAndProfileMetrics(
   if (kind && kind !== "all") {
     conditions.push(Prisma.sql`lower(purchase_kind) = ${kind.toLowerCase()}`);
   }
+  if (purchaseDate?.start) {
+    conditions.push(Prisma.sql`purchase_date >= ${purchaseDate.start}`);
+  }
+  if (purchaseDate?.end) {
+    conditions.push(Prisma.sql`purchase_date < ${purchaseDate.end}`);
+  }
 
   return getIapMetrics(
-    Prisma.sql`public.iap_android`,
+    sourceSql,
     Prisma.sql`where ${joinSql(conditions, Prisma.sql`and`)}`,
     Prisma.sql`is_test_purchase`,
     {
-      includeTest: environment !== "production",
+      includeTest: false,
       revenueGranularity: options.revenueGranularity,
     },
   );
@@ -1118,6 +1265,23 @@ function iosTwoHourMissingSql() {
   )`;
 }
 
+function iosDeliveryJobExistsSql(
+  provider: "adjust" | "ga4",
+  condition: Prisma.Sql = Prisma.sql`true`,
+) {
+  const destination =
+    provider === "ga4"
+      ? Prisma.sql`lower(job.destination) IN ('ga4', 'firebase')`
+      : Prisma.sql`lower(job.destination) = 'adjust'`;
+  return Prisma.sql`EXISTS (
+    SELECT 1
+    FROM public.iap_delivery_jobs job
+    WHERE job.transaction_id = t.transaction_id
+      AND ${destination}
+      AND ${condition}
+  )`;
+}
+
 function providerStatusSql(provider: "adjust" | "ga4") {
   return Prisma.sql`lower(coalesce(
     jsonb_extract_path_text(c.raw_context::jsonb, 'delivery', ${provider}, 'status'),
@@ -1236,25 +1400,58 @@ function iosProviderStatusSql(
 ) {
   switch (status?.trim().toLowerCase()) {
     case "sent":
-      return iosTwoHourExistsSql(providerDeliveredSql(provider));
+      return Prisma.sql`(
+        ${iosDeliveryJobExistsSql(
+          provider,
+          Prisma.sql`lower(job.status) IN ('sent', 'delivered', 'completed', 'succeeded', 'already_sent')`,
+        )}
+        OR ${iosTwoHourExistsSql(providerDeliveredSql(provider))}
+      )`;
     case "skipped":
-      return iosTwoHourExistsSql(providerSkippedSql(provider));
+      return Prisma.sql`(
+        ${iosDeliveryJobExistsSql(
+          provider,
+          Prisma.sql`lower(job.status) = 'skipped'`,
+        )}
+        OR ${iosTwoHourExistsSql(providerSkippedSql(provider))}
+      )`;
     case "failed":
-      return iosTwoHourExistsSql(providerFailedSql(provider));
+      return Prisma.sql`(
+        ${iosDeliveryJobExistsSql(
+          provider,
+          Prisma.sql`lower(job.status) IN ('failed', 'dead_lettered')`,
+        )}
+        OR ${iosTwoHourExistsSql(providerFailedSql(provider))}
+      )`;
     case "retrying":
-      return iosTwoHourExistsSql(
-        Prisma.sql`${providerRetryingSql(provider)} OR lower(c.status) = 'retrying'`,
-      );
+      return Prisma.sql`(
+        ${iosDeliveryJobExistsSql(
+          provider,
+          Prisma.sql`lower(job.status) IN ('retrying', 'retryable_error')`,
+        )}
+        OR ${iosTwoHourExistsSql(
+          Prisma.sql`${providerRetryingSql(provider)} OR lower(c.status) = 'retrying'`,
+        )}
+      )`;
     case "pending":
-      return iosTwoHourExistsSql(
-        Prisma.sql`lower(c.status) IN ('pending', 'processing')`,
-      );
+      return Prisma.sql`(
+        ${iosDeliveryJobExistsSql(
+          provider,
+          Prisma.sql`lower(job.status) IN ('pending', 'publishing', 'published', 'queued', 'processing')`,
+        )}
+        OR ${iosTwoHourExistsSql(
+          Prisma.sql`lower(c.status) IN ('pending', 'processing')`,
+        )}
+      )`;
     case "not_sent":
       return iosTwoHourExistsSql(Prisma.sql`c.renewed = false`);
     case "not_scheduled":
       return Prisma.sql`${iosTwoHourMissingSql()} AND ${iosFreeTrialSqlCondition()}`;
     case "no_data":
-      return iosTwoHourExistsSql(providerNoDataSql(provider));
+      return Prisma.sql`(
+        NOT ${iosDeliveryJobExistsSql(provider)}
+        AND ${iosTwoHourExistsSql(providerNoDataSql(provider))}
+      )`;
     default:
       return null;
   }
