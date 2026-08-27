@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData, PaginationMeta } from "@/lib/tracking/page-data";
-import type { DeviceToken, NotificationEvent, NotificationJob, StoreMapping } from "@/lib/tracking/types";
+import type { NotificationEvent, NotificationJob, StoreMapping } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
 
 import {
@@ -35,7 +35,9 @@ import {
   localeRowsFromPayload,
   notificationJobCompletionPercent,
   notificationJobBadgeStatus,
+  notificationImpressionEventCount,
   notificationOpenEventCount,
+  notificationReceivedEventCount,
   notificationUniqueOpenCount,
   numberLabel,
   primaryLocaleRow,
@@ -62,11 +64,9 @@ type DeliveryRow = {
   event: NotificationEvent;
   events: NotificationEvent[];
   fcmErrorCode: string | null;
-  fcmToken: string | null;
   invalidToken: boolean;
   metadata: Record<string, unknown>;
-  status: "failed" | "opened" | "sent";
-  token: DeviceToken | null;
+  status: "failed" | "impression" | "opened" | "received" | "sent";
   topicCode: string | null;
 };
 
@@ -84,7 +84,6 @@ type HistoryJobsResponse = {
 
 type HistoryEventsResponse = {
   data?: NotificationEvent[];
-  deviceTokens?: DeviceToken[];
   error?: string;
   notificationEvents?: NotificationEvent[];
   notificationJobs?: NotificationJob[];
@@ -110,31 +109,6 @@ function metadataRecord(metadata: unknown) {
 function metadataString(event: NotificationEvent, key: string) {
   const value = metadataRecord(event.metadata)[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function tokenMatchesJob(token: DeviceToken, job: NotificationJob) {
-  if (job.platform && token.platform !== job.platform) return false;
-  if (job.app_id && [token.app_id, token.product_app_id].includes(job.app_id)) return true;
-  if (job.package_name && token.package_name === job.package_name) return true;
-  if (job.bundle_id && token.bundle_id === job.bundle_id) return true;
-  return !job.app_id && !job.package_name && !job.bundle_id;
-}
-
-function tokenForEvent(
-  event: NotificationEvent,
-  job: NotificationJob,
-  tokensById: Map<string, DeviceToken>,
-  tokensByDeviceId: Map<string, DeviceToken[]>
-) {
-  const tokenId = event.device_token_id ?? metadataString(event, "deviceTokenId");
-  if (tokenId) {
-    const token = tokensById.get(tokenId);
-    if (token) return token;
-  }
-
-  const deviceId = event.device_id ?? event.target_value;
-  if (!deviceId) return null;
-  return (tokensByDeviceId.get(deviceId) ?? []).find((token) => tokenMatchesJob(token, job)) ?? null;
 }
 
 function eventLogDetail(event: NotificationEvent) {
@@ -163,6 +137,12 @@ function eventDeliveryStatus(event: NotificationEvent): DeliveryRow["status"] {
   if (text.includes("open") || text.includes("click") || text.includes("tap")) {
     return "opened";
   }
+  if (text.includes("impression") || text.includes("display") || text.includes("shown")) {
+    return "impression";
+  }
+  if (text.includes("received") || text.includes("delivered")) {
+    return "received";
+  }
   if (
     text.includes("fail") ||
     text.includes("error") ||
@@ -176,7 +156,9 @@ function eventDeliveryStatus(event: NotificationEvent): DeliveryRow["status"] {
 }
 
 function deliveryStatusRank(status: DeliveryRow["status"]) {
-  if (status === "opened") return 3;
+  if (status === "opened") return 5;
+  if (status === "impression") return 4;
+  if (status === "received") return 3;
   if (status === "failed") return 2;
   return 1;
 }
@@ -221,13 +203,14 @@ function metadataJson(metadata: Record<string, unknown>) {
 }
 
 function deliveryRowKey(row: DeliveryRow) {
+  const clientEventId = metadataString(row.event, "clientEventId");
+  if (clientEventId) return clientEventId;
+
   return [
-    row.fcmToken,
     metadataString(row.event, "deviceTokenId"),
-    row.token?.id,
     row.event.device_id,
-    row.event.target_value,
     row.event.provider_message_id,
+    row.event.target_value,
     row.event.id,
   ].find((value) => value && value.trim())!;
 }
@@ -255,11 +238,9 @@ function mergeDeliveryRows(left: DeliveryRow, right: DeliveryRow): DeliveryRow {
     event,
     events,
     fcmErrorCode: source.fcmErrorCode ?? left.fcmErrorCode,
-    fcmToken: left.fcmToken ?? right.fcmToken,
     invalidToken: left.invalidToken || right.invalidToken,
     metadata: source.metadata,
     status: eventDeliveryStatus(event),
-    token: left.token ?? right.token,
     topicCode: source.topicCode ?? left.topicCode,
   };
 }
@@ -294,24 +275,32 @@ function niceChartMax(value: number) {
 
 function HistoryJobDashboard({
   failed,
+  impressions,
   opened,
+  received,
   requested,
   rows,
   sent,
 }: {
   failed: number;
+  impressions: number;
   opened: number;
+  received: number;
   requested: number;
   rows: DeliveryRow[];
   sent: number;
 }) {
   const finalSent = rows.filter((row) => row.status === "sent").length;
+  const finalReceived = rows.filter((row) => row.status === "received").length;
+  const finalImpressions = rows.filter((row) => row.status === "impression").length;
   const finalOpened = rows.filter((row) => row.status === "opened").length;
   const finalFailed = rows.filter((row) => row.status === "failed").length;
   const totalTargets = Math.max(requested, rows.length, sent + failed);
   const bars = [
     { color: "#c7d137", label: "Requested", value: requested },
     { color: "#54b8be", label: "Sent", value: sent },
+    { color: "#38bdf8", label: "Received", value: received },
+    { color: "#e879f9", label: "Impressions", value: impressions },
     { color: "#f7b933", label: "Opened", value: opened },
     { color: "#8b73aa", label: "Failed", value: failed },
   ].map((item) => ({
@@ -320,7 +309,9 @@ function HistoryJobDashboard({
   }));
   const maxBarValue = niceChartMax(Math.max(1, ...bars.map((item) => item.value)));
   const finalStatuses = [
-    { label: "Sent only", status: "sent", value: finalSent },
+    { label: "Sent", status: "sent", value: finalSent },
+    { label: "Received", status: "received", value: finalReceived },
+    { label: "Impressions", status: "impression", value: finalImpressions },
     { label: "Opened", status: "opened", value: finalOpened },
     { label: "Failed", status: "failed", value: finalFailed },
   ] as const;
@@ -334,7 +325,7 @@ function HistoryJobDashboard({
             Delivery breakdown
           </CardTitle>
           <CardDescription className="text-xs">
-            One send job, grouped by final token state.
+            Send and mobile engagement events for this topic job.
           </CardDescription>
         </div>
         <div className="p-4">
@@ -346,7 +337,7 @@ function HistoryJobDashboard({
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
         {finalStatuses.map((item) => (
           <div key={item.status} className="rounded-xl border bg-background p-4">
             <div className="text-xs font-medium text-muted-foreground">{item.label}</div>
@@ -384,7 +375,6 @@ export function NotificationHistoryPage({
   const [notificationEvents, setNotificationEvents] = useState(
     data.notificationEvents,
   );
-  const [deviceTokens, setDeviceTokens] = useState(data.deviceTokens);
   const [deliveryEvents, setDeliveryEvents] = useState(
     data.notificationDeliveryEvents.length
       ? data.notificationDeliveryEvents
@@ -433,20 +423,12 @@ export function NotificationHistoryPage({
   const historyDetailSent = historyDetailJob ? Math.max(0, historyDetailJob.sent_count) : 0;
   const historyDetailOpened = notificationUniqueOpenCount(historyDetailEvents);
   const historyDetailOpenEvents = notificationOpenEventCount(historyDetailEvents);
+  const historyDetailReceivedEvents = notificationReceivedEventCount(historyDetailEvents);
+  const historyDetailImpressionEvents = notificationImpressionEventCount(historyDetailEvents);
   const historyDetailBadgeStatus = historyDetailJob ? notificationJobBadgeStatus(historyDetailJob) : null;
   const historyDetailControlAction = historyDetailJob && canManageNotifications
     ? notificationJobControlAction(historyDetailJob)
     : null;
-  const deviceTokensById = useMemo(() => new Map(deviceTokens.map((token) => [token.id, token])), [deviceTokens]);
-  const deviceTokensByDeviceId = useMemo(() => {
-    const byDeviceId = new Map<string, DeviceToken[]>();
-    deviceTokens.forEach((token) => {
-      const current = byDeviceId.get(token.device_id) ?? [];
-      current.push(token);
-      byDeviceId.set(token.device_id, current);
-    });
-    return byDeviceId;
-  }, [deviceTokens]);
   const historyContentRows = useMemo(
     () => historyDetailJob
       ? localePayloadForRows(localeRowsFromPayload(historyDetailJob.locale_payload, historyDetailJob.title ?? "", historyDetailJob.message ?? ""))
@@ -459,26 +441,24 @@ export function NotificationHistoryPage({
     : null;
   const historyDeliveryEvents = useMemo(
     () => deliveryEvents
-      .filter((event) => event.target_type === "device" || event.device_id || event.event_type.startsWith("fcm_"))
       .sort((first, second) => new Date(second.created_at).getTime() - new Date(first.created_at).getTime()),
     [deliveryEvents]
   );
   const historyDeliveryRows: DeliveryRow[] = historyDetailJob
     ? aggregateDeliveryRows(historyDeliveryEvents.map((event) => {
-      const token = tokenForEvent(event, historyDetailJob, deviceTokensById, deviceTokensByDeviceId);
       const metadata = metadataRecord(event.metadata);
-      const topicCode = metadataString(event, "topicCode");
+      const topicCode = metadataString(event, "topicCode")
+        ?? metadataString(event, "topic")
+        ?? (event.target_type === "topic" ? event.target_value : null);
 
       return {
         content: sentContentForTopic(historyContentRows, historyDetailJob, topicCode),
         event,
         events: [event],
         fcmErrorCode: metadataString(event, "fcmErrorCode"),
-        fcmToken: (metadataString(event, "fcmToken") ?? token?.fcm_token) || null,
         invalidToken: metadata.invalidToken === true,
         metadata,
         status: eventDeliveryStatus(event),
-        token,
         topicCode,
       };
     }))
@@ -561,7 +541,6 @@ export function NotificationHistoryPage({
       }
 
       setDeliveryEvents(payload.data);
-      if (payload.deviceTokens) setDeviceTokens(payload.deviceTokens);
       if (payload.notificationEvents) setNotificationEvents(payload.notificationEvents);
       if (payload.notificationJobs) setNotificationJobs(payload.notificationJobs);
       setDeliveryPagination({
@@ -858,7 +837,7 @@ export function NotificationHistoryPage({
                       </Button>
                     ) : null}
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4 xl:grid-cols-5">
+                  <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-4 xl:grid-cols-7">
                     <div className="rounded-md bg-muted/35 p-3">
                       <div className="text-xs text-muted-foreground">Requested</div>
                       <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailRequested}</div>
@@ -867,6 +846,14 @@ export function NotificationHistoryPage({
                       <div className="text-xs">Sent</div>
                       <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailSent}</div>
                     </div>
+                    <div className="rounded-md bg-cyan-50 p-3 text-cyan-700">
+                      <div className="text-xs">Received</div>
+                      <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailReceivedEvents}</div>
+                    </div>
+                    <div className="rounded-md bg-fuchsia-50 p-3 text-fuchsia-700">
+                      <div className="text-xs">Impressions</div>
+                      <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailImpressionEvents}</div>
+                    </div>
                     <div className="rounded-md bg-rose-50 p-3 text-rose-700">
                       <div className="text-xs">Failed</div>
                       <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailFailed}</div>
@@ -874,7 +861,7 @@ export function NotificationHistoryPage({
                     <div className="rounded-md bg-violet-50 p-3 text-violet-700">
                       <div className="text-xs">Opened</div>
                       <div className="mt-1 font-mono text-xl font-semibold tabular-nums">{historyDetailOpenEvents}</div>
-                      <div className="mt-0.5 text-[11px] opacity-75">{historyDetailOpened} token(s)</div>
+                      <div className="mt-0.5 text-[11px] opacity-75">{historyDetailOpened} unique event(s)</div>
                     </div>
                     <div className="rounded-md bg-emerald-50 p-3 text-emerald-700">
                       <div className="text-xs">Rate</div>
@@ -912,34 +899,36 @@ export function NotificationHistoryPage({
                 <Tabs defaultValue="dashboard" className="space-y-3">
                   <TabsList>
                     <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-                    <TabsTrigger value="tokens">FCM tokens</TabsTrigger>
+                    <TabsTrigger value="events">Events</TabsTrigger>
                   </TabsList>
                   <TabsContent value="dashboard" className="m-0">
                     <HistoryJobDashboard
                       failed={historyDetailFailed}
+                      impressions={historyDetailImpressionEvents}
                       opened={historyDetailOpenEvents}
+                      received={historyDetailReceivedEvents}
                       requested={historyDetailRequested}
                       rows={historyDeliveryRows}
                       sent={historyDetailSent}
                     />
                   </TabsContent>
-                  <TabsContent value="tokens" className="m-0">
+                  <TabsContent value="events" className="m-0">
                     <section className="overflow-hidden rounded-xl border bg-background shadow-sm shadow-slate-200/50">
                       <div className="border-b bg-muted/20 p-4">
                         <div className="flex items-center gap-2 font-heading text-base font-semibold">
                           <History size={17} />
-                          FCM tokens sent
+                          Notification events
                         </div>
                         <div className="mt-1 text-sm text-muted-foreground">
-                          {deliveryPagination.total} token(s) for this send job. Open Detail to view the latest provider log and metadata.
+                          {deliveryPagination.total} send/received/impression/open event(s) for this topic job. Open Detail to inspect the payload metadata.
                         </div>
                       </div>
                       <div className="overflow-auto">
                         <Table className="min-w-[1420px] text-sm">
                           <TableHeader>
                             <TableRow>
-                              <TableHead>FCM token</TableHead>
-                              <TableHead className="w-44">Device ID</TableHead>
+                              <TableHead>Topic / event ID</TableHead>
+                              <TableHead className="w-44">App / locale</TableHead>
                               <TableHead className="w-72">Content</TableHead>
                               <TableHead className="w-36">Event</TableHead>
                               <TableHead className="w-28">Status</TableHead>
@@ -953,14 +942,17 @@ export function NotificationHistoryPage({
                               historyDeliveryRows.map((row) => (
                                 <TableRow key={row.event.id}>
                                   <TableCell className="max-w-[34rem]">
-                                    <div className="truncate font-mono text-sm font-medium" title={row.fcmToken ?? undefined}>
-                                      {row.fcmToken ?? "No FCM token"}
+                                    <div className="truncate font-mono text-sm font-medium" title={row.topicCode ?? undefined}>
+                                      {row.topicCode ?? row.event.target_value ?? "No topic"}
                                     </div>
                                     <div className="mt-1 truncate text-xs text-muted-foreground">
-                                      {row.token?.package_name ?? row.token?.bundle_id ?? historyDetailJob.package_name ?? historyDetailJob.bundle_id ?? "No identifier"}
+                                      {metadataString(row.event, "clientEventId") ?? row.event.id}
                                     </div>
                                   </TableCell>
-                                  <TableCell className="font-mono text-xs">{row.event.device_id ?? row.event.target_value ?? "No device id"}</TableCell>
+                                  <TableCell>
+                                    <div className="font-mono text-xs">{metadataString(row.event, "appId") ?? historyDetailJob.app_id ?? "No app id"}</div>
+                                    <div className="mt-1 text-xs text-muted-foreground">{metadataString(row.event, "locale") ?? metadataString(row.event, "localeCode") ?? "No locale"}</div>
+                                  </TableCell>
                                   <TableCell className="max-w-72">
                                     <div className="truncate text-sm font-medium" title={row.content.title}>
                                       {row.content.title}
@@ -1003,7 +995,7 @@ export function NotificationHistoryPage({
                                 description={
                                   loadingDeliveryEvents
                                     ? "The current page is being loaded."
-                                    : "FCM send and mobile delivery events for this job will appear here."
+                                    : "FCM send and mobile received/impression/open events for this job will appear here."
                                 }
                               />
                             )}
@@ -1025,21 +1017,21 @@ export function NotificationHistoryPage({
                   {selectedDeliveryRow ? (
                     <DialogContent className="max-h-[86dvh] gap-0 overflow-hidden p-0 sm:max-w-[min(920px,calc(100vw-2rem))]">
                       <DialogHeader className="border-b px-4 py-3 pr-12">
-                        <DialogTitle className="text-base">FCM send log detail</DialogTitle>
+                        <DialogTitle className="text-base">Notification event detail</DialogTitle>
                         <DialogDescription className="text-xs">
-                          Token, final status, provider response, sent content, and stored metadata for this notification target.
+                          Topic, engagement status, provider response, sent content, and stored metadata. No FCM token is stored for topic events.
                         </DialogDescription>
                       </DialogHeader>
                       <div className="max-h-[calc(86dvh-5rem)] space-y-4 overflow-auto p-4">
                         <div className="grid gap-3 md:grid-cols-2">
                           <div className="rounded-md border bg-muted/15 p-3">
-                            <div className="text-xs text-muted-foreground">FCM token</div>
-                            <div className="mt-1 break-all font-mono text-xs">{selectedDeliveryRow.fcmToken ?? "No FCM token"}</div>
+                            <div className="text-xs text-muted-foreground">Topic</div>
+                            <div className="mt-1 break-all font-mono text-xs">{selectedDeliveryRow.topicCode ?? selectedDeliveryRow.event.target_value ?? "No topic"}</div>
                           </div>
                           <div className="rounded-md border bg-muted/15 p-3">
-                            <div className="text-xs text-muted-foreground">Device ID</div>
+                            <div className="text-xs text-muted-foreground">Client event ID</div>
                             <div className="mt-1 break-all font-mono text-xs">
-                              {selectedDeliveryRow.event.device_id ?? selectedDeliveryRow.event.target_value ?? "No device id"}
+                              {metadataString(selectedDeliveryRow.event, "clientEventId") ?? selectedDeliveryRow.event.id}
                             </div>
                           </div>
                         </div>
@@ -1095,12 +1087,12 @@ export function NotificationHistoryPage({
                               <div className="mt-1 break-all font-mono">{selectedDeliveryRow.event.provider_message_id ?? "No provider id"}</div>
                             </div>
                             <div>
-                              <div className="text-muted-foreground">FCM error code</div>
-                              <div className="mt-1 break-all font-mono">{selectedDeliveryRow.fcmErrorCode ?? "No FCM error"}</div>
+                              <div className="text-muted-foreground">Provider error code</div>
+                              <div className="mt-1 break-all font-mono">{selectedDeliveryRow.fcmErrorCode ?? "No provider error"}</div>
                             </div>
                             <div>
-                              <div className="text-muted-foreground">Invalid token</div>
-                              <div className="mt-1 font-mono">{selectedDeliveryRow.invalidToken ? "true" : "false"}</div>
+                              <div className="text-muted-foreground">Source</div>
+                              <div className="mt-1 font-mono">{metadataString(selectedDeliveryRow.event, "source") ?? "notification_sender"}</div>
                             </div>
                           </div>
                         </div>
