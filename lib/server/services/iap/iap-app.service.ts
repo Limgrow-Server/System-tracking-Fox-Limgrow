@@ -30,6 +30,7 @@ import type {
   IapAppTransaction,
   IapRevenueGranularity,
 } from "@/lib/tracking/page-data";
+import { supportsIapTestEnvironment } from "@/lib/tracking/iap-environment";
 import { iapAndroidToDto } from "@/lib/server/services/iap/android-iap.service";
 import { getIosTrialConversionAnalytics } from "@/lib/server/services/iap/ios-iap-analytics.service";
 import {
@@ -46,22 +47,12 @@ type IapAppCardOptions = {
 
 type IapAppCardsPageOptions = IapAppCardOptions & PaginationQuery;
 
-function normalizedAppId(value: string | null | undefined) {
-  return (
-    value
-      ?.trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "") ?? ""
-  );
-}
-
 function appEnvironment(
   platform: "android" | "ios",
   appId: string | null | undefined,
   requested: string | undefined,
 ) {
-  const testAppId = platform === "android" ? "la000" : "li000";
-  if (normalizedAppId(appId) !== testAppId) return "production";
+  if (!supportsIapTestEnvironment(platform, appId)) return "production";
 
   const environment = requested?.trim().toLowerCase();
   if (environment === "all") return "all";

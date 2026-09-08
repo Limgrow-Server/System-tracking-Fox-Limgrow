@@ -59,6 +59,10 @@ import type {
   IapRevenueGranularity,
   IapTrialConversionAnalytics,
 } from "@/lib/tracking/page-data";
+import {
+  normalizeIapAppId,
+  supportsIapTestEnvironment,
+} from "@/lib/tracking/iap-environment";
 import type { IapAndroidDto } from "@/lib/server/services/iap/android-iap.service";
 import type {
   IosIapTransactionSummary,
@@ -1057,12 +1061,12 @@ function TransactionPurchaseDateRangePicker({
 export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const { app } = data;
   const isIos = app.platform === "ios";
-  const normalizedAppId =
-    app.appId
-      ?.trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "") ?? "";
-  const isTestApp = isIos
+  const normalizedAppId = normalizeIapAppId(app.appId);
+  const canViewTestEnvironment = supportsIapTestEnvironment(
+    app.platform,
+    app.appId,
+  );
+  const canDeleteTestTransactions = isIos
     ? normalizedAppId === "li000"
     : normalizedAppId === "la000";
 
@@ -1201,7 +1205,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       platform: app.platform,
     });
 
-    if (isTestApp) {
+    if (canViewTestEnvironment) {
       params.set("environment", nextFilterEnvironment);
     }
     if (nextFilterState !== "all") params.set("state", nextFilterState);
@@ -1305,7 +1309,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       revenueGranularity: nextGranularity,
     });
 
-    if (isTestApp) {
+    if (canViewTestEnvironment) {
       params.set("environment", filterEnvironment);
     }
     if (filterState !== "all") params.set("state", filterState);
@@ -1350,7 +1354,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       platform: app.platform,
     });
 
-    if (isTestApp) {
+    if (canViewTestEnvironment) {
       params.set("environment", filterEnvironment);
     }
     if (filterState !== "all") params.set("state", filterState);
@@ -1400,7 +1404,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     filterState,
     filterTrial,
     isIos,
-    isTestApp,
+    canViewTestEnvironment,
     metricsLoaded,
     revenueGranularity,
   ]);
@@ -1723,7 +1727,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   );
   const sandboxEnvironment = isIos ? "sandbox" : "test";
   const showSandboxDeleteControls =
-    isTestApp && filterEnvironment === sandboxEnvironment;
+    canDeleteTestTransactions && filterEnvironment === sandboxEnvironment;
   const allVisibleSandboxSelected =
     sandboxRows.length > 0 &&
     sandboxRows.every((transaction) => selectedSandboxIds.has(transaction.id));
@@ -1755,7 +1759,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
   const hasActiveTransactionFilters =
     hasCustomPurchaseDate ||
     filterState !== "all" ||
-    (isTestApp && filterEnvironment !== "production") ||
+    (canViewTestEnvironment && filterEnvironment !== "production") ||
     (!isIos && filterKind !== "all") ||
     (isIos &&
       (filterTrial !== "all" ||
@@ -1920,7 +1924,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                 });
               }}
             />
-            {isTestApp && (
+            {canViewTestEnvironment && (
               <Select
                 value={filterEnvironment}
                 onValueChange={(v) => {
