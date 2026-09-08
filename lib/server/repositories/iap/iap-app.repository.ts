@@ -11,6 +11,7 @@ import type {
 } from "@/lib/tracking/page-data";
 import type { IosIapTwoHourCheckRecord } from "@/lib/server/repositories/iap/ios-iap-two-hour-check.repository";
 import type { IosIapTransactionSummaryRecord } from "@/lib/tracking/mappers/ios";
+import type { IapAndroidDeliveryDto } from "@/lib/server/services/iap/android-iap.service";
 
 const androidTransactionListSelect = {
   id: true,
@@ -40,6 +41,96 @@ const androidTransactionListSelect = {
     select: { storeAccountName: true },
   },
 } satisfies Prisma.IapAndroidSelect;
+
+type AndroidDeliveryRow = {
+  deliveredAt: Date | null;
+  deliveryAttempts: number;
+  destination: string;
+  eventName: string;
+  id: string;
+  lastError: string | null;
+  lockedAt: Date | null;
+  maxAttempts: number;
+  publishAttempts: number;
+  publishedAt: Date | null;
+  purchaseId: string;
+  responseStatus: number | null;
+  result: Prisma.JsonValue;
+  status: string;
+  updatedAt: Date;
+};
+
+function androidDeliverySkipReason(result: Prisma.JsonValue) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return null;
+  }
+  const record = result as Prisma.JsonObject;
+  const provider =
+    record.provider &&
+    typeof record.provider === "object" &&
+    !Array.isArray(record.provider)
+      ? (record.provider as Prisma.JsonObject)
+      : {};
+  const reason = record.reason ?? provider.reason;
+  return typeof reason === "string" ? reason : null;
+}
+
+async function loadAndroidDeliveries(purchaseIds: string[]) {
+  if (!purchaseIds.length) return new Map<string, never[]>();
+
+  const rows = await prisma.$queryRaw<AndroidDeliveryRow[]>(Prisma.sql`
+    SELECT
+      lifecycle.purchase_id AS "purchaseId",
+      delivery.id,
+      delivery.destination,
+      delivery.event_name AS "eventName",
+      delivery.status,
+      delivery.publish_attempts AS "publishAttempts",
+      delivery.delivery_attempts AS "deliveryAttempts",
+      delivery.max_attempts AS "maxAttempts",
+      delivery.response_status AS "responseStatus",
+      delivery.last_error AS "lastError",
+      delivery.result,
+      delivery.published_at AS "publishedAt",
+      delivery.locked_at AS "lockedAt",
+      delivery.delivered_at AS "deliveredAt",
+      delivery.updated_at AS "updatedAt"
+    FROM android_iap_lifecycle_events lifecycle
+    INNER JOIN android_iap_delivery_jobs delivery
+      ON delivery.lifecycle_event_id = lifecycle.id
+    WHERE lifecycle.purchase_id IN (
+      ${Prisma.join(purchaseIds.map((id) => Prisma.sql`${id}::uuid`))}
+    )
+    ORDER BY delivery.updated_at DESC
+  `);
+  const byPurchaseId = new Map<string, IapAndroidDeliveryDto[]>();
+
+  for (const row of rows) {
+    const deliveries = byPurchaseId.get(row.purchaseId) ?? [];
+    deliveries.push({
+      attempts: row.deliveryAttempts,
+      deliveredAt: row.deliveredAt?.toISOString() ?? null,
+      deliveryAttempts: row.deliveryAttempts,
+      destination: row.destination,
+      error: row.lastError,
+      eventName: row.eventName,
+      id: row.id,
+      lastError: row.lastError,
+      maxAttempts: row.maxAttempts,
+      processingAt: row.lockedAt?.toISOString() ?? null,
+      publishAttempts: row.publishAttempts,
+      publishedAt: row.publishedAt?.toISOString() ?? null,
+      responseStatus: row.responseStatus,
+      sentAt: row.deliveredAt?.toISOString() ?? null,
+      skipReason: androidDeliverySkipReason(row.result),
+      status: row.status,
+      updatedAt: row.updatedAt.toISOString(),
+    });
+    byPurchaseId.set(row.purchaseId, deliveries);
+  }
+
+  return byPurchaseId;
+}
 
 const iosTransactionSummarySelect = {
   id: true,
@@ -819,8 +910,8 @@ export async function getAndroidTransactionsByPackageAndProfilePage(
   options: AndroidTransactionPageOptions,
 ) {
   const where = androidTransactionWhere(packageName, storeProfileId, options);
-  const loadRows = () =>
-    prisma.iapAndroid.findMany({
+  const loadRows = async () => {
+    const rows = await prisma.iapAndroid.findMany({
       where,
       orderBy: revenueSortOrder(options.revenueSort)
         ? [
@@ -832,6 +923,12 @@ export async function getAndroidTransactionsByPackageAndProfilePage(
       take: options.take,
       select: androidTransactionListSelect,
     });
+    const deliveries = await loadAndroidDeliveries(rows.map((row) => row.id));
+    return rows.map((row) => ({
+      ...row,
+      deliveries: deliveries.get(row.id) ?? [],
+    }));
+  };
 
   if (options.includeTotal === false) {
     return [await loadRows(), null] as const;

@@ -696,6 +696,44 @@ function providerColumnStatusBadge(
   );
 }
 
+function androidProviderStatusBadge(
+  transaction: IapAndroidDto,
+  provider: "adjust" | "ga4",
+): TwoHourBadgeMeta {
+  const providerLabel = provider === "ga4" ? "Firebase" : "Adjust";
+  const destinations = provider === "ga4" ? ["ga4", "firebase"] : ["adjust"];
+  const matching = (transaction.deliveries ?? []).filter((delivery) =>
+    destinations.includes(delivery.destination.trim().toLowerCase()),
+  );
+  const purchaseDeliveries = matching.filter(
+    (delivery) => delivery.eventName?.trim().toLowerCase() === "purchase",
+  );
+  const latest = (purchaseDeliveries.length ? purchaseDeliveries : matching)
+    .slice()
+    .sort(
+      (left, right) =>
+        Date.parse(right.updatedAt ?? "") - Date.parse(left.updatedAt ?? ""),
+    )[0];
+
+  if (!latest) {
+    return twoHourMutedBadge(
+      "No record",
+      `No ${providerLabel} purchase delivery job exists for this transaction.`,
+    );
+  }
+
+  const status = latest.status.trim().toLowerCase();
+  const response = latest.responseStatus
+    ? `HTTP ${latest.responseStatus}`
+    : null;
+  return providerStatusBadge({
+    message: latest.lastError ?? latest.skipReason ?? response,
+    provider: providerLabel,
+    skipped: status === "skipped" || Boolean(latest.skipReason),
+    status: ["sent", "already_sent"].includes(status) ? "delivered" : status,
+  });
+}
+
 function canRetryTwoHourCheck(check: IosIapTwoHourCheck | null) {
   return Boolean(check && ["failed", "retrying"].includes(check.status));
 }
@@ -2091,12 +2129,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   </Button>
                 </TableHead>
                 <TableHead className="px-4">Purchase time</TableHead>
-                {isIos ? (
-                  <>
-                    <TableHead className="px-4">Firebase</TableHead>
-                    <TableHead className="px-4">Adjust</TableHead>
-                  </>
-                ) : null}
+                <TableHead className="px-4">Firebase</TableHead>
+                <TableHead className="px-4">Adjust</TableHead>
                 <TableHead className="min-w-[168px] px-4">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -2128,16 +2162,12 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                           <div className="h-4 w-32 animate-pulse rounded bg-muted" />
                           <div className="mt-2 h-3 w-28 animate-pulse rounded bg-muted" />
                         </TableCell>
-                        {isIos ? (
-                          <>
-                            <TableCell className="px-4 py-3.5">
-                              <div className="h-6 w-16 animate-pulse rounded-full bg-muted" />
-                            </TableCell>
-                            <TableCell className="px-4 py-3.5">
-                              <div className="h-6 w-16 animate-pulse rounded-full bg-muted" />
-                            </TableCell>
-                          </>
-                        ) : null}
+                        <TableCell className="px-4 py-3.5">
+                          <div className="h-6 w-16 animate-pulse rounded-full bg-muted" />
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
+                          <div className="h-6 w-16 animate-pulse rounded-full bg-muted" />
+                        </TableCell>
                         <TableCell className="px-4 py-3.5">
                           <div className="h-8 w-20 animate-pulse rounded-md bg-muted" />
                         </TableCell>
@@ -2176,16 +2206,16 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                       !freeTrial &&
                       Number(revenue ?? 0) > 0,
                     );
-                    const firebaseDelivery = isIos
+                    const firebaseDelivery = isIosTransaction(tx)
                       ? providerColumnStatusBadge(providerCheck, "ga4", {
                           expectsCheck: expectsPurchaseDelivery,
                         })
-                      : null;
-                    const adjustDelivery = isIos
+                      : androidProviderStatusBadge(tx, "ga4");
+                    const adjustDelivery = isIosTransaction(tx)
                       ? providerColumnStatusBadge(providerCheck, "adjust", {
                           expectsCheck: expectsPurchaseDelivery,
                         })
-                      : null;
+                      : androidProviderStatusBadge(tx, "adjust");
                     return (
                       <TableRow key={tx.id} className="hover:bg-muted/20">
                         {showSandboxDeleteControls ? (
@@ -2332,26 +2362,22 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             </div>
                           ) : null}
                         </TableCell>
-                        {isIos && firebaseDelivery && adjustDelivery ? (
-                          <>
-                            <TableCell className="px-4 py-3.5">
-                              <span
-                                className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none ${firebaseDelivery.className}`}
-                                title={firebaseDelivery.title}
-                              >
-                                {firebaseDelivery.label}
-                              </span>
-                            </TableCell>
-                            <TableCell className="px-4 py-3.5">
-                              <span
-                                className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none ${adjustDelivery.className}`}
-                                title={adjustDelivery.title}
-                              >
-                                {adjustDelivery.label}
-                              </span>
-                            </TableCell>
-                          </>
-                        ) : null}
+                        <TableCell className="px-4 py-3.5">
+                          <span
+                            className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none ${firebaseDelivery.className}`}
+                            title={firebaseDelivery.title}
+                          >
+                            {firebaseDelivery.label}
+                          </span>
+                        </TableCell>
+                        <TableCell className="px-4 py-3.5">
+                          <span
+                            className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none ${adjustDelivery.className}`}
+                            title={adjustDelivery.title}
+                          >
+                            {adjustDelivery.label}
+                          </span>
+                        </TableCell>
                         <TableCell className="min-w-[168px] px-4 py-3.5">
                           <div className="flex items-center gap-2">
                             <Button
@@ -2379,9 +2405,7 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   })}
               {!tableLoading && !visible.length && (
                 <TableEmptyState
-                  colSpan={
-                    (isIos ? 8 : 6) + (showSandboxDeleteControls ? 1 : 0)
-                  }
+                  colSpan={8 + (showSandboxDeleteControls ? 1 : 0)}
                   icon={CreditCard}
                   title="No transactions found"
                   description="Try changing your filters."

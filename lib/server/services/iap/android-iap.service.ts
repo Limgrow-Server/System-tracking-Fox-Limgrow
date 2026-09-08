@@ -2,7 +2,28 @@ import "server-only";
 
 import type { AndroidStoreProfile, IapAndroid } from "@prisma/client";
 
+export type IapAndroidDeliveryDto = {
+  id: string;
+  destination: string;
+  eventName: string | null;
+  status: string;
+  attempts?: number | null;
+  publishAttempts: number | null;
+  deliveryAttempts: number | null;
+  maxAttempts: number | null;
+  responseStatus: number | null;
+  error?: string | null;
+  lastError: string | null;
+  skipReason?: string | null;
+  publishedAt?: string | null;
+  processingAt?: string | null;
+  sentAt?: string | null;
+  deliveredAt: string | null;
+  updatedAt: string | null;
+};
+
 export type IapAndroidRecord = Omit<IapAndroid, "rawReceipt"> & {
+  deliveries?: IapAndroidDeliveryDto[] | null;
   rawReceipt?: unknown | null;
   storeProfile: Pick<AndroidStoreProfile, "storeAccountName"> | null;
 };
@@ -28,6 +49,7 @@ export type IapAndroidDto = {
   basePlanId: string | null;
   offerId: string | null;
   isTestPurchase: boolean;
+  deliveries?: IapAndroidDeliveryDto[] | null;
   rawReceipt: unknown | null;
   verifiedAt: string;
   createdAt: string;
@@ -60,6 +82,7 @@ export function iapAndroidToDto(
     basePlanId: tx.basePlanId,
     offerId: tx.offerId,
     isTestPurchase: tx.isTestPurchase,
+    deliveries: tx.deliveries ?? null,
     rawReceipt: options?.includeRawReceipt ? tx.rawReceipt : null,
     verifiedAt: tx.verifiedAt.toISOString(),
     createdAt: tx.createdAt.toISOString(),
