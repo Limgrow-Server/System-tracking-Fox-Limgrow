@@ -69,6 +69,7 @@ import type {
   IosIapTwoHourCheck,
 } from "@/lib/tracking/types";
 import { showToast } from "@/lib/client/toast";
+import { cn } from "@/lib/utils";
 import type { IapRevenueChartProps } from "./iap-revenue-chart";
 import type { IosTrialAnalyticsPanelProps } from "./ios-trial-analytics-panel";
 import { IapAppContextHeader } from "./iap-app-context-header";
@@ -379,15 +380,29 @@ function trialConversionStatusMeta(transaction: IosIapTransactionSummary) {
 
 type TwoHourBadgeMeta = {
   className: string;
+  log?: ProviderDeliveryLog | null;
   label: string;
   title: string;
 };
 
+type ProviderDeliveryLog = {
+  description: string;
+  payload: unknown;
+  title: string;
+};
+
 type ProviderDeliveryMeta = {
+  log?: ProviderDeliveryLog | null;
   message: string | null;
   provider: "Adjust" | "Firebase";
   skipped: boolean;
   status: string;
+};
+
+type JsonDialogState = {
+  description: string;
+  payload: unknown;
+  title: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -398,21 +413,34 @@ function cleanText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function providerDeliveryMeta(
-  rawContext: unknown,
-  provider: "adjust" | "ga4",
-): ProviderDeliveryMeta | null {
+function providerRawState(rawContext: unknown, provider: "adjust" | "ga4") {
   const context = isRecord(rawContext) ? rawContext : {};
   const delivery = isRecord(context.delivery) ? context.delivery : {};
   const paidAdjustState =
     provider === "adjust" && isRecord(context.adjustPurchaseDelivery)
       ? context.adjustPurchaseDelivery
       : null;
-  const deliveryState =
+  return (
     paidAdjustState ??
-    (isRecord(delivery[provider]) ? delivery[provider] : null);
-  const legacyState = isRecord(context[provider]) ? context[provider] : null;
-  const state = deliveryState ?? legacyState;
+    (isRecord(delivery[provider]) ? delivery[provider] : null) ??
+    (isRecord(context[provider]) ? context[provider] : null)
+  );
+}
+
+function deliveryLogAction(meta: TwoHourBadgeMeta) {
+  const label = meta.label.trim().toLowerCase();
+  if (!meta.log) return null;
+  if (!["failed", "partial", "retrying", "skipped"].includes(label)) {
+    return null;
+  }
+  return meta.log;
+}
+
+function providerDeliveryMeta(
+  rawContext: unknown,
+  provider: "adjust" | "ga4",
+): ProviderDeliveryMeta | null {
+  const state = providerRawState(rawContext, provider);
   if (!state) return null;
 
   const result = isRecord(state.result) ? state.result : state;
@@ -432,6 +460,11 @@ function providerDeliveryMeta(
     null;
 
   return {
+    log: {
+      description: `${provider === "ga4" ? "Firebase" : "Adjust"} delivery context stored on the iOS two-hour check.`,
+      payload: state,
+      title: `${provider === "ga4" ? "Firebase" : "Adjust"} Delivery Log`,
+    },
     message,
     provider: provider === "ga4" ? "Firebase" : "Adjust",
     skipped: Boolean(result.skipped) || status === "skipped",
@@ -443,6 +476,7 @@ function providerStatusBadge(meta: ProviderDeliveryMeta): TwoHourBadgeMeta {
   if (meta.skipped) {
     return {
       className: "border-slate-200 bg-slate-50 text-slate-600",
+      log: meta.log,
       label: "Skipped",
       title: meta.message ?? `${meta.provider} delivery was skipped.`,
     };
@@ -475,6 +509,7 @@ function providerStatusBadge(meta: ProviderDeliveryMeta): TwoHourBadgeMeta {
   if (["retryable_error", "retrying"].includes(meta.status)) {
     return {
       className: "border-amber-200 bg-amber-50 text-amber-700",
+      log: meta.log,
       label: "Retrying",
       title: meta.message ?? `${meta.provider} delivery will retry.`,
     };
@@ -482,6 +517,7 @@ function providerStatusBadge(meta: ProviderDeliveryMeta): TwoHourBadgeMeta {
 
   return {
     className: "border-rose-200 bg-rose-50 text-rose-700",
+    log: meta.log,
     label: "Failed",
     title: meta.message ?? `${meta.provider} delivery failed.`,
   };
@@ -521,6 +557,14 @@ function twoHourCheckStatusBadge(
       (check.renewed === true && check.ga4_sent_at
         ? ({
             message: null,
+            log: providerRawState(check.raw_context, "ga4")
+              ? {
+                  description:
+                    "Firebase delivery context stored on the iOS two-hour check.",
+                  payload: providerRawState(check.raw_context, "ga4"),
+                  title: "Firebase Delivery Log",
+                }
+              : null,
             provider: "Firebase",
             skipped: false,
             status: "delivered",
@@ -677,6 +721,11 @@ function providerColumnStatusBadge(
   if (status === "retrying") {
     return {
       className: "border-amber-200 bg-amber-50 text-amber-700",
+      log: {
+        description: `${providerLabel} two-hour check context. The worker marked this check as retrying.`,
+        payload: check.raw_context,
+        title: `${providerLabel} Delivery Log`,
+      },
       label: "Retrying",
       title: check.last_error ?? `${providerLabel} delivery will retry.`,
     };
@@ -685,6 +734,15 @@ function providerColumnStatusBadge(
   if (status === "failed" && providerFailureLikely(check, provider)) {
     return {
       className: "border-rose-200 bg-rose-50 text-rose-700",
+      log: {
+        description: `${providerLabel} two-hour check context. The worker marked this provider path as failed.`,
+        payload: {
+          lastError: check.last_error,
+          rawContext: check.raw_context,
+          status: check.status,
+        },
+        title: `${providerLabel} Delivery Log`,
+      },
       label: "Failed",
       title: check.last_error ?? `${providerLabel} delivery failed.`,
     };
@@ -727,11 +785,68 @@ function androidProviderStatusBadge(
     ? `HTTP ${latest.responseStatus}`
     : null;
   return providerStatusBadge({
+    log: {
+      description: `${providerLabel} delivery job stored for this Android transaction.`,
+      payload: {
+        attempts: latest.attempts,
+        deliveredAt: latest.deliveredAt,
+        deliveryAttempts: latest.deliveryAttempts,
+        destination: latest.destination,
+        eventName: latest.eventName,
+        id: latest.id,
+        lastError: latest.lastError,
+        maxAttempts: latest.maxAttempts,
+        processingAt: latest.processingAt,
+        publishAttempts: latest.publishAttempts,
+        publishedAt: latest.publishedAt,
+        responseStatus: latest.responseStatus,
+        result: latest.result ?? null,
+        skipReason: latest.skipReason ?? null,
+        status: latest.status,
+        updatedAt: latest.updatedAt,
+      },
+      title: `${providerLabel} Delivery Log`,
+    },
     message: latest.lastError ?? latest.skipReason ?? response,
     provider: providerLabel,
     skipped: status === "skipped" || Boolean(latest.skipReason),
     status: ["sent", "already_sent"].includes(status) ? "delivered" : status,
   });
+}
+
+function DeliveryStatusBadge({
+  meta,
+  onInspect,
+}: {
+  meta: TwoHourBadgeMeta;
+  onInspect: (log: ProviderDeliveryLog) => void;
+}) {
+  const log = deliveryLogAction(meta);
+  const className = cn(
+    "inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none",
+    meta.className,
+    log &&
+      "cursor-pointer transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+  );
+
+  if (!log) {
+    return (
+      <span className={className} title={meta.title}>
+        {meta.label}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={className}
+      title={`${meta.title} Click to view delivery log.`}
+      onClick={() => onInspect(log)}
+    >
+      {meta.label}
+    </button>
+  );
 }
 
 function canRetryTwoHourCheck(check: IosIapTwoHourCheck | null) {
@@ -1165,7 +1280,8 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
     useState(false);
   const [tableLoading, setTableLoading] = useState(false);
   const [loadingPage, setLoadingPage] = useState<number | null>(null);
-  const [selectedReceipt, setSelectedReceipt] = useState<unknown | null>(null);
+  const [selectedJsonDialog, setSelectedJsonDialog] =
+    useState<JsonDialogState | null>(null);
   const [receiptLoadingId, setReceiptLoadingId] = useState<string | null>(null);
   const [selectedSandboxIds, setSelectedSandboxIds] = useState<Set<string>>(
     () => new Set(),
@@ -1550,7 +1666,12 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
         throw new Error(payload.error ?? "Load IAP receipt failed.");
       }
 
-      setSelectedReceipt(receiptDisplayPayload(payload.rawReceipt ?? null));
+      setSelectedJsonDialog({
+        description:
+          "Store receipt payload used for IAP verification and troubleshooting.",
+        payload: receiptDisplayPayload(payload.rawReceipt ?? null),
+        title: "Decoded Receipt Details",
+      });
     } catch (error) {
       void showToast(
         "error",
@@ -1894,7 +2015,14 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
       {isIos && trialAnalytics ? (
         <IosTrialAnalyticsPanel
           analytics={trialAnalytics}
-          onInspectPayload={setSelectedReceipt}
+          onInspectPayload={(payload) =>
+            setSelectedJsonDialog({
+              description:
+                "iOS trial analytics payload stored for this transaction/check.",
+              payload,
+              title: "Trial Analytics Payload",
+            })
+          }
           onRefresh={refreshTrialAnalytics}
           refreshing={trialAnalyticsRefreshing}
         />
@@ -2363,20 +2491,16 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                           ) : null}
                         </TableCell>
                         <TableCell className="px-4 py-3.5">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none ${firebaseDelivery.className}`}
-                            title={firebaseDelivery.title}
-                          >
-                            {firebaseDelivery.label}
-                          </span>
+                          <DeliveryStatusBadge
+                            meta={firebaseDelivery}
+                            onInspect={(log) => setSelectedJsonDialog(log)}
+                          />
                         </TableCell>
                         <TableCell className="px-4 py-3.5">
-                          <span
-                            className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-[4px] text-[11px] font-semibold leading-none ${adjustDelivery.className}`}
-                            title={adjustDelivery.title}
-                          >
-                            {adjustDelivery.label}
-                          </span>
+                          <DeliveryStatusBadge
+                            meta={adjustDelivery}
+                            onInspect={(log) => setSelectedJsonDialog(log)}
+                          />
                         </TableCell>
                         <TableCell className="min-w-[168px] px-4 py-3.5">
                           <div className="flex items-center gap-2">
@@ -2426,11 +2550,13 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
           totalPages={transactionPagination.totalPages}
         />
       </div>
-      {selectedReceipt !== null ? (
+      {selectedJsonDialog !== null ? (
         <IapReceiptDialog
-          receipt={selectedReceipt}
+          description={selectedJsonDialog.description}
+          receipt={selectedJsonDialog.payload}
+          title={selectedJsonDialog.title}
           onOpenChange={(open) => {
-            if (!open) setSelectedReceipt(null);
+            if (!open) setSelectedJsonDialog(null);
           }}
         />
       ) : null}

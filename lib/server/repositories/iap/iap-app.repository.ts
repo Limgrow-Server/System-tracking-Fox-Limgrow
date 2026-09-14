@@ -121,6 +121,7 @@ async function loadAndroidDeliveries(purchaseIds: string[]) {
       publishAttempts: row.publishAttempts,
       publishedAt: row.publishedAt?.toISOString() ?? null,
       responseStatus: row.responseStatus,
+      result: row.result,
       sentAt: row.deliveredAt?.toISOString() ?? null,
       skipReason: androidDeliverySkipReason(row.result),
       status: row.status,

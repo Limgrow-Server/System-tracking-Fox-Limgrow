@@ -14,6 +14,7 @@ export type IapAndroidDeliveryDto = {
   responseStatus: number | null;
   error?: string | null;
   lastError: string | null;
+  result?: unknown | null;
   skipReason?: string | null;
   publishedAt?: string | null;
   processingAt?: string | null;

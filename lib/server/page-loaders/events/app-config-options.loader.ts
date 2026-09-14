@@ -12,10 +12,11 @@ function eventAppId(mapping: StoreMapping) {
 function toOption(mapping: StoreMapping): AppConfigOption | null {
   const appId = eventAppId(mapping)?.trim();
   if (!appId || mapping.status.toLowerCase() === "archived") return null;
+  const appName = mapping.app_name?.trim() || appId;
 
   return {
     appId,
-    appName: mapping.app_name,
+    appName,
     iconUrl: mapping.app_icon_url,
     key: `${mapping.platform}:${appId}`,
     mappingId: mapping.id,
