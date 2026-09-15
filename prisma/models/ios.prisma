@@ -41,6 +41,7 @@ model IosStoreMapping {
   firebaseAnalyticsApiSecret String?          @map("firebase_analytics_api_secret") @db.Text
   adjustAppToken             String?          @map("adjust_app_token")
   adjustEventToken           String?          @map("adjust_event_token")
+  adjustTrialStartedEventToken String?        @map("adjust_trial_started_event_token")
   status                     MappingStatus    @default(ACTIVE)
   createdAt                  DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                  DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)

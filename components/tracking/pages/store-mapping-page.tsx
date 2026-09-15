@@ -39,6 +39,7 @@ type StoreMappingForm = {
   adjustAppToken: string;
   adjustConfigText: string;
   adjustEventToken: string;
+  adjustTrialStartedEventToken: string;
   storeAccountName: string;
   storeProfileId: string;
   appName: string;
@@ -136,6 +137,7 @@ function createEmptyForm(platform: StoreMappingPlatformFilter): StoreMappingForm
     adjustAppToken: "",
     adjustConfigText: "",
     adjustEventToken: "",
+    adjustTrialStartedEventToken: "",
     storeAccountName: "",
     storeProfileId: "",
     appName: "",
@@ -161,6 +163,9 @@ function formFromMapping(mapping: StoreMapping): StoreMappingForm {
     adjustAppToken: value(mapping.adjust_app_token),
     adjustConfigText: "",
     adjustEventToken: value(mapping.adjust_event_token),
+    adjustTrialStartedEventToken: value(
+      mapping.adjust_trial_started_event_token,
+    ),
     storeAccountName: mapping.store_account_name,
     storeProfileId: mapping.store_profile_id,
     appName: mapping.app_name,
@@ -222,6 +227,7 @@ function parseAdjustConfigText(text: string) {
   const config = {
     adjustAppToken: "",
     adjustEventToken: "",
+    adjustTrialStartedEventToken: "",
   };
 
   text.split(/\r?\n/).forEach((line) => {
@@ -235,8 +241,21 @@ function parseAdjustConfigText(text: string) {
       config.adjustAppToken = parsedValue;
     }
 
-    if (key === "event_token" || key === "adjust_event_token") {
+    if (
+      key === "event_token" ||
+      key === "purchase_event_token" ||
+      key === "adjust_event_token" ||
+      key === "adjust_purchase_event_token"
+    ) {
       config.adjustEventToken = parsedValue;
+    }
+
+    if (
+      key === "trial_started_event_token" ||
+      key === "trial_event_token" ||
+      key === "adjust_trial_started_event_token"
+    ) {
+      config.adjustTrialStartedEventToken = parsedValue;
     }
   });
 
@@ -246,8 +265,13 @@ function parseAdjustConfigText(text: string) {
 function hasAdjustConfigValue(config: {
   adjustAppToken: string;
   adjustEventToken: string;
+  adjustTrialStartedEventToken: string;
 }) {
-  return Boolean(config.adjustAppToken || config.adjustEventToken);
+  return Boolean(
+    config.adjustAppToken ||
+      config.adjustEventToken ||
+      config.adjustTrialStartedEventToken,
+  );
 }
 
 function MappingFormSection({ title, children }: { title: string; children: ReactNode }) {
@@ -370,6 +394,9 @@ export function StoreMappingPage({
       adjustAppToken: parsed.adjustAppToken || current.adjustAppToken,
       adjustConfigText: hasParsedValue ? "" : nextValue,
       adjustEventToken: parsed.adjustEventToken || current.adjustEventToken,
+      adjustTrialStartedEventToken:
+        parsed.adjustTrialStartedEventToken ||
+        current.adjustTrialStartedEventToken,
     }));
   }
 
@@ -955,14 +982,15 @@ export function StoreMappingPage({
                           }
                           placeholder={[
                             "app_token=4w565xzmb54d",
-                            "event_token=f0ob4r",
+                            "purchase_event_token=f0ob4r",
+                            "trial_started_event_token=abc123",
                           ].join("\n")}
                           autoComplete="off"
-                          rows={3}
+                          rows={4}
                         />
                       </div>
                     )}
-                    <div className="grid gap-4 2xl:grid-cols-2">
+                    <div className="grid gap-4 2xl:grid-cols-3">
                       <div className="grid gap-2">
                         <Label htmlFor="adjustAppToken">
                           Adjust app token
@@ -1001,6 +1029,28 @@ export function StoreMappingPage({
                             confirmed.
                           </p>
                         ) : null}
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="adjustTrialStartedEventToken">
+                          Adjust trial_started event token
+                        </Label>
+                        <Input
+                          id="adjustTrialStartedEventToken"
+                          value={form.adjustTrialStartedEventToken}
+                          onChange={(event) =>
+                            updateField(
+                              "adjustTrialStartedEventToken",
+                              event.target.value,
+                            )
+                          }
+                          autoComplete="off"
+                          placeholder="abc123"
+                          readOnly={drawerReadOnly}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Use the Adjust event token named trial_started. Keep
+                          it empty only if this app does not track trials.
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -1367,7 +1417,8 @@ export function StoreMappingPage({
                       <div className="max-w-[260px] truncate font-mono text-sm">{runtimeId ?? "N/A"}</div>
                       {mapping.platform === "ios" ||
                       mapping.adjust_app_token ||
-                      mapping.adjust_event_token ? (
+                      mapping.adjust_event_token ||
+                      mapping.adjust_trial_started_event_token ? (
                         <div className="mt-1 flex max-w-[260px] flex-wrap gap-1">
                           {mapping.platform === "ios" && mapping.firebase_app_id ? (
                             <Badge variant="outline" className="font-mono">
@@ -1387,6 +1438,9 @@ export function StoreMappingPage({
                                 ? "Adjust purchase"
                                 : "Adjust event"}
                             </Badge>
+                          ) : null}
+                          {mapping.adjust_trial_started_event_token ? (
+                            <Badge variant="outline">Adjust trial</Badge>
                           ) : null}
                         </div>
                       ) : null}

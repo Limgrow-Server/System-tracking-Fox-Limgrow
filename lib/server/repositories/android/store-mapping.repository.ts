@@ -13,6 +13,7 @@ type SaveAndroidStoreMappingInput = {
   appLink: string | null;
   adjustAppToken: string | null;
   adjustEventToken: string | null;
+  adjustTrialStartedEventToken: string | null;
   appName: string;
   id?: string | null;
   packageName: string;
@@ -62,6 +63,7 @@ function androidStoreMappingWhere(options: AndroidStoreMappingPageOptions): Pris
         { appId: contains },
         { adjustAppToken: contains },
         { adjustEventToken: contains },
+        { adjustTrialStartedEventToken: contains },
         { packageName: contains },
         { storeAccountName: contains },
         { storeProfile: { storeAccountName: contains } },
@@ -143,6 +145,7 @@ export async function saveAndroidStoreMapping(
     appLink: input.appLink,
     adjustAppToken: input.adjustAppToken,
     adjustEventToken: input.adjustEventToken,
+    adjustTrialStartedEventToken: input.adjustTrialStartedEventToken,
     appName: input.appName,
     packageName: input.packageName,
     status: input.status,

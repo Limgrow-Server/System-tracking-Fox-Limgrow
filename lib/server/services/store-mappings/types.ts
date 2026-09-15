@@ -8,6 +8,7 @@ export type StoreMappingPayload = {
   appLink?: string | null;
   adjustAppToken?: string | null;
   adjustEventToken?: string | null;
+  adjustTrialStartedEventToken?: string | null;
   firebaseAnalyticsApiSecret?: string | null;
   firebaseAppId?: string | null;
   platform?: "android" | "ios";

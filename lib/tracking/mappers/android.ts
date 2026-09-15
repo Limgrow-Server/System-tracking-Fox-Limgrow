@@ -28,6 +28,7 @@ export function androidStoreMappingToTracking(mapping: AndroidStoreMappingRecord
     firebase_analytics_api_secret_configured: false,
     adjust_app_token: mapping.adjustAppToken,
     adjust_event_token: mapping.adjustEventToken,
+    adjust_trial_started_event_token: mapping.adjustTrialStartedEventToken,
     status: enumValue(mapping.status),
     created_at: mapping.createdAt.toISOString(),
     updated_at: mapping.updatedAt.toISOString(),
