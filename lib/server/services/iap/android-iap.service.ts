@@ -29,6 +29,83 @@ export type IapAndroidRecord = Omit<IapAndroid, "rawReceipt"> & {
   storeProfile: Pick<AndroidStoreProfile, "storeAccountName"> | null;
 };
 
+function moneyToMicros(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const unitsValue = record.units;
+  const nanosValue = record.nanos;
+  const units =
+    typeof unitsValue === "string" || typeof unitsValue === "number"
+      ? Number(unitsValue)
+      : 0;
+  const nanos =
+    typeof nanosValue === "string" || typeof nanosValue === "number"
+      ? Number(nanosValue)
+      : 0;
+
+  if (!Number.isFinite(units) || !Number.isFinite(nanos)) return null;
+  const micros = Math.round(units * 1_000_000 + nanos / 1_000);
+  return Number.isFinite(micros) ? micros : null;
+}
+
+function rawReceiptRevenueMicros(rawReceipt: unknown) {
+  if (!rawReceipt || typeof rawReceipt !== "object" || Array.isArray(rawReceipt)) {
+    return null;
+  }
+
+  const receipt = rawReceipt as Record<string, unknown>;
+  const lineItems = Array.isArray(receipt.lineItems)
+    ? receipt.lineItems
+    : [];
+  for (const lineItem of lineItems) {
+    if (!lineItem || typeof lineItem !== "object" || Array.isArray(lineItem)) {
+      continue;
+    }
+    const item = lineItem as Record<string, unknown>;
+    const autoRenewingPlan = item.autoRenewingPlan;
+    if (autoRenewingPlan && typeof autoRenewingPlan === "object") {
+      const recurringPrice = (autoRenewingPlan as Record<string, unknown>)
+        .recurringPrice;
+      const micros = moneyToMicros(recurringPrice);
+      if (micros !== null && micros > 0) return micros;
+    }
+  }
+
+  const productLineItems = Array.isArray(receipt.productLineItem)
+    ? receipt.productLineItem
+    : [];
+  for (const productLineItem of productLineItems) {
+    if (
+      !productLineItem ||
+      typeof productLineItem !== "object" ||
+      Array.isArray(productLineItem)
+    ) {
+      continue;
+    }
+    const offerDetails = (productLineItem as Record<string, unknown>)
+      .productOfferDetails;
+    if (!offerDetails || typeof offerDetails !== "object") continue;
+    const microsValue = (offerDetails as Record<string, unknown>)
+      .priceAmountMicros;
+    const micros = Number(microsValue);
+    if (Number.isFinite(micros) && micros > 0) return micros;
+  }
+
+  const legacyMicros = Number(receipt.priceAmountMicros);
+  return Number.isFinite(legacyMicros) && legacyMicros > 0
+    ? legacyMicros
+    : null;
+}
+
+function effectiveRevenueMicros(tx: IapAndroidRecord) {
+  const stored = tx.revenueMicros === null ? null : Number(tx.revenueMicros);
+  if (stored !== null && Number.isFinite(stored) && stored > 0) return stored;
+  return rawReceiptRevenueMicros(tx.rawReceipt) ?? stored;
+}
+
 export type IapAndroidDto = {
   id: string;
   storeProfileId: string | null;
@@ -77,7 +154,7 @@ export function iapAndroidToDto(
     autoRenewing: tx.autoRenewing,
     purchaseDate: tx.purchaseDate ? tx.purchaseDate.toISOString() : null,
     expiresDate: tx.expiresDate ? tx.expiresDate.toISOString() : null,
-    revenueMicros: tx.revenueMicros !== null ? Number(tx.revenueMicros) : null,
+    revenueMicros: effectiveRevenueMicros(tx),
     currency: tx.currency,
     regionCode: tx.regionCode,
     basePlanId: tx.basePlanId,

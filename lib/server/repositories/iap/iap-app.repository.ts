@@ -34,6 +34,7 @@ const androidTransactionListSelect = {
   basePlanId: true,
   offerId: true,
   isTestPurchase: true,
+  rawReceipt: true,
   verifiedAt: true,
   createdAt: true,
   updatedAt: true,
