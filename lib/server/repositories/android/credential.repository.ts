@@ -3,6 +3,7 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
+import { searchTextVariants } from "@/lib/search";
 
 type CredentialTargetInput = {
   credentialRef?: string;
@@ -12,9 +13,73 @@ type CredentialTargetInput = {
 export function getAndroidCredentials(take = 160) {
   return prisma.androidCredential.findMany({
     orderBy: { updatedAt: "desc" },
-    include: { storeProfile: { select: { supabaseUserId: true } } },
     take,
   });
+}
+
+export function getAndroidCredentialStoreRefs(take = 300) {
+  return prisma.androidCredential.findMany({
+    orderBy: { updatedAt: "desc" },
+    select: {
+      storeAccountName: true,
+      storeProfile: {
+        select: {
+          storeAccountName: true,
+        },
+      },
+      storeProfileId: true,
+    },
+    take,
+  });
+}
+
+type AndroidCredentialPageOptions = {
+  includeTotal?: boolean;
+  search?: string;
+  skip: number;
+  take: number;
+};
+
+function androidCredentialWhere(options: AndroidCredentialPageOptions): Prisma.AndroidCredentialWhereInput {
+  const where: Prisma.AndroidCredentialWhereInput = {};
+  const search = options.search?.trim();
+
+  if (search) {
+    where.OR = searchTextVariants(search).flatMap((variant) => {
+      const contains = { contains: variant, mode: "insensitive" as const };
+
+      return [
+        { credentialRef: contains },
+        { storeAccountName: contains },
+        { clientEmail: contains },
+        { projectId: contains },
+        { privateKeyId: contains },
+        { vaultSecretName: contains },
+        { storeProfile: { storeAccountName: contains } },
+      ];
+    });
+  }
+
+  return where;
+}
+
+export function getAndroidCredentialsPage(options: AndroidCredentialPageOptions) {
+  const where = androidCredentialWhere(options);
+  const rows = prisma.androidCredential.findMany({
+    where,
+    orderBy: { updatedAt: "desc" },
+    skip: options.skip,
+    take: options.take,
+  });
+
+  if (options.includeTotal === false) {
+    return rows.then((credentials) => [credentials, null] as const);
+  }
+
+  return prisma.$transaction([
+    rows,
+    prisma.androidCredential.count({ where }),
+  ]);
 }
 
 export function getAndroidCredentialsByIds(ids: string[]) {

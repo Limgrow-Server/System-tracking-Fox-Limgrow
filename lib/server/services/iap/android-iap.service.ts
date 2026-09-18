@@ -1,30 +1,110 @@
 import "server-only";
 
-import {
-  getAndroidIapTransactions,
-  getAndroidStoreProfilesWithMappings,
-} from "@/lib/server/repositories/android/iap.repository";
-import type { IapAndroid, AndroidStoreProfile } from "@prisma/client";
+import type { AndroidStoreProfile, IapAndroid } from "@prisma/client";
 
-export type IapAndroidRecord = IapAndroid & {
-  storeProfile: AndroidStoreProfile | null;
-};
-
-export type AndroidAppSummary = {
+export type IapAndroidDeliveryDto = {
   id: string;
-  appName: string;
-  packageName: string;
-  appIconUrl: string | null;
-  appLink: string | null;
+  destination: string;
+  eventName: string | null;
+  status: string;
+  attempts?: number | null;
+  publishAttempts: number | null;
+  deliveryAttempts: number | null;
+  maxAttempts: number | null;
+  responseStatus: number | null;
+  error?: string | null;
+  lastError: string | null;
+  result?: unknown | null;
+  skipReason?: string | null;
+  publishedAt?: string | null;
+  processingAt?: string | null;
+  sentAt?: string | null;
+  deliveredAt: string | null;
+  updatedAt: string | null;
 };
 
-export type AndroidStoreProfileSummary = {
-  id: string;
-  storeAccountName: string;
-  avatarUrl: string | null;
-  linkStore: string | null;
-  apps: AndroidAppSummary[];
+export type IapAndroidRecord = Omit<IapAndroid, "rawReceipt"> & {
+  deliveries?: IapAndroidDeliveryDto[] | null;
+  rawReceipt?: unknown | null;
+  storeProfile: Pick<AndroidStoreProfile, "storeAccountName"> | null;
 };
+
+function moneyToMicros(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const unitsValue = record.units;
+  const nanosValue = record.nanos;
+  const units =
+    typeof unitsValue === "string" || typeof unitsValue === "number"
+      ? Number(unitsValue)
+      : 0;
+  const nanos =
+    typeof nanosValue === "string" || typeof nanosValue === "number"
+      ? Number(nanosValue)
+      : 0;
+
+  if (!Number.isFinite(units) || !Number.isFinite(nanos)) return null;
+  const micros = Math.round(units * 1_000_000 + nanos / 1_000);
+  return Number.isFinite(micros) ? micros : null;
+}
+
+function rawReceiptRevenueMicros(rawReceipt: unknown) {
+  if (!rawReceipt || typeof rawReceipt !== "object" || Array.isArray(rawReceipt)) {
+    return null;
+  }
+
+  const receipt = rawReceipt as Record<string, unknown>;
+  const lineItems = Array.isArray(receipt.lineItems)
+    ? receipt.lineItems
+    : [];
+  for (const lineItem of lineItems) {
+    if (!lineItem || typeof lineItem !== "object" || Array.isArray(lineItem)) {
+      continue;
+    }
+    const item = lineItem as Record<string, unknown>;
+    const autoRenewingPlan = item.autoRenewingPlan;
+    if (autoRenewingPlan && typeof autoRenewingPlan === "object") {
+      const recurringPrice = (autoRenewingPlan as Record<string, unknown>)
+        .recurringPrice;
+      const micros = moneyToMicros(recurringPrice);
+      if (micros !== null && micros > 0) return micros;
+    }
+  }
+
+  const productLineItems = Array.isArray(receipt.productLineItem)
+    ? receipt.productLineItem
+    : [];
+  for (const productLineItem of productLineItems) {
+    if (
+      !productLineItem ||
+      typeof productLineItem !== "object" ||
+      Array.isArray(productLineItem)
+    ) {
+      continue;
+    }
+    const offerDetails = (productLineItem as Record<string, unknown>)
+      .productOfferDetails;
+    if (!offerDetails || typeof offerDetails !== "object") continue;
+    const microsValue = (offerDetails as Record<string, unknown>)
+      .priceAmountMicros;
+    const micros = Number(microsValue);
+    if (Number.isFinite(micros) && micros > 0) return micros;
+  }
+
+  const legacyMicros = Number(receipt.priceAmountMicros);
+  return Number.isFinite(legacyMicros) && legacyMicros > 0
+    ? legacyMicros
+    : null;
+}
+
+function effectiveRevenueMicros(tx: IapAndroidRecord) {
+  const stored = tx.revenueMicros === null ? null : Number(tx.revenueMicros);
+  if (stored !== null && Number.isFinite(stored) && stored > 0) return stored;
+  return rawReceiptRevenueMicros(tx.rawReceipt) ?? stored;
+}
 
 export type IapAndroidDto = {
   id: string;
@@ -47,14 +127,18 @@ export type IapAndroidDto = {
   basePlanId: string | null;
   offerId: string | null;
   isTestPurchase: boolean;
-  rawReceipt: unknown;
+  deliveries?: IapAndroidDeliveryDto[] | null;
+  rawReceipt: unknown | null;
   verifiedAt: string;
   createdAt: string;
   updatedAt: string;
   storeAccountName: string | null;
 };
 
-export function iapAndroidToDto(tx: IapAndroidRecord): IapAndroidDto {
+export function iapAndroidToDto(
+  tx: IapAndroidRecord,
+  options?: { includeRawReceipt?: boolean },
+): IapAndroidDto {
   return {
     id: tx.id,
     storeProfileId: tx.storeProfileId,
@@ -70,39 +154,17 @@ export function iapAndroidToDto(tx: IapAndroidRecord): IapAndroidDto {
     autoRenewing: tx.autoRenewing,
     purchaseDate: tx.purchaseDate ? tx.purchaseDate.toISOString() : null,
     expiresDate: tx.expiresDate ? tx.expiresDate.toISOString() : null,
-    revenueMicros: tx.revenueMicros !== null ? Number(tx.revenueMicros) : null,
+    revenueMicros: effectiveRevenueMicros(tx),
     currency: tx.currency,
     regionCode: tx.regionCode,
     basePlanId: tx.basePlanId,
     offerId: tx.offerId,
     isTestPurchase: tx.isTestPurchase,
-    rawReceipt: tx.rawReceipt,
+    deliveries: tx.deliveries ?? null,
+    rawReceipt: options?.includeRawReceipt ? tx.rawReceipt : null,
     verifiedAt: tx.verifiedAt.toISOString(),
     createdAt: tx.createdAt.toISOString(),
     updatedAt: tx.updatedAt.toISOString(),
     storeAccountName: tx.storeProfile?.storeAccountName ?? null,
   };
-}
-
-export async function getAndroidIapDtos(options?: { take?: number }) {
-  const transactions = await getAndroidIapTransactions(options);
-  return transactions.map(iapAndroidToDto);
-}
-
-export async function getAndroidStoreProfileSummaries(): Promise<AndroidStoreProfileSummary[]> {
-  const profiles = await getAndroidStoreProfilesWithMappings();
-  
-  return profiles.map((p) => ({
-    id: p.id,
-    storeAccountName: p.storeAccountName,
-    avatarUrl: p.avatarUrl,
-    linkStore: p.linkStore,
-    apps: p.mappings.map((m) => ({
-      id: m.id,
-      appName: m.appName,
-      packageName: m.packageName,
-      appIconUrl: m.appIconUrl,
-      appLink: m.appLink,
-    })),
-  }));
 }

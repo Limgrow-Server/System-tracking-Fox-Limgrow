@@ -1,19 +1,18 @@
 import "server-only";
 
 import type { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
 type AndroidStoreProfileInput = {
   avatarUrl?: string | null;
   linkStore?: string | null;
   storeAccountName: string;
-  supabaseUserId?: string | null;
 };
 
 type AndroidStoreProfilePatch = {
   avatarUrl?: string | null;
   linkStore?: string | null;
   storeAccountName?: string;
-  supabaseUserId?: string | null;
 };
 
 export function upsertAndroidStoreProfile(
@@ -23,7 +22,6 @@ export function upsertAndroidStoreProfile(
   const metadata = {
     avatarUrl: input.avatarUrl,
     linkStore: input.linkStore,
-    supabaseUserId: input.supabaseUserId,
   };
 
   return tx.androidStoreProfile.upsert({
@@ -32,6 +30,16 @@ export function upsertAndroidStoreProfile(
     create: {
       storeAccountName: input.storeAccountName,
       ...metadata,
+    },
+  });
+}
+
+export function getAndroidStoreProfileById(id: string) {
+  return prisma.androidStoreProfile.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      storeAccountName: true,
     },
   });
 }

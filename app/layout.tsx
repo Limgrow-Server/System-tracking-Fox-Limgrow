@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Manrope } from "next/font/google";
-import { Toaster } from "@/components/ui/sonner";
+import { LazyToaster } from "@/components/ui/lazy-toaster";
 import "./globals.css";
 
 const inter = Inter({
@@ -16,9 +16,17 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "LimGrow Tracking",
+  applicationName: "LimGrow Tracking",
+  title: {
+    default: "LimGrow Tracking",
+    template: "%s | LimGrow Tracking",
+  },
   description:
-    "Supabase-backed tracking for purchases, store credentials, and notifications",
+    "Operations console for mobile events, in-app purchases and Firebase topics",
+  robots: {
+    follow: false,
+    index: false,
+  },
 };
 
 export default function RootLayout({
@@ -33,7 +41,7 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         {children}
-        <Toaster richColors closeButton />
+        <LazyToaster />
       </body>
     </html>
   );

@@ -17,7 +17,7 @@ Khong doc credential tu file trong Edge Function. Credential duoc upload qua con
 Common runtime config nam o:
 
 ```text
-supabase/functions/_shared/edge-config.ts
+system-tracking-server/supabase-legacy/functions/_shared/edge-config.ts
 ```
 
 Repo nay dung `npm:@supabase/supabase-js@2` trong Edge common. Khong doi ve `jsr:@supabase/supabase-js@2` neu khong can thiet, vi moi truong deploy hien tai da gap `403 Forbidden` khi bundler tai package tu `jsr.io`.
@@ -319,10 +319,10 @@ NODE
 Existing functions:
 
 ```text
-supabase/functions/device-token-android/index.ts
-supabase/functions/device-token-ios/index.ts
-supabase/functions/verify-android/index.ts
-supabase/functions/verify-ios/index.ts
+system-tracking-server/supabase-legacy/functions/device-token-android/index.ts
+system-tracking-server/supabase-legacy/functions/device-token-ios/index.ts
+system-tracking-server/supabase-legacy/functions/verify-android/index.ts
+system-tracking-server/supabase-legacy/functions/verify-ios/index.ts
 ```
 
 Deploy:
@@ -336,7 +336,7 @@ supabase functions deploy verify-ios --project-ref <project-ref>
 
 Replace `<project-ref>` with the real project ref and do not type the angle brackets. For URL `https://abcd1234.supabase.co`, use `--project-ref abcd1234`.
 
-Current `supabase/config.toml` has:
+Current `system-tracking-server/supabase-legacy/config.toml` has:
 
 ```toml
 verify_jwt = true
@@ -349,7 +349,7 @@ That means caller must send a valid Supabase JWT unless the auth design is chang
 `Missing SUPABASE_URL or service-role secret`
 
 - Hosted: check Edge Function project secrets/default secrets.
-- Local: use `supabase functions serve --env-file .env` or create `supabase/functions/.env`.
+- Local: use `supabase functions serve --env-file .env` or create `system-tracking-server/supabase-legacy/functions/.env`.
 
 `No active android google_play credential found`
 
@@ -377,7 +377,7 @@ That means caller must send a valid Supabase JWT unless the auth design is chang
 
 ## Notes for future AI agents
 
-- Prefer extending `supabase/functions/_shared/edge-config.ts` over duplicating DB/Vault lookup logic.
+- Prefer extending `system-tracking-server/supabase-legacy/functions/_shared/edge-config.ts` over duplicating DB/Vault lookup logic.
 - Do not reintroduce `integration_configs` or `store_credential_secrets` in Edge Functions.
 - If adding a new credential purpose, update Prisma enum, upload service mapping, this common file, and this doc together.
 - Run at least:

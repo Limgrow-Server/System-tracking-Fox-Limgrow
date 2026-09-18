@@ -1,14 +1,35 @@
 import "server-only";
 
-import { Prisma, type ReviewFetchRunStatus, type ReviewFetchTrigger } from "@prisma/client";
-
-import { ApiError, badRequest, conflict, notFound } from "@/lib/server/api/errors";
 import {
+  Prisma,
+  type ReviewFetchRunStatus,
+  type ReviewFetchScanMode,
+  type ReviewFetchStopReason,
+  type ReviewFetchTrigger,
+} from "@prisma/client";
+
+import {
+  ApiError,
+  badRequest,
+  conflict,
+  notFound,
+} from "@/lib/server/api/errors";
+import {
+  rewriteStoreProviderUrl,
+  type StoreProviderEndpointContext,
+} from "@/lib/server/outbound/store-provider-endpoints";
+import {
+  type AndroidReviewFingerprint,
   type AndroidReviewUpsertInput,
   createAndroidReviewFetchRun,
+  enqueueManualAndroidReviewFetchRuns,
   finishAndroidReviewFetchRun,
   finishAndroidReviewSyncState,
+  getActiveAndroidReviewMappingSummaries,
   getActiveAndroidCredentialForStoreProfile,
+  getAndroidReviewMappingSummariesByIds,
+  getAndroidReviewMappingSummaryById,
+  getAndroidReviewFingerprints,
   getAndroidReviewMappingById,
   getAndroidReviewSyncState,
   markAndroidReviewSyncRunning,
@@ -26,6 +47,8 @@ const DEFAULT_MAX_RESULTS = 100;
 const DEFAULT_MAX_PAGES = 2;
 const MAX_ALLOWED_RESULTS = 100;
 const MAX_ALLOWED_PAGES = 10;
+const FULL_SCAN_SAFE_REQUEST_LIMIT = 180;
+const FULL_SCAN_MAX_ATTEMPTS = 3;
 const GOOGLE_PLAY_REVIEW_FETCH_WINDOW_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOCK_TTL_MS = 10 * 60 * 1000;
@@ -44,15 +67,31 @@ type NormalizedReview = {
 };
 
 export type FetchAndroidReviewsPayload = {
+  fetchAllPages?: unknown;
   fromDate?: unknown;
   maxPages?: unknown;
   maxResults?: unknown;
   pageToken?: unknown;
+  scanMode?: unknown;
   storeMappingId?: unknown;
+  scope?: unknown;
   timezoneOffsetMinutes?: unknown;
   toDate?: unknown;
   translationLanguage?: unknown;
   triggerType?: unknown;
+};
+
+export type ClaimedAndroidReviewFetchRun = {
+  attemptCount?: number;
+  id: string;
+  lockedBy: string | null;
+  maxResults: number;
+  scanMode: ReviewFetchScanMode;
+  scheduledFor: Date | null;
+  sourceScheduleId: string | null;
+  startedAt: Date | null;
+  storeMappingId: string;
+  triggerType: ReviewFetchTrigger;
 };
 
 function isUuid(value: string) {
@@ -61,10 +100,21 @@ function isUuid(value: string) {
   );
 }
 
-function boundedInteger(value: unknown, fallback: number, min: number, max: number) {
+function boundedInteger(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(Math.trunc(parsed), min), max);
+}
+
+function booleanValue(value: unknown) {
+  if (typeof value === "boolean") return value;
+  const text = cleanText(value).toLowerCase();
+  return text === "true" || text === "1";
 }
 
 function normalizeTriggerType(value: unknown): ReviewFetchTrigger {
@@ -72,6 +122,20 @@ function normalizeTriggerType(value: unknown): ReviewFetchTrigger {
   if (triggerType === "manual") return "MANUAL";
   if (triggerType === "retry") return "RETRY";
   return "SCHEDULED";
+}
+
+function normalizeScanMode(
+  value: unknown,
+  triggerType: ReviewFetchTrigger,
+  fetchAllPages: unknown,
+): ReviewFetchScanMode {
+  const scanMode = cleanText(value).toLowerCase();
+  if (scanMode === "full") return "FULL";
+  if (scanMode === "incremental") return "INCREMENTAL";
+  if (scanMode === "limited") return "LIMITED";
+  if (booleanValue(fetchAllPages)) return "FULL";
+  if (triggerType === "SCHEDULED") return "INCREMENTAL";
+  return "LIMITED";
 }
 
 function numberValue(value: unknown) {
@@ -206,12 +270,17 @@ async function listGooglePlayReviews(input: {
   maxResults: number;
   packageName: string;
   pageToken: string;
+  providerContext: StoreProviderEndpointContext;
   translationLanguage: string;
 }) {
   const url = new URL(
-    `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(
-      input.packageName,
-    )}/reviews`,
+    rewriteStoreProviderUrl(
+      "androidPublisher",
+      `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${encodeURIComponent(
+        input.packageName,
+      )}/reviews`,
+      input.providerContext,
+    ),
   );
   url.searchParams.set("maxResults", String(input.maxResults));
   if (input.pageToken) url.searchParams.set("token", input.pageToken);
@@ -300,7 +369,9 @@ function normalizeDateRange(input: {
   timezoneOffsetMinutes: unknown;
   toDate: unknown;
 }) {
-  const timezoneOffsetMinutes = parseTimezoneOffset(input.timezoneOffsetMinutes);
+  const timezoneOffsetMinutes = parseTimezoneOffset(
+    input.timezoneOffsetMinutes,
+  );
   const fromDate = parseDateOnly(input.fromDate, "From date");
   const toDate = parseDateOnly(input.toDate, "To date");
 
@@ -374,11 +445,56 @@ function reviewMatchesDateRange(
   return true;
 }
 
+function sameTime(left: Date | null, right: Date | null) {
+  return (left?.getTime() ?? null) === (right?.getTime() ?? null);
+}
+
+function reviewChanged(
+  review: NormalizedReview,
+  existing: AndroidReviewFingerprint | undefined,
+) {
+  if (!existing) return true;
+
+  return (
+    !sameTime(review.userCommentUpdatedAt, existing.userCommentUpdatedAt) ||
+    !sameTime(
+      review.developerReplyUpdatedAt,
+      existing.developerReplyUpdatedAt,
+    ) ||
+    review.row.rating !== existing.rating ||
+    review.row.reviewText !== existing.reviewText ||
+    review.row.developerReplyText !== existing.developerReplyText
+  );
+}
+
+async function changedReviewsForIncrementalPage(
+  storeMappingId: string,
+  reviews: NormalizedReview[],
+) {
+  const existingReviews = await getAndroidReviewFingerprints(
+    storeMappingId,
+    reviews.map((review) => review.reviewId),
+  );
+  const existingByReviewId = new Map(
+    existingReviews.map((review) => [review.reviewId, review]),
+  );
+
+  return reviews.filter((review) =>
+    reviewChanged(review, existingByReviewId.get(review.reviewId)),
+  );
+}
+
 function normalizeFetchPayload(payload: FetchAndroidReviewsPayload) {
   const storeMappingId = cleanText(payload.storeMappingId);
   if (!storeMappingId || !isUuid(storeMappingId)) {
     throw badRequest("Android app mapping is required.");
   }
+  const triggerType = normalizeTriggerType(payload.triggerType);
+  const scanMode = normalizeScanMode(
+    payload.scanMode,
+    triggerType,
+    payload.fetchAllPages,
+  );
   const dateRange = normalizeDateRange({
     fromDate: payload.fromDate,
     timezoneOffsetMinutes: payload.timezoneOffsetMinutes,
@@ -400,9 +516,10 @@ function normalizeFetchPayload(payload: FetchAndroidReviewsPayload) {
       MAX_ALLOWED_RESULTS,
     ),
     pageToken: cleanText(payload.pageToken),
+    scanMode,
     storeMappingId,
     translationLanguage: cleanText(payload.translationLanguage),
-    triggerType: normalizeTriggerType(payload.triggerType),
+    triggerType,
   };
 }
 
@@ -425,12 +542,17 @@ function resultStatus(value: ReviewFetchRunStatus) {
   return value.toLowerCase();
 }
 
-export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPayload) {
+async function executeAndroidStoreReviewFetch(
+  payload: FetchAndroidReviewsPayload,
+  run?: ClaimedAndroidReviewFetchRun,
+) {
   const normalized = normalizeFetchPayload(payload);
   const mapping = await getAndroidReviewMappingById(normalized.storeMappingId);
   if (!mapping) throw notFound("Android app mapping was not found.");
   if (mapping.status !== "ACTIVE") {
-    throw badRequest("Android app mapping must be active before fetching reviews.");
+    throw badRequest(
+      "Android app mapping must be active before fetching reviews.",
+    );
   }
 
   const credential = await getActiveAndroidCredentialForStoreProfile(
@@ -446,11 +568,12 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
     throw badRequest("Android service-account credential is invalid.");
   }
 
-  const startedAt = new Date();
-  const lockedBy = crypto.randomUUID();
+  const startedAt = run?.startedAt ?? new Date();
+  const lockedBy = run?.lockedBy ?? crypto.randomUUID();
   let context: FetchRunContext | null = null;
   let syncStarted = false;
   let pagesFetched = 0;
+  let requestCount = 0;
   let reviewsFetched = 0;
   let reviewsMatched = 0;
   let reviewsSkipped = 0;
@@ -458,34 +581,63 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
   let lastReviewUpdatedAt: Date | null = null;
   let oldestReviewUpdatedAt: Date | null = null;
   let pageToken = normalized.pageToken;
+  let stopReason: ReviewFetchStopReason | null = null;
 
   try {
     await ensureReviewFetchNotRunning(mapping.id);
     await markAndroidReviewSyncRunning(mapping.id, { lockedBy, startedAt });
     syncStarted = true;
 
-    const run = await createAndroidReviewFetchRun({
-      maxPages: normalized.maxPages,
-      maxResults: normalized.maxResults,
-      startedAt,
-      storeMappingId: mapping.id,
-      triggerType: normalized.triggerType,
-    });
-    context = { runId: run.id, storeMappingId: mapping.id };
+    if (run) {
+      context = { runId: run.id, storeMappingId: mapping.id };
+    } else {
+      const createdRun = await createAndroidReviewFetchRun({
+        lockedBy,
+        maxResults: normalized.maxResults,
+        scanMode: normalized.scanMode,
+        startedAt,
+        storeMappingId: mapping.id,
+        triggerType: normalized.triggerType,
+      });
+      context = { runId: createdRun.id, storeMappingId: mapping.id };
+    }
 
-    const accessToken = await googleServiceAccountAccessToken(serviceAccount);
+    const providerContext: StoreProviderEndpointContext = {
+      appIdentifier: mapping.packageName,
+      packageName: mapping.packageName,
+      platform: "android",
+      storeAccountName:
+        mapping.storeProfile?.storeAccountName ?? mapping.storeAccountName,
+      storeProfileId: mapping.storeProfileId,
+    };
+    const accessToken = await googleServiceAccountAccessToken(
+      serviceAccount,
+      undefined,
+      providerContext,
+    );
+    const fetchUntilPageLimit = normalized.scanMode === "LIMITED";
 
-    for (let page = 0; page < normalized.maxPages; page += 1) {
+    while (!fetchUntilPageLimit || pagesFetched < normalized.maxPages) {
+      if (
+        normalized.scanMode === "FULL" &&
+        requestCount >= FULL_SCAN_SAFE_REQUEST_LIMIT
+      ) {
+        stopReason = "QUOTA_GUARD";
+        break;
+      }
+
       const fetchedAt = new Date();
       const body = await listGooglePlayReviews({
         accessToken,
         maxResults: normalized.maxResults,
         packageName: mapping.packageName,
         pageToken,
+        providerContext,
         translationLanguage: normalized.translationLanguage,
       });
 
       pagesFetched += 1;
+      requestCount += 1;
       const rawReviews = Array.isArray(body.reviews)
         ? (body.reviews as Record<string, unknown>[])
         : [];
@@ -517,30 +669,56 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
       reviewsFetched += normalizedReviews.length;
       reviewsMatched += matchingReviews.length;
       reviewsSkipped += normalizedReviews.length - matchingReviews.length;
+
+      const reviewsToUpsert =
+        normalized.scanMode === "INCREMENTAL"
+          ? await changedReviewsForIncrementalPage(mapping.id, matchingReviews)
+          : matchingReviews;
+      reviewsSkipped += matchingReviews.length - reviewsToUpsert.length;
       reviewsUpserted += await upsertAndroidReviews(
-        matchingReviews.map((review) => review.row),
+        reviewsToUpsert.map((review) => review.row),
       );
 
       pageToken = nextPageToken(body);
+      if (!normalizedReviews.length) {
+        stopReason = "EMPTY_PAGE";
+      }
       if (
         normalized.dateRange.fromDate &&
         oldestReviewUpdatedAt &&
-        oldestReviewUpdatedAt.getTime() < normalized.dateRange.fromDate.getTime()
+        oldestReviewUpdatedAt.getTime() <
+          normalized.dateRange.fromDate.getTime()
       ) {
+        stopReason = "DATE_RANGE_BOUNDARY";
+        pageToken = "";
+      }
+      if (
+        normalized.scanMode === "INCREMENTAL" &&
+        matchingReviews.length > 0 &&
+        reviewsToUpsert.length === 0
+      ) {
+        stopReason = "EARLY_STOP_KNOWN_PAGE";
         pageToken = "";
       }
       if (!pageToken) break;
     }
 
     const finishedAt = new Date();
+    if (!stopReason) {
+      stopReason =
+        fetchUntilPageLimit && pageToken ? "PAGE_LIMIT_REACHED" : "COMPLETED";
+    }
     const status: ReviewFetchRunStatus = pageToken ? "PARTIAL" : "SUCCEEDED";
 
     await finishAndroidReviewFetchRun(context.runId, {
       finishedAt,
+      nextPageToken: pageToken || null,
       pagesFetched,
+      requestCount,
       reviewsFetched,
       reviewsUpserted,
       status,
+      stopReason,
     });
     await finishAndroidReviewSyncState(mapping.id, {
       finishedAt,
@@ -556,29 +734,37 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
       nextPageToken: pageToken || null,
       packageName: mapping.packageName,
       pagesFetched,
+      requestCount,
       reviewsFetched,
       reviewsMatched,
       reviewsSkipped,
       reviewsUpserted,
       runId: context.runId,
+      scanMode: normalized.scanMode.toLowerCase(),
       status: resultStatus(status),
+      stopReason: stopReason.toLowerCase(),
       storeMappingId: mapping.id,
       triggerType: resultTriggerType(normalized.triggerType),
     };
   } catch (error) {
     const finishedAt = new Date();
     const message =
-      error instanceof Error ? error.message : "Unknown Google Play review fetch error.";
+      error instanceof Error
+        ? error.message
+        : "Unknown Google Play review fetch error.";
 
     if (context) {
       await finishAndroidReviewFetchRun(context.runId, {
         errorCode: "fetch_google_play_reviews_failed",
         errorMessage: message,
         finishedAt,
+        nextPageToken: pageToken || null,
         pagesFetched,
+        requestCount,
         reviewsFetched,
         reviewsUpserted,
         status: "FAILED",
+        stopReason,
       });
     }
 
@@ -596,4 +782,105 @@ export async function fetchAndroidStoreReviews(payload: FetchAndroidReviewsPaylo
 
     throw error;
   }
+}
+
+export async function fetchAndroidStoreReviews(
+  payload: FetchAndroidReviewsPayload,
+) {
+  return executeAndroidStoreReviewFetch(payload);
+}
+
+export async function enqueueAndroidReviewFullScanRuns(input: {
+  storeMappingIds?: string[];
+}) {
+  const requestedIds = new Set(input.storeMappingIds ?? []);
+  const mappings = requestedIds.size
+    ? await getAndroidReviewMappingSummariesByIds(Array.from(requestedIds))
+    : await getActiveAndroidReviewMappingSummaries();
+  if (!mappings.length) {
+    throw notFound("No active Android apps were found for full scan.");
+  }
+
+  const scheduledFor = new Date();
+  const result = await enqueueManualAndroidReviewFetchRuns(
+    mappings.map((mapping) => ({
+      maxAttempts: FULL_SCAN_MAX_ATTEMPTS,
+      maxResults: DEFAULT_MAX_RESULTS,
+      nextAttemptAt: scheduledFor,
+      scanMode: "FULL",
+      scheduledFor,
+      storeMappingId: mapping.id,
+    })),
+  );
+
+  return {
+    enqueued: result.count,
+    requested: mappings.length,
+    runIds: result.runIds,
+    scanMode: "full",
+    skipped: result.skippedCount,
+    skippedStoreMappingIds: result.skippedStoreMappingIds,
+    status: "queued",
+  };
+}
+
+export async function enqueueAndroidReviewFetchRuns(input: {
+  fromDate?: string;
+  maxResults?: number;
+  scanMode?: string;
+  storeMappingId: string;
+  toDate?: string;
+}) {
+  const mapping = await getAndroidReviewMappingSummaryById(
+    input.storeMappingId,
+  );
+  if (!mapping || mapping.status !== "ACTIVE") {
+    throw notFound("No active Android app was found for comment fetch.");
+  }
+
+  const scheduledFor = new Date();
+  const result = await enqueueManualAndroidReviewFetchRuns([
+    {
+      maxAttempts: FULL_SCAN_MAX_ATTEMPTS,
+      maxResults: input.maxResults ?? DEFAULT_MAX_RESULTS,
+      nextAttemptAt: scheduledFor,
+      scanMode:
+        input.scanMode?.toLowerCase() === "full"
+          ? "FULL"
+          : input.scanMode?.toLowerCase() === "incremental"
+            ? "INCREMENTAL"
+            : "LIMITED",
+      scheduledFor,
+      storeMappingId: input.storeMappingId,
+    },
+  ]);
+
+  return {
+    enqueued: result.count,
+    requested: 1,
+    runIds: result.runIds,
+    scanMode: input.scanMode ?? "limited",
+    skipped: result.skippedCount,
+    skippedStoreMappingIds: result.skippedStoreMappingIds,
+    status: result.count ? "queued" : "empty",
+  };
+}
+
+export async function processClaimedAndroidReviewFetchRun(
+  run: ClaimedAndroidReviewFetchRun,
+  payload: Omit<
+    FetchAndroidReviewsPayload,
+    "storeMappingId" | "triggerType"
+  > = {},
+) {
+  return executeAndroidStoreReviewFetch(
+    {
+      ...payload,
+      maxResults: payload.maxResults ?? run.maxResults,
+      scanMode: payload.scanMode ?? run.scanMode.toLowerCase(),
+      storeMappingId: run.storeMappingId,
+      triggerType: resultTriggerType(run.triggerType),
+    },
+    run,
+  );
 }

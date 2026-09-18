@@ -38,6 +38,7 @@ enum ReviewSyncStatus {
 }
 
 enum ReviewFetchRunStatus {
+  PENDING   @map("pending")
   RUNNING   @map("running")
   SUCCEEDED @map("succeeded")
   FAILED    @map("failed")
@@ -52,4 +53,54 @@ enum ReviewFetchTrigger {
   RETRY     @map("retry")
 
   @@map("review_fetch_trigger")
+}
+
+enum ReviewFetchScanMode {
+  LIMITED     @map("limited")
+  INCREMENTAL @map("incremental")
+  FULL        @map("full")
+
+  @@map("review_fetch_scan_mode")
+}
+
+enum ReviewFetchStopReason {
+  COMPLETED             @map("completed")
+  EARLY_STOP_KNOWN_PAGE @map("early_stop_known_page")
+  DATE_RANGE_BOUNDARY   @map("date_range_boundary")
+  PAGE_LIMIT_REACHED    @map("page_limit_reached")
+  QUOTA_GUARD           @map("quota_guard")
+  EMPTY_PAGE            @map("empty_page")
+
+  @@map("review_fetch_stop_reason")
+}
+
+enum ReviewFetchScheduleStatus {
+  ACTIVE @map("active")
+  PAUSED @map("paused")
+
+  @@map("review_fetch_schedule_status")
+}
+
+enum ReviewPlatform {
+  ANDROID @map("android")
+  IOS     @map("ios")
+
+  @@map("review_platform")
+}
+
+enum BackgroundJobType {
+  NOTIFICATION_SEND @map("notification_send")
+  REVIEW_FETCH      @map("review_fetch")
+
+  @@map("background_job_type")
+}
+
+enum BackgroundJobStatus {
+  QUEUED    @map("queued")
+  RUNNING   @map("running")
+  SUCCEEDED @map("succeeded")
+  FAILED    @map("failed")
+  PARTIAL   @map("partial")
+
+  @@map("background_job_status")
 }

@@ -1,0 +1,5 @@
+ALTER TABLE "notification_jobs"
+ALTER COLUMN "updated_at" SET DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE "notification_schedules"
+ALTER COLUMN "updated_at" SET DEFAULT CURRENT_TIMESTAMP;

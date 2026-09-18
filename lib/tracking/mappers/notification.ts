@@ -92,6 +92,7 @@ export function notificationEventToTracking(event: NotificationEventRecord): Not
     notification_id: event.notificationId,
     job_id: event.jobId,
     event_type: event.eventType,
+    device_token_id: event.deviceTokenId,
     device_id: event.deviceId,
     platform: event.platform,
     target_type: event.targetType,
@@ -105,7 +106,15 @@ export function notificationEventToTracking(event: NotificationEventRecord): Not
   };
 }
 
-export function deviceTokenToTracking(device: DeviceTokenRecord): DeviceToken {
+function dateLikeToIso(value: Date | string | null | undefined) {
+  if (!value) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+export function deviceTokenToTracking(
+  device: DeviceTokenRecord,
+  lastSentAt: Date | string | null = null,
+): DeviceToken {
   return {
     id: device.id,
     user_id: device.userId,
@@ -114,16 +123,20 @@ export function deviceTokenToTracking(device: DeviceTokenRecord): DeviceToken {
     platform: device.platform,
     firebase_app_id: device.firebaseAppId,
     firebase_project_id: device.firebaseProjectId,
+    app_identifier: device.appIdentifier,
+    fcm_token: device.fcmToken,
     app_version: device.appVersion,
     os_version: device.osVersion,
     locale: device.locale,
     status: device.status,
     last_seen_at: device.lastSeenAt.toISOString(),
+    last_sent_at: dateLikeToIso(lastSentAt),
     store_platform: device.storePlatform,
     store_account_name: device.storeAccountName,
     product_app_id: device.productAppId,
     package_name: device.packageName,
     bundle_id: device.bundleId,
+    device_type: device.deviceType,
     device_model: device.deviceModel,
     device_manufacturer: device.deviceManufacturer,
     created_at: device.createdAt.toISOString(),
