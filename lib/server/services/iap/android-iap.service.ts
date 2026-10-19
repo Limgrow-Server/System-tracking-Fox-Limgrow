@@ -23,7 +23,11 @@ export type IapAndroidDeliveryDto = {
   updatedAt: string | null;
 };
 
-export type IapAndroidRecord = Omit<IapAndroid, "rawReceipt"> & {
+// The analytics join ID is stored in DB but is not part of the dashboard DTO.
+export type IapAndroidRecord = Omit<
+  IapAndroid,
+  "rawReceipt" | "obfuscatedExternalAccountId"
+> & {
   deliveries?: IapAndroidDeliveryDto[] | null;
   rawReceipt?: unknown | null;
   storeProfile: Pick<AndroidStoreProfile, "storeAccountName"> | null;

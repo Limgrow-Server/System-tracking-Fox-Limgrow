@@ -223,6 +223,8 @@ model AndroidCredential {
 }
 
 model IapAndroid {
+  /// Opaque analytics account ID verified with Google Play; not a device ID.
+  obfuscatedExternalAccountId String? @map("obfuscated_external_account_id")
   id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   storeProfileId      String?   @map("store_profile_id") @db.Uuid
   packageName         String    @map("package_name")
