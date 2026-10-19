@@ -70,6 +70,7 @@ import type {
 } from "@/lib/tracking/types";
 import { showToast } from "@/lib/client/toast";
 import { cn } from "@/lib/utils";
+import { androidAcknowledgementMeta } from "@/lib/tracking/android-acknowledgement";
 import type { IapRevenueChartProps } from "./iap-revenue-chart";
 import type { IosTrialAnalyticsPanelProps } from "./ios-trial-analytics-panel";
 import { IapAppContextHeader } from "./iap-app-context-header";
@@ -2257,6 +2258,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   </Button>
                 </TableHead>
                 <TableHead className="px-4">Purchase time</TableHead>
+                {!isIos ? (
+                  <TableHead className="px-4">Acknowledge</TableHead>
+                ) : null}
                 <TableHead className="px-4">Firebase</TableHead>
                 <TableHead className="px-4">Adjust</TableHead>
                 <TableHead className="min-w-[168px] px-4">Actions</TableHead>
@@ -2293,6 +2297,11 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                         <TableCell className="px-4 py-3.5">
                           <div className="h-6 w-16 animate-pulse rounded-full bg-muted" />
                         </TableCell>
+                        {!isIos ? (
+                          <TableCell className="px-4 py-3.5">
+                            <div className="h-6 w-24 animate-pulse rounded-full bg-muted" />
+                          </TableCell>
+                        ) : null}
                         <TableCell className="px-4 py-3.5">
                           <div className="h-6 w-16 animate-pulse rounded-full bg-muted" />
                         </TableCell>
@@ -2304,6 +2313,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   )
                 : visible.map((tx) => {
                     const txId = transactionDisplayId(tx);
+                    const acknowledgement = isAndroidTransaction(tx)
+                      ? androidAcknowledgementMeta(tx)
+                      : null;
                     const secondaryId = transactionSecondaryId(tx);
                     const productId = transactionProductId(tx);
                     const purchaseKind = transactionKind(tx);
@@ -2490,6 +2502,40 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                             </div>
                           ) : null}
                         </TableCell>
+                        {!isIos ? (
+                          <TableCell className="px-4 py-3.5">
+                            {acknowledgement ? (
+                              <div
+                                className="flex flex-col items-start gap-1"
+                                title={acknowledgement.title}
+                              >
+                                <Badge
+                                  variant="outline"
+                                  className={
+                                    acknowledgement.confirmed
+                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                                      : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                  }
+                                >
+                                  {acknowledgement.label}
+                                </Badge>
+                                {acknowledgement.source ? (
+                                  <span className="text-[11px] text-muted-foreground">
+                                    {acknowledgement.source}
+                                  </span>
+                                ) : null}
+                                {isAndroidTransaction(tx) &&
+                                tx.acknowledgedAt ? (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {formatDate(tx.acknowledgedAt)}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : (
+                              "—"
+                            )}
+                          </TableCell>
+                        ) : null}
                         <TableCell className="px-4 py-3.5">
                           <DeliveryStatusBadge
                             meta={firebaseDelivery}
@@ -2529,7 +2575,9 @@ export function IapAppDetailPage({ data }: { data: IapAppDetailPageData }) {
                   })}
               {!tableLoading && !visible.length && (
                 <TableEmptyState
-                  colSpan={8 + (showSandboxDeleteControls ? 1 : 0)}
+                  colSpan={
+                    8 + (isIos ? 0 : 1) + (showSandboxDeleteControls ? 1 : 0)
+                  }
                   icon={CreditCard}
                   title="No transactions found"
                   description="Try changing your filters."

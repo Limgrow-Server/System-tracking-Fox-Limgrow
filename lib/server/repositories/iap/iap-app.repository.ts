@@ -24,6 +24,8 @@ const androidTransactionListSelect = {
   linkedPurchaseToken: true,
   state: true,
   acknowledged: true,
+  acknowledgementSource: true,
+  acknowledgedAt: true,
   consumed: true,
   autoRenewing: true,
   purchaseDate: true,

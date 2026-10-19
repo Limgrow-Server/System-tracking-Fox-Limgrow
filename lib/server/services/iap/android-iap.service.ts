@@ -121,6 +121,8 @@ export type IapAndroidDto = {
   linkedPurchaseToken: string | null;
   state: string;
   acknowledged: boolean;
+  acknowledgementSource?: string | null;
+  acknowledgedAt?: string | null;
   consumed: boolean | null;
   autoRenewing: boolean | null;
   purchaseDate: string | null;
@@ -154,6 +156,8 @@ export function iapAndroidToDto(
     linkedPurchaseToken: tx.linkedPurchaseToken,
     state: tx.state,
     acknowledged: tx.acknowledged,
+    acknowledgementSource: tx.acknowledgementSource ?? null,
+    acknowledgedAt: tx.acknowledgedAt?.toISOString() ?? null,
     consumed: tx.consumed,
     autoRenewing: tx.autoRenewing,
     purchaseDate: tx.purchaseDate ? tx.purchaseDate.toISOString() : null,

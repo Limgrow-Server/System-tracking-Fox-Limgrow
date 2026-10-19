@@ -235,6 +235,8 @@ model IapAndroid {
   linkedPurchaseToken String?   @map("linked_purchase_token")
   state               String
   acknowledged        Boolean   @default(false)
+  acknowledgementSource String? @map("acknowledgement_source")
+  acknowledgedAt DateTime? @map("acknowledged_at") @db.Timestamptz(6)
   consumed            Boolean?
   autoRenewing        Boolean?  @map("auto_renewing")
   purchaseDate        DateTime? @map("purchase_date") @db.Timestamptz(6)
