@@ -1,4 +1,7 @@
-import { useState, type ReactNode } from "react";
+"use client";
+
+import { useMemo, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import {
   Activity,
   Apple,
@@ -17,22 +20,37 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  searchTextVariants,
+  valuesMatchSearch as fuzzyValuesMatchSearch,
+} from "@/lib/search";
 import { dateTime } from "@/lib/tracking/format";
 import type { NotificationsPageData } from "@/lib/tracking/page-data";
 import type {
   CredentialSecretMetadata,
   DeviceToken,
+  BackgroundJob,
   NotificationEvent,
   NotificationJob,
   NotificationSchedule,
   StoreMapping,
 } from "@/lib/tracking/types";
 import { cn } from "@/lib/utils";
+import type { DeliveryLineChartProps } from "./notification-charts";
+
+const DeliveryLineChart = dynamic<DeliveryLineChartProps>(
+  () => import("./notification-charts").then((mod) => mod.DeliveryLineChart),
+  {
+    loading: () => <div className="h-full w-full animate-pulse rounded-md bg-muted" />,
+    ssr: false,
+  },
+);
 
 export type PlatformFilter = "android" | "ios";
-export type NotificationFunctionSection = "send" | "schedules" | "history";
+export type NotificationFunctionSection = "overview" | "send" | "schedules" | "history";
 export type ScheduleMode = "now" | "once" | "daily" | "monthly";
 
 export type LocaleRow = {
@@ -45,8 +63,10 @@ export type LocaleRow = {
 
 export type SendResult = {
   deviceId: string | null;
+  deviceTokenId?: string | null;
   error: string | null;
   fcmErrorCode?: string | null;
+  fcmToken?: string | null;
   invalidToken?: boolean;
   ok: boolean;
   providerMessageId: string | null;
@@ -60,10 +80,14 @@ export type SendResponse = {
   ok?: boolean;
   error?: string;
   result?: {
+    batchCount?: number;
+    backgroundJob?: BackgroundJob | null;
     errorCount?: number;
     job?: NotificationJob;
+    queued?: boolean;
     results?: SendResult[];
     sentCount?: number;
+    targetCount?: number;
   };
 };
 
@@ -93,6 +117,8 @@ export type AppSendSummary = {
   errorCount: number;
   jobId?: string;
   platform: PlatformFilter | string;
+  queued?: boolean;
+  batchCount?: number;
   results: SendResult[];
   sentCount: number;
   totalCount: number;
@@ -277,10 +303,7 @@ export function matchingFirebaseCredentials(app: StoreMapping, credentials: Cred
 }
 
 export function appMatchesSearch(app: StoreMapping, search: string) {
-  const query = search.trim().toLowerCase();
-  if (!query) return true;
-
-  return [
+  return fuzzyValuesMatchSearch([
     app.app_name,
     app.app_id,
     app.store_account_name,
@@ -288,18 +311,63 @@ export function appMatchesSearch(app: StoreMapping, search: string) {
     app.bundle_id,
     app.platform,
     app.status,
-  ].some((value) => value?.toLowerCase().includes(query));
+  ], search);
 }
 
-function deviceMatchesApp(device: DeviceToken, app: StoreMapping) {
-  if (device.platform !== app.platform || device.status !== "active") return false;
-  if (app.app_id && device.app_id === app.app_id) return true;
-  if (app.app_id && device.product_app_id === app.app_id) return true;
-  if (device.app_id && device.app_id === app.app_name) return true;
-  if (app.package_name && device.package_name === app.package_name) return true;
-  if (app.bundle_id && device.bundle_id === app.bundle_id) return true;
-  if (device.product_app_id === app.app_name) return true;
-  return device.store_account_name === app.store_account_name;
+function normalizedValue(value: string | null | undefined) {
+  return value?.trim().toLowerCase() || null;
+}
+
+function normalizedValues(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) => searchTextVariants(value))
+        .map(normalizedValue)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+}
+
+function valuesOverlap(
+  leftValues: Array<string | null | undefined>,
+  rightValues: Array<string | null | undefined>
+) {
+  const rightSet = new Set(normalizedValues(rightValues));
+  return normalizedValues(leftValues).some((value) => rightSet.has(value));
+}
+
+function sameValue(left: string | null | undefined, right: string | null | undefined) {
+  const normalizedLeft = normalizedValue(left);
+  return Boolean(normalizedLeft && normalizedLeft === normalizedValue(right));
+}
+
+export function deviceTokenMatchesApp(
+  device: DeviceToken,
+  app: StoreMapping,
+  options: { activeOnly?: boolean } = {}
+) {
+  if (device.platform !== app.platform) return false;
+  if (options.activeOnly && device.status !== "active") return false;
+
+  const appIdentifier = app.platform === "android" ? app.package_name : app.bundle_id;
+  const deviceIdentifiers = normalizedValues([device.app_identifier]);
+  if (sameValue(appIdentifier, device.app_identifier)) return true;
+  if (sameValue(app.package_name, device.package_name)) return true;
+  if (sameValue(app.bundle_id, device.bundle_id)) return true;
+
+  const appIds = normalizedValues([app.app_id]);
+  const deviceIds = normalizedValues([device.app_id, device.product_app_id]);
+  if (appIds.length && deviceIds.length) {
+    return valuesOverlap(appIds, deviceIds);
+  }
+
+  return !deviceIds.length && !deviceIdentifiers.length && sameValue(device.store_account_name, app.store_account_name);
+}
+
+export function tokensForApp(app: StoreMapping | null, devices: DeviceToken[], options: { activeOnly?: boolean } = {}) {
+  if (!app) return [];
+  return devices.filter((device) => deviceTokenMatchesApp(device, app, options));
 }
 
 export function devicesForApp(app: StoreMapping | null, devices: DeviceToken[]) {
@@ -307,7 +375,7 @@ export function devicesForApp(app: StoreMapping | null, devices: DeviceToken[]) 
 
   const seen = new Set<string>();
   return devices.filter((device) => {
-    if (!deviceMatchesApp(device, app)) return false;
+    if (!deviceTokenMatchesApp(device, app, { activeOnly: true })) return false;
     if (seen.has(device.device_id)) return false;
     seen.add(device.device_id);
     return true;
@@ -316,27 +384,55 @@ export function devicesForApp(app: StoreMapping | null, devices: DeviceToken[]) 
 
 export function jobMatchesApp(job: NotificationJob, app: StoreMapping) {
   if (job.platform !== app.platform) return false;
-  if (app.app_id && job.app_id === app.app_id) return true;
-  if (app.package_name && job.package_name === app.package_name) return true;
-  if (app.bundle_id && job.bundle_id === app.bundle_id) return true;
-  if (job.app_name === app.app_name) return true;
-  return job.store_account_name === app.store_account_name;
+  if (job.app_mapping_id) return sameValue(job.app_mapping_id, app.id);
+
+  if (sameValue(app.package_name, job.package_name)) return true;
+  if (sameValue(app.bundle_id, job.bundle_id)) return true;
+
+  const appIds = normalizedValues([app.app_id]);
+  const jobIds = normalizedValues([job.app_id]);
+  if (appIds.length && jobIds.length) {
+    return valuesOverlap(appIds, jobIds);
+  }
+
+  if (!jobIds.length && sameValue(job.app_name, app.app_name)) return true;
+  return !jobIds.length
+    && !job.package_name
+    && !job.bundle_id
+    && sameValue(job.store_account_name, app.store_account_name);
 }
 
 export function scheduleMatchesApp(schedule: NotificationSchedule, app: StoreMapping) {
   if (schedule.platform !== app.platform) return false;
-  if (app.app_id && schedule.app_id === app.app_id) return true;
-  if (app.package_name && schedule.package_name === app.package_name) return true;
-  if (app.bundle_id && schedule.bundle_id === app.bundle_id) return true;
-  if (schedule.app_name === app.app_name) return true;
-  return schedule.store_account_name === app.store_account_name;
+  if (schedule.app_mapping_id) return sameValue(schedule.app_mapping_id, app.id);
+
+  if (sameValue(app.package_name, schedule.package_name)) return true;
+  if (sameValue(app.bundle_id, schedule.bundle_id)) return true;
+
+  const appIds = normalizedValues([app.app_id]);
+  const scheduleIds = normalizedValues([schedule.app_id]);
+  if (appIds.length && scheduleIds.length) {
+    return valuesOverlap(appIds, scheduleIds);
+  }
+
+  if (!scheduleIds.length && sameValue(schedule.app_name, app.app_name)) return true;
+  return !scheduleIds.length
+    && !schedule.package_name
+    && !schedule.bundle_id
+    && sameValue(schedule.store_account_name, app.store_account_name);
 }
 
 export function AppIcon({ app }: { app: StoreMapping }) {
   if (app.app_icon_url) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={app.app_icon_url} alt={`${app.app_name} icon`} className="size-9 rounded-md border object-cover" />
+      <img
+        src={app.app_icon_url}
+        alt={`${app.app_name} icon`}
+        className="size-9 rounded-md border object-cover"
+        decoding="async"
+        loading="lazy"
+      />
     );
   }
 
@@ -351,6 +447,30 @@ export function PlatformIcon({ platform }: { platform: PlatformFilter | string }
   return platform === "ios" ? <Apple size={14} /> : <Smartphone size={14} />;
 }
 
+export function platformBadgeClass(platform: PlatformFilter | string | null | undefined) {
+  if (platform === "ios") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (platform === "android") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return "border-zinc-200 bg-zinc-50 text-zinc-700";
+}
+
+export function PlatformBadge({
+  className,
+  platform,
+}: {
+  className?: string;
+  platform: PlatformFilter | string;
+}) {
+  return (
+    <Badge
+      variant="outline"
+      className={cn("h-6 gap-1.5 rounded-md px-2 text-xs", platformBadgeClass(platform), className)}
+    >
+      <PlatformIcon platform={platform} />
+      {platformLabel(platform)}
+    </Badge>
+  );
+}
+
 export function scheduleLabel(schedule: NotificationSchedule) {
   if (schedule.schedule_type === "daily") return `Daily ${schedule.time_of_day ?? ""}`;
   if (schedule.schedule_type === "monthly") return `Monthly day ${schedule.day_of_month ?? 1} ${schedule.time_of_day ?? ""}`;
@@ -359,6 +479,121 @@ export function scheduleLabel(schedule: NotificationSchedule) {
 
 export function compactIdentifier(app: StoreMapping) {
   return app.app_id ?? app.package_name ?? app.bundle_id ?? app.id;
+}
+
+export function AppSearchDropdown({
+  apps,
+  onValueChange,
+  placeholder,
+  value,
+}: {
+  apps: StoreMapping[];
+  onValueChange: (value: string) => void;
+  placeholder: string;
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState(value);
+  const suggestions = useMemo(
+    () => apps.filter((app) => appMatchesSearch(app, query)).slice(0, 8),
+    [apps, query],
+  );
+  const cleanQuery = query.trim();
+
+  function applyValue(nextValue: string) {
+    const cleanValue = nextValue.trim();
+    onValueChange(cleanValue);
+    setQuery(cleanValue);
+    setOpen(false);
+  }
+
+  function chooseApp(app: StoreMapping) {
+    applyValue(app.app_name);
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setQuery(value);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <label className="relative block min-w-0">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
+          <Input
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                applyValue(query);
+              }
+              if (event.key === "Escape") {
+                setQuery(value);
+                setOpen(false);
+              }
+            }}
+            className="h-9 pl-9"
+            placeholder={placeholder}
+          />
+        </label>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[var(--radix-popover-trigger-width)] min-w-80 max-w-[calc(100vw-2rem)] p-1.5"
+        onOpenAutoFocus={(event) => event.preventDefault()}
+      >
+        {suggestions.length ? (
+          <div className="space-y-1">
+            {suggestions.map((app) => (
+              <button
+                key={app.id}
+                type="button"
+                onClick={() => chooseApp(app)}
+                onMouseDown={(event) => event.preventDefault()}
+                className="flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+              >
+                <AppIcon app={app} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{app.app_name}</div>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                    {compactIdentifier(app)}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    {app.store_account_name ?? "Unknown store"}
+                  </div>
+                </div>
+                <PlatformBadge platform={app.platform} className="shrink-0" />
+              </button>
+            ))}
+          </div>
+        ) : cleanQuery ? (
+          <button
+            type="button"
+            onClick={() => applyValue(cleanQuery)}
+            onMouseDown={(event) => event.preventDefault()}
+            className="flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground">
+              <Search size={15} />
+            </span>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">Search all apps</div>
+              <div className="truncate font-mono text-[11px] text-muted-foreground">{cleanQuery}</div>
+            </div>
+          </button>
+        ) : (
+          <div className="px-3 py-6 text-center text-sm text-muted-foreground">No apps available</div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 export function numberLabel(value: number) {
@@ -370,6 +605,11 @@ export function numberLabel(value: number) {
 
 export function rateLabel(value: number) {
   return `${Math.round(value)}%`;
+}
+
+function percentValue(value: number, total: number) {
+  if (!total) return 0;
+  return Math.min(100, Math.round((value / total) * 100));
 }
 
 function dayKey(date: Date) {
@@ -390,12 +630,26 @@ function dayLabel(date: Date) {
 export function jobRequestedCount(job: NotificationJob) {
   const counted = Math.max(0, job.sent_count) + Math.max(0, job.error_count);
   const targetCount = job.target_type === "device" ? job.target_values.length : 0;
-  return Math.max(counted, targetCount);
+  const batchTargetCount = Math.max(0, job.batch_target_count ?? 0);
+  return Math.max(counted, targetCount, batchTargetCount);
 }
 
 export function jobFailedCount(job: NotificationJob) {
   const requested = jobRequestedCount(job);
-  return Math.min(requested, Math.max(Math.max(0, job.error_count), requested - Math.max(0, job.sent_count)));
+  const explicitErrors = Math.max(0, job.error_count);
+  const batchTotal = Math.max(0, job.batch_total_count ?? 0);
+  const batchDone = Math.max(0, job.batch_done_count ?? 0);
+  if (
+    (batchTotal > 0 && batchDone < batchTotal) ||
+    ["queued", "retrying", "processing", "materializing", "paused"].includes(job.status)
+  ) {
+    return Math.min(requested, explicitErrors);
+  }
+
+  return Math.min(
+    requested,
+    Math.max(explicitErrors, requested - Math.max(0, job.sent_count)),
+  );
 }
 
 export function jobSuccessRate(job: NotificationJob) {
@@ -403,10 +657,35 @@ export function jobSuccessRate(job: NotificationJob) {
   return requested ? (Math.max(0, job.sent_count) / requested) * 100 : 0;
 }
 
+export function notificationJobBadgeStatus(job: NotificationJob) {
+  if (job.status === "paused") return "paused";
+
+  const batchTotal = Math.max(0, job.batch_total_count ?? 0);
+  const batchDone = Math.max(0, job.batch_done_count ?? 0);
+  if (batchTotal > 0 && batchDone < batchTotal) return "processing";
+
+  if (["queued", "retrying", "processing", "materializing"].includes(job.status)) {
+    return "processing";
+  }
+
+  if (Math.max(0, job.sent_count) > 0 && Math.max(0, job.error_count) > 0) return "sent_with_issues";
+  return job.status;
+}
+
+export function notificationJobCompletionPercent(job: NotificationJob) {
+  const batchTotal = Math.max(0, job.batch_total_count ?? 0);
+  const batchDone = Math.max(0, job.batch_done_count ?? 0);
+  if (batchTotal > 0) return percentValue(batchDone, batchTotal);
+
+  const requested = jobRequestedCount(job);
+  if (!requested) return 0;
+
+  const completed = Math.max(0, job.sent_count) + Math.max(0, job.error_count);
+  return percentValue(Math.min(completed, requested), requested);
+}
+
 export function valuesMatchSearch(values: Array<string | null | undefined>, search: string) {
-  const query = search.trim().toLowerCase();
-  if (!query) return true;
-  return values.some((value) => value?.toLowerCase().includes(query));
+  return fuzzyValuesMatchSearch(values, search);
 }
 
 function notificationEventText(event: NotificationEvent) {
@@ -515,78 +794,6 @@ function buildDeliveryBuckets(jobs: NotificationJob[], events: NotificationEvent
   });
 
   return buckets;
-}
-
-function DeliveryLineChart({
-  buckets,
-  metrics,
-}: {
-  buckets: DeliveryBucket[];
-  metrics: typeof DELIVERY_METRICS;
-}) {
-  const width = 760;
-  const height = 260;
-  const left = 46;
-  const right = 18;
-  const top = 18;
-  const bottom = 34;
-  const innerWidth = width - left - right;
-  const innerHeight = height - top - bottom;
-  const maxValue = Math.max(1, ...buckets.flatMap((bucket) => metrics.map((metric) => bucket[metric.key])));
-  const xFor = (index: number) => left + (buckets.length <= 1 ? 0 : (index / (buckets.length - 1)) * innerWidth);
-  const yFor = (value: number) => top + innerHeight - (value / maxValue) * innerHeight;
-  const line = (key: DeliveryMetricKey) =>
-    buckets.map((bucket, index) => `${xFor(index)},${yFor(bucket[key])}`).join(" ");
-  const lastIndex = buckets.length - 1;
-  const axisIndexes = buckets
-    .map((_, index) => index)
-    .filter((index) => index === 0 || index === lastIndex || (index % 7 === 0 && index < lastIndex - 2));
-  const tickValues = [0, 0.25, 0.5, 0.75, 1].map((item) => Math.round(item * maxValue));
-  const showSentFill = metrics.some((metric) => metric.key === "sent");
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Notification delivery chart" className="h-full min-h-64 w-full">
-      <defs>
-        <linearGradient id="notificationSentFill" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="#2563eb" stopOpacity="0.18" />
-          <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {tickValues.map((tick) => (
-        <g key={tick}>
-          <line x1={left} x2={width - right} y1={yFor(tick)} y2={yFor(tick)} stroke="hsl(var(--border))" strokeDasharray="4 6" />
-          <text x={left - 10} y={yFor(tick) + 4} textAnchor="end" className="fill-muted-foreground text-[11px]">
-            {numberLabel(tick)}
-          </text>
-        </g>
-      ))}
-      {showSentFill ? (
-        <polygon
-          points={`${left},${height - bottom} ${line("sent")} ${width - right},${height - bottom}`}
-          fill="url(#notificationSentFill)"
-        />
-      ) : null}
-      {metrics.map((metric) => (
-        <polyline
-          key={metric.key}
-          points={line(metric.key)}
-          fill="none"
-          stroke={metric.stroke}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={metric.key === "sent" ? "3" : "2"}
-        />
-      ))}
-      {axisIndexes.map((index) => {
-        const bucket = buckets[index];
-        return (
-          <text key={bucket.key} x={xFor(index)} y={height - 10} textAnchor={index === 0 ? "start" : index === buckets.length - 1 ? "end" : "middle"} className="fill-muted-foreground text-[11px]">
-            {bucket.label}
-          </text>
-        );
-      })}
-    </svg>
-  );
 }
 
 function DeliveryMetric({
@@ -712,12 +919,17 @@ export function DeliveryDashboard({
                         : "border-transparent bg-muted/50 text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    <Checkbox
+                    <span
                       aria-hidden="true"
-                      checked={checked}
-                      className="pointer-events-none size-3.5"
-                      tabIndex={-1}
-                    />
+                      className={cn(
+                        "flex size-3.5 items-center justify-center rounded-[4px] border transition",
+                        checked
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-input bg-background"
+                      )}
+                    >
+                      {checked ? <CheckCircle2 size={10} /> : null}
+                    </span>
                     <span className={cn("size-2 rounded-full", metric.color)} />
                     {metric.label}
                   </button>
@@ -746,6 +958,7 @@ export function notificationHref(section: NotificationFunctionSection, app?: Sto
 }
 
 export function sectionLabel(section: NotificationFunctionSection) {
+  if (section === "overview") return "Overview";
   if (section === "schedules") return "Schedules";
   if (section === "history") return "History";
   return "Send";
@@ -791,9 +1004,11 @@ function AppStatusDot({ status }: { status: string | null | undefined }) {
 export function AppSelectionTable({
   apps,
   credentials,
+  deviceCounts,
   devices,
   fillHeight = false,
   schedules,
+  scheduleStats,
   search,
   selectedAppIdSet,
   updateAppSelection,
@@ -801,15 +1016,38 @@ export function AppSelectionTable({
 }: {
   apps: StoreMapping[];
   credentials: NotificationsPageData["credentialSecrets"];
+  deviceCounts?: Record<string, number>;
   devices: DeviceToken[];
   fillHeight?: boolean;
   schedules: NotificationSchedule[];
+  scheduleStats?: NotificationsPageData["notificationScheduleStats"];
   search: string;
   selectedAppIdSet: Set<string>;
   updateAppSelection: (appId: string, checked?: boolean) => void;
   onSearchChange: (value: string) => void;
 }) {
-  const filteredApps = apps.filter((app) => appMatchesSearch(app, search));
+  const totalDeviceCount = useMemo(
+    () => apps.reduce((total, app) => total + (deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length), 0),
+    [apps, deviceCounts, devices],
+  );
+  const filteredApps = useMemo(
+    () =>
+      apps
+        .filter((app) => appMatchesSearch(app, search))
+        .map((app) => {
+          const localSchedules = schedules.filter((schedule) => scheduleMatchesApp(schedule, app));
+          const stat = scheduleStats?.[app.id];
+
+          return {
+            activeSchedules: (stat?.active ?? 0) + localSchedules.filter((schedule) => schedule.status === "active").length,
+            app,
+            credentials: matchingFirebaseCredentials(app, credentials),
+            totalSchedules: (stat?.total ?? 0) + localSchedules.length,
+            totalTokens: deviceCounts?.[app.id] ?? tokensForApp(app, devices, { activeOnly: true }).length,
+          };
+        }),
+    [apps, credentials, deviceCounts, devices, scheduleStats, schedules, search],
+  );
 
   return (
     <Card size="sm" className={cn("min-h-0 overflow-hidden rounded-xl bg-card shadow-sm shadow-slate-200/50", fillHeight && "flex h-full flex-col")}>
@@ -817,12 +1055,18 @@ export function AppSelectionTable({
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <CardTitle className="text-sm">Target app</CardTitle>
-            <CardDescription className="max-w-3xl text-xs">{appSelectionDescription(apps, devices)}</CardDescription>
+            <CardDescription className="max-w-3xl text-xs">
+              {apps.length} mapped app(s), {totalDeviceCount} active FCM token(s). Select one or more apps to send together.
+            </CardDescription>
           </div>
-          <label className="relative block w-full lg:w-80">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
-            <Input value={search} onChange={(event) => onSearchChange(event.target.value)} className="h-9 pl-9" placeholder="Search app, package, bundle, store..." />
-          </label>
+          <div className="w-full lg:w-80">
+            <AppSearchDropdown
+              apps={apps}
+              onValueChange={onSearchChange}
+              placeholder="Search app, package, bundle, store..."
+              value={search}
+            />
+          </div>
         </div>
       </CardHeader>
       <CardContent className={cn("px-0", fillHeight && "min-h-0 flex-1")}>
@@ -834,18 +1078,15 @@ export function AppSelectionTable({
                 <TableHead className="h-9 w-[30%] min-w-56">App</TableHead>
                 <TableHead className="h-9 w-28">Platform</TableHead>
                 <TableHead className="h-9 w-[32%] min-w-56">Identifier</TableHead>
-                <TableHead className="h-9 w-24">Tokens</TableHead>
+                <TableHead className="h-9 w-32">Tokens</TableHead>
                 <TableHead className="h-9 w-24">Config</TableHead>
                 <TableHead className="h-9 w-24">Schedules</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredApps.length ? (
-                filteredApps.map((app) => {
+                filteredApps.map(({ activeSchedules, app, credentials: appCredentials, totalSchedules, totalTokens }) => {
                   const selected = selectedAppIdSet.has(app.id);
-                  const appCredentials = matchingFirebaseCredentials(app, credentials);
-                  const appDevices = devicesForApp(app, devices);
-                  const appSchedules = schedules.filter((schedule) => scheduleMatchesApp(schedule, app));
 
                   return (
                     <TableRow
@@ -874,16 +1115,13 @@ export function AppSelectionTable({
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className="h-6 gap-1.5 rounded-md px-2 text-xs">
-                          <PlatformIcon platform={app.platform} />
-                          {platformLabel(app.platform)}
-                        </Badge>
+                        <PlatformBadge platform={app.platform} />
                       </TableCell>
                       <TableCell>
                         <div className="max-w-full truncate rounded-md bg-muted px-2 py-1 font-mono text-xs">{compactIdentifier(app)}</div>
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm font-medium">{appDevices.length}</div>
+                        <div className="text-sm font-medium">{totalTokens}</div>
                         <div className="text-xs text-muted-foreground">active</div>
                       </TableCell>
                       <TableCell>
@@ -899,8 +1137,8 @@ export function AppSelectionTable({
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="text-sm font-medium">{appSchedules.length}</div>
-                        <div className="text-xs text-muted-foreground">{appSchedules.filter((schedule) => schedule.status === "active").length} active</div>
+                        <div className="text-sm font-medium">{totalSchedules}</div>
+                        <div className="text-xs text-muted-foreground">{activeSchedules} active</div>
                       </TableCell>
                     </TableRow>
                   );
@@ -939,15 +1177,12 @@ export function RecordFilterControls({
 }) {
   return (
     <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_15rem_13rem]">
-      <label className="relative block min-w-0">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
-        <Input
-          value={search}
-          onChange={(event) => onSearchChange(event.target.value)}
-          className="h-9 pl-9"
-          placeholder={placeholder}
-        />
-      </label>
+      <AppSearchDropdown
+        apps={apps}
+        onValueChange={onSearchChange}
+        placeholder={placeholder}
+        value={search}
+      />
       <Select value={appFilter} onValueChange={onAppFilterChange}>
         <SelectTrigger className="h-9">
           <SelectValue placeholder="All apps" />

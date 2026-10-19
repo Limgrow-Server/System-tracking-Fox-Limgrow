@@ -3,9 +3,9 @@ import { ReviewAppGridPage } from "@/components/tracking/pages/reviews/review-ap
 import { getReviewAppGridPageData } from "@/lib/server/page-loaders/reviews/review-app-grid.loader";
 
 export default async function CommentsRoutePage() {
-  await requireConsoleSession(["Admin", "Marketing"]);
+  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
-  const data = await getReviewAppGridPageData();
+  const data = await getReviewAppGridPageData(session);
 
   return <ReviewAppGridPage data={data} />;
 }

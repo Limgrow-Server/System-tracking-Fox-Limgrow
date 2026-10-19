@@ -4,16 +4,29 @@ import { createHash, randomUUID } from "crypto";
 
 import { Prisma } from "@prisma/client";
 
-import { prisma } from "@/lib/prisma";
-import { requireAdminSession } from "@/lib/server/api/auth";
-import { badRequest, ApiError } from "@/lib/server/api/errors";
+import { CACHE_TAGS, revalidateCacheTags } from "@/lib/server/cache-tags";
+import {
+  canAccessRecordViaStoreMappings,
+  canAccessScopedRecord,
+  notificationRecordFromPayload,
+} from "@/lib/auth/app-scope";
+import { notificationPrisma as prisma } from "@/lib/prisma";
+import { requireConsoleApiSession } from "@/lib/server/api/auth";
+import { badRequest, forbidden } from "@/lib/server/api/errors";
 import { parseJsonBody } from "@/lib/server/api/request";
 import { errorJson, okJson } from "@/lib/server/api/responses";
-import { createClient } from "@/lib/supabase/server";
+import { enqueueNotificationDeviceJob } from "@/lib/server/services/notifications/notification-batch-queue.service";
+import { dispatchDueNotificationsOnServer } from "@/lib/server/services/notifications/notification-dispatcher.service";
+import { sendNotificationPayloadLocal } from "@/lib/server/services/notifications/local-notification-sender.service";
+import { getActiveDeviceIdsForNotificationTarget } from "@/lib/server/services/notifications/notification.service";
+import { getAndroidStoreMappingDtos } from "@/lib/server/services/store-mappings/android-store-mapping.service";
+import { getIosStoreMappingDtos } from "@/lib/server/services/store-mappings/ios-store-mapping.service";
 import {
   deviceTokenToTracking,
+  notificationJobToTracking,
   notificationScheduleToTracking,
 } from "@/lib/tracking/mappers/notification";
+import { firstAppId } from "@/lib/tracking/identity";
 
 const LANGUAGES = [
   { topicCode: "zh", label: "Chinese" },
@@ -37,12 +50,8 @@ const LANGUAGES = [
 const TITLE_MAX_LENGTH = 45;
 const MESSAGE_MAX_LENGTH = 90;
 const HCM_OFFSET_MINUTES = 7 * 60;
-
-function supabaseFunctionUrl(functionName: string) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, "");
-  if (!supabaseUrl) throw badRequest("NEXT_PUBLIC_SUPABASE_URL is not configured.");
-  return `${supabaseUrl}/functions/v1/${functionName}`;
-}
+const SCHEDULE_DEVICE_TARGET_LIMIT = 5000;
+const notificationManageRoles = ["Admin"] as const;
 
 function clean(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -51,6 +60,85 @@ function clean(value: unknown) {
 function stringArray(value: unknown) {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.map((item) => clean(item)).filter(Boolean)));
+}
+
+function errorForLog(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+
+  return { message: String(error) };
+}
+
+function notificationRequestContext(body: Record<string, unknown>) {
+  const deviceIds = stringArray(body.deviceIds || body.targetValues);
+  const deviceTokenIds = stringArray(body.deviceTokenIds);
+
+  return {
+    appId: firstAppId(body.appId, body.productAppId),
+    appName: clean(body.appName) || null,
+    bundleId: clean(body.bundleId) || null,
+    deviceIdsCount: deviceIds.length,
+    deviceTokenIdsCount: deviceTokenIds.length,
+    packageName: clean(body.packageName) || null,
+    platform: clean(body.platform) || null,
+    scheduleId: clean(body.scheduleId) || null,
+    targetCount: deviceTokenIds.length || deviceIds.length,
+    targetType: clean(body.targetType) || null,
+  };
+}
+
+async function assertNotificationAccess(
+  session: Awaited<ReturnType<typeof requireConsoleApiSession>>,
+  payload: Record<string, unknown>,
+) {
+  if (session.role === "Admin") return;
+
+  const directRecord = notificationRecordFromPayload(payload);
+  if (canAccessScopedRecord(session, directRecord)) return;
+
+  const [androidMappings, iosMappings] = await Promise.all([
+    getAndroidStoreMappingDtos({ take: 500 }),
+    getIosStoreMappingDtos({ take: 500 }),
+  ]);
+  if (
+    canAccessRecordViaStoreMappings(session, directRecord, [
+      ...androidMappings,
+      ...iosMappings,
+    ])
+  ) {
+    return;
+  }
+
+  const scheduleId = clean(payload.id) || clean(payload.scheduleId);
+  if (scheduleId) {
+    const schedule = await prisma.notificationSchedule.findUnique({
+      where: { id: scheduleId },
+    });
+    if (schedule && canAccessScopedRecord(session, notificationScheduleToTracking(schedule))) {
+      return;
+    }
+    if (
+      schedule &&
+      canAccessRecordViaStoreMappings(
+        session,
+        notificationScheduleToTracking(schedule),
+        [...androidMappings, ...iosMappings],
+      )
+    ) {
+      return;
+    }
+  }
+
+  throw forbidden("This notification app is outside your assigned app scope.");
+}
+
+function logNotificationFailure(message: string, details: Record<string, unknown>) {
+  console.error(`[notifications] ${message}`, details);
 }
 
 function jsonObject(value: unknown) {
@@ -167,53 +255,186 @@ function primaryNotification(notifications: ReturnType<typeof normalizedNotifica
   return notifications.find((notification) => notification.topicCode === "en") ?? notifications[0];
 }
 
-async function currentAccessToken() {
-  const supabase = await createClient();
-  const {
-    data: { session },
-    error,
-  } = await supabase.auth.getSession();
-
-  if (error || !session?.access_token) {
-    throw badRequest("A valid Supabase Auth session is required to call Edge Functions.");
+function safeNotifications(payload: Record<string, unknown>) {
+  try {
+    return normalizedNotifications(payload.notifications);
+  } catch {
+    const title = clean(payload.title);
+    const message = clean(payload.message);
+    return title || message ? [{ enabled: true, message, title, topicCode: "en" }] : [];
   }
-
-  return session.access_token;
 }
 
-async function callEdgeFunction(functionName: string, body: Record<string, unknown>) {
-  const accessToken = await currentAccessToken();
-  const response = await fetch(supabaseFunctionUrl(functionName), {
-    method: "POST",
-    headers: {
-      apikey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "",
-      authorization: `Bearer ${accessToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json().catch(() => ({}))) as {
-    ok?: boolean;
-    error?: string;
-    result?: unknown;
-  };
-
-  if (!response.ok || !payload.ok) {
-    throw new ApiError(payload.error ?? `${functionName} failed.`, response.status);
+function failedSendTargetValues(
+  payload: Record<string, unknown>,
+  targetType: "device" | "topic",
+  notifications: ReturnType<typeof safeNotifications>,
+) {
+  if (targetType === "device") {
+    return [
+      ...stringArray(payload.deviceTokenIds),
+      ...stringArray(payload.deviceIds || payload.targetValues),
+    ];
   }
 
-  return payload.result as Record<string, unknown>;
+  const topicBase = topicSegment(payload.topicBase) || clean(payload.appName) || "notification";
+  return notifications.length
+    ? notifications.map((item) => `${topicBase}-${item.topicCode}`)
+    : [topicBase];
+}
+
+function failedSendErrorCode(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80) || "send_failed";
+}
+
+async function persistFailedSendAttempt(
+  payload: Record<string, unknown>,
+  requestedBy: string,
+  error: unknown,
+) {
+  const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
+  const notifications = safeNotifications(payload);
+  const firstNotification = notifications.length ? primaryNotification(notifications) : null;
+  const targetValues = failedSendTargetValues(payload, targetType, notifications);
+  const appId = firstAppId(payload.appId, payload.productAppId, payload.appName);
+  const platform = clean(payload.platform) || "android";
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorCode = failedSendErrorCode(error);
+  const now = new Date();
+
+  const job = await prisma.notificationJob.create({
+    data: {
+      appId,
+      appName: clean(payload.appName) || clean(payload.productAppId) || "unknown_app",
+      bundleId: platform === "ios" ? clean(payload.bundleId) || null : null,
+      credentialRef: clean(payload.credentialRef) || null,
+      dataPayload: jsonObject(payload.data) as Prisma.InputJsonValue,
+      errorCount: Math.max(targetValues.length, 1),
+      imageUrl: clean(payload.imageUrl) || null,
+      localePayload: notifications as Prisma.InputJsonValue,
+      message: firstNotification?.message || null,
+      packageName: platform === "android" ? clean(payload.packageName) || null : null,
+      platform,
+      requestedBy,
+      scheduleId: clean(payload.scheduleId) || null,
+      sentAt: now,
+      sentCount: 0,
+      status: "failed",
+      storeAccountName: clean(payload.storeAccountName) || null,
+      storePlatform: clean(payload.storePlatform) || null,
+      storeProfileId: clean(payload.storeProfileId) || null,
+      targetType,
+      targetValues,
+      title: firstNotification?.title || null,
+      topicBase: topicSegment(payload.topicBase) || clean(payload.appName) || "device",
+      updatedAt: now,
+    },
+  });
+
+  await prisma.notificationEvent.create({
+    data: {
+      errorCode,
+      errorDetail: errorMessage.slice(0, 500),
+      eventType: "fcm_failed",
+      jobId: job.id,
+      metadata: {
+        context: notificationRequestContext(payload),
+        source: "next_send_api_fallback",
+      } as Prisma.InputJsonValue,
+      notificationId: job.id,
+      platform,
+      status: "failed",
+      targetType,
+      targetValue: targetValues[0] ?? null,
+    },
+  });
+
+  return job;
 }
 
 export async function handleAdminNotificationSendPost(request: Request) {
+  let requestPayload: Record<string, unknown> | null = null;
+  let canPersistFailedAttempt = false;
+  let requestedBy: string | null = null;
+
   try {
-    await requireAdminSession();
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
+    requestedBy = session.email;
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    requestPayload = payload;
+    await assertNotificationAccess(session, payload);
+    canPersistFailedAttempt = true;
+    const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
+    const deviceIds = stringArray(payload.deviceIds || payload.targetValues);
+    if (targetType === "device") {
+      const queued = await enqueueNotificationDeviceJob(
+        {
+          ...payload,
+          deviceIds,
+          queueByApp: Boolean(payload.queueByApp),
+          targetType,
+        },
+        {
+          email: session.email,
+          memberId: session.memberId,
+        },
+      );
+
+      revalidateCacheTags([
+        CACHE_TAGS.notificationJobs,
+      ]);
+
+      return okJson({
+        message: queued.targetCount
+          ? `Notification queued with ${queued.targetCount} selected target(s).`
+          : "Notification queued. Token batches will be prepared in the background.",
+        result: {
+          ...queued,
+          backgroundJob: queued.backgroundJob,
+          job: notificationJobToTracking(queued.job),
+        },
+      });
+    }
+
+    const result = await sendNotificationPayloadLocal(payload, session.email);
+    revalidateCacheTags([
+      CACHE_TAGS.notificationEvents,
+      CACHE_TAGS.notificationJobs,
+    ]);
     return okJson({
       message: "Notification sent.",
-      result: await callEdgeFunction("send-notification", payload),
+      result,
     });
   } catch (error) {
+    if (requestPayload && requestedBy && canPersistFailedAttempt) {
+      try {
+        const failedJob = await persistFailedSendAttempt(requestPayload, requestedBy, error);
+        revalidateCacheTags([
+          CACHE_TAGS.notificationEvents,
+          CACHE_TAGS.notificationJobs,
+        ]);
+        logNotificationFailure("Persisted failed notification attempt", {
+          context: notificationRequestContext(requestPayload),
+          jobId: failedJob.id,
+        });
+      } catch (historyError) {
+        logNotificationFailure("Failed to persist notification failure history", {
+          context: notificationRequestContext(requestPayload),
+          error: errorForLog(historyError),
+        });
+      }
+    }
+
+    logNotificationFailure("Send notification API failed", {
+      context: requestPayload ? notificationRequestContext(requestPayload) : null,
+      error: errorForLog(error),
+    });
     return errorJson(error, "Send notification failed.");
   }
 }
@@ -452,7 +673,7 @@ async function openRouterGeneratedCopy(input: {
 
 export async function handleAdminNotificationGeneratePost(request: Request) {
   try {
-    await requireAdminSession();
+    await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
     const appName = clean(payload.appName) || "App";
     const intent = clean(payload.intent) === "translate" ? "translate" : "generate";
@@ -473,8 +694,9 @@ export async function handleAdminNotificationGeneratePost(request: Request) {
 
 export async function handleAdminNotificationSchedulesPost(request: Request) {
   try {
-    const admin = await requireAdminSession();
+    const admin = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    await assertNotificationAccess(admin, payload);
     const notifications = normalizedNotifications(payload.notifications);
     const scheduleType = clean(payload.scheduleType);
     if (!["once", "daily", "monthly"].includes(scheduleType)) {
@@ -482,17 +704,29 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
     }
 
     const targetType = clean(payload.targetType) === "device" ? "device" : "topic";
-    const targetValues = targetType === "device"
+    let targetValues = targetType === "device"
       ? stringArray(payload.deviceIds || payload.targetValues)
       : notifications.map((item) => `${topicSegment(payload.topicBase)}-${item.topicCode}`);
+    if (
+      targetType === "device" &&
+      !targetValues.length &&
+      (payload.resolveByApp === true || payload.queueByApp === true || clean(payload.queueMode).toLowerCase() === "app")
+    ) {
+      const resolvedDeviceIds = await getActiveDeviceIdsForNotificationTarget(payload, SCHEDULE_DEVICE_TARGET_LIMIT + 1);
+      if (resolvedDeviceIds.length > SCHEDULE_DEVICE_TARGET_LIMIT) {
+        throw badRequest(`Scheduled device targeting supports up to ${SCHEDULE_DEVICE_TARGET_LIMIT} device(s). Use immediate queued send for larger audiences.`);
+      }
+      targetValues = resolvedDeviceIds;
+    }
     if (targetType === "device" && !targetValues.length) {
       throw badRequest("At least one device id is required for device targeting.");
     }
 
     const firstNotification = primaryNotification(notifications);
+    const appId = firstAppId(payload.appId, payload.productAppId, payload.appName);
     const schedule = await prisma.notificationSchedule.create({
       data: {
-        appId: clean(payload.appId) || clean(payload.productAppId) || clean(payload.appName) || null,
+        appId,
         appName: clean(payload.appName) || clean(payload.productAppId) || "unknown_app",
         bundleId: clean(payload.bundleId) || null,
         credentialRef: clean(payload.credentialRef) || null,
@@ -520,6 +754,8 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
       },
     });
 
+    revalidateCacheTags([CACHE_TAGS.notificationSchedules]);
+
     return okJson({
       message: "Notification schedule saved.",
       schedule: notificationScheduleToTracking(schedule),
@@ -531,8 +767,9 @@ export async function handleAdminNotificationSchedulesPost(request: Request) {
 
 export async function handleAdminNotificationSchedulesPatch(request: Request) {
   try {
-    await requireAdminSession();
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    await assertNotificationAccess(session, payload);
     const id = clean(payload.id);
     const status = clean(payload.status);
     if (!id) throw badRequest("Schedule id is required.");
@@ -580,6 +817,8 @@ export async function handleAdminNotificationSchedulesPatch(request: Request) {
       data: updatePayload,
     });
 
+    revalidateCacheTags([CACHE_TAGS.notificationSchedules]);
+
     return okJson({
       message: status ? `Schedule ${status}.` : "Schedule updated.",
       schedule: notificationScheduleToTracking(schedule),
@@ -591,12 +830,15 @@ export async function handleAdminNotificationSchedulesPatch(request: Request) {
 
 export async function handleAdminNotificationSchedulesDelete(request: Request) {
   try {
-    await requireAdminSession();
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    await assertNotificationAccess(session, payload);
     const id = clean(payload.id);
     if (!id) throw badRequest("Schedule id is required.");
 
     await prisma.notificationSchedule.delete({ where: { id } });
+
+    revalidateCacheTags([CACHE_TAGS.notificationSchedules]);
 
     return okJson({
       deleted: id,
@@ -608,25 +850,45 @@ export async function handleAdminNotificationSchedulesDelete(request: Request) {
 }
 
 export async function handleAdminNotificationDispatchPost(request: Request) {
+  let requestPayload: Record<string, unknown> | null = null;
   try {
-    await requireAdminSession();
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    requestPayload = payload;
+    await assertNotificationAccess(session, payload);
+    const result = await dispatchDueNotificationsOnServer({
+      actorEmail: session.email,
+      limit: Number(payload.limit) || undefined,
+      now: clean(payload.now) || undefined,
+      scheduleId: clean(payload.scheduleId) || undefined,
+    });
+    revalidateCacheTags([
+      CACHE_TAGS.notificationEvents,
+      CACHE_TAGS.notificationJobs,
+      CACHE_TAGS.notificationSchedules,
+    ]);
     return okJson({
       message: "Dispatcher finished.",
-      result: await callEdgeFunction("dispatch-notifications", payload),
+      result,
     });
   } catch (error) {
+    logNotificationFailure("Dispatch notifications API failed", {
+      context: requestPayload ? notificationRequestContext(requestPayload) : null,
+      error: errorForLog(error),
+    });
     return errorJson(error, "Dispatch notifications failed.");
   }
 }
 
 export async function handleAdminNotificationTestDevicePost(request: Request) {
   try {
-    await requireAdminSession();
+    const session = await requireConsoleApiSession([...notificationManageRoles]);
     const payload = await parseJsonBody<Record<string, unknown>>(request);
+    await assertNotificationAccess(session, payload);
     const platform = clean(payload.platform) || "android";
     const deviceId = clean(payload.deviceId) || `test-device-${Date.now().toString(36)}`;
-    const appId = clean(payload.appId) || clean(payload.appName) || clean(payload.productAppId) || "test-app";
+    const appId = firstAppId(payload.appId, payload.appName, payload.productAppId) || "test-app";
+    const productAppId = firstAppId(payload.productAppId, appId) || appId;
     const fakeToken = `test-fcm-token-${deviceId}`;
     const tokenHash = createHash("sha256").update(fakeToken).digest("hex");
 
@@ -640,7 +902,7 @@ export async function handleAdminNotificationTestDevicePost(request: Request) {
         locale: "en",
         packageName: platform === "android" ? clean(payload.packageName) || null : null,
         platform,
-        productAppId: clean(payload.productAppId) || appId,
+        productAppId,
         status: "active",
         storeAccountName: clean(payload.storeAccountName) || null,
         storePlatform: clean(payload.storePlatform) || null,
@@ -652,12 +914,14 @@ export async function handleAdminNotificationTestDevicePost(request: Request) {
         bundleId: platform === "ios" ? clean(payload.bundleId) || null : null,
         locale: "en",
         packageName: platform === "android" ? clean(payload.packageName) || null : null,
-        productAppId: clean(payload.productAppId) || appId,
+        productAppId,
         status: "active",
         storeAccountName: clean(payload.storeAccountName) || null,
         storePlatform: clean(payload.storePlatform) || null,
       },
     });
+
+    revalidateCacheTags([CACHE_TAGS.deviceTokens]);
 
     return okJson({
       device: deviceTokenToTracking(device),

@@ -5,17 +5,11 @@ import { getConsoleSession } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
-export default async function LoginRoutePage({
-  searchParams,
-}: {
-  searchParams: Promise<{ next?: string }>;
-}) {
+export default async function LoginRoutePage() {
   const session = await getConsoleSession();
   if (session) {
     redirect("/dashboard");
   }
 
-  const params = await searchParams;
-
-  return <LoginPage nextPath={params.next ?? "/dashboard"} />;
+  return <LoginPage />;
 }

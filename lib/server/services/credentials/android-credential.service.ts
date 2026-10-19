@@ -1,13 +1,17 @@
 import "server-only";
 
 import type { CredentialStatus } from "@prisma/client";
+import { unstable_cache } from "next/cache";
 
+import { CACHE_TAGS } from "@/lib/server/cache-tags";
 import { badRequest, notFound } from "@/lib/server/api/errors";
 import {
   createAndroidCredential,
   deleteAndroidCredential,
   deleteAndroidCredentialsByIds,
   getAndroidCredentials,
+  getAndroidCredentialsPage,
+  getAndroidCredentialStoreRefs,
   getAndroidCredentialsByIds,
   getAndroidCredentialTarget,
   getCurrentAndroidCredentialForStoreProfile,
@@ -19,6 +23,7 @@ import {
   upsertAndroidStoreProfile,
 } from "@/lib/server/repositories/android/store-profile.repository";
 import { runRepositoryTransaction } from "@/lib/server/repositories/common/transaction.repository";
+import { paginatedResult, type PaginationQuery } from "@/lib/server/api/pagination";
 import {
   deleteCredentialVaultSecret,
   getCredentialVaultSecret,
@@ -41,15 +46,70 @@ import {
 } from "@/lib/server/services/credentials/credential.shared";
 import type { CredentialPayload } from "@/lib/server/services/credentials/credential.types";
 import { androidCredentialToMetadata } from "@/lib/tracking/mappers/android";
+import type { StoreMappingStoreOption } from "@/lib/tracking/page-data";
 
 type ExistingAndroidCredential = Awaited<ReturnType<typeof import("@/lib/server/repositories/android/credential.repository").getAndroidCredentialTarget>>;
 
-export async function getAndroidCredentialConfigs(take = 200) {
-  const credentials = await getAndroidCredentials(take);
+const getCachedAndroidCredentialConfigs = unstable_cache(
+  async (take: number) => {
+    const credentials = await getAndroidCredentials(take);
 
-  return {
-    credentials: credentials.map(androidCredentialToMetadata),
-  };
+    return {
+      credentials: credentials.map(androidCredentialToMetadata),
+    };
+  },
+  ["android-credential-configs"],
+  {
+    revalidate: 300,
+    tags: [CACHE_TAGS.androidCredentials],
+  },
+);
+
+export function getAndroidCredentialConfigs(take = 200) {
+  return getCachedAndroidCredentialConfigs(take);
+}
+
+export async function getAndroidCredentialStoreOptions(take = 300): Promise<StoreMappingStoreOption[]> {
+  const credentials = await getAndroidCredentialStoreRefs(take);
+  const options = new Map<string, StoreMappingStoreOption>();
+
+  for (const credential of credentials) {
+    const name =
+      credential.storeProfile?.storeAccountName?.trim() ||
+      credential.storeAccountName?.trim();
+
+    if (!credential.storeProfileId || !name || options.has(credential.storeProfileId)) {
+      continue;
+    }
+
+    options.set(credential.storeProfileId, {
+      id: credential.storeProfileId,
+      name,
+      platform: "android",
+    });
+  }
+
+  return Array.from(options.values()).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
+
+export async function getAndroidCredentialConfigsPage(options: PaginationQuery & {
+  knownTotal?: number;
+  search?: string;
+}) {
+  const [credentials, total] = await getAndroidCredentialsPage({
+    includeTotal: options.knownTotal === undefined,
+    search: options.search,
+    skip: options.skip,
+    take: options.take,
+  });
+
+  return paginatedResult(
+    credentials.map(androidCredentialToMetadata),
+    total ?? options.knownTotal ?? credentials.length,
+    options,
+  );
 }
 
 export async function getAndroidCredentialSecret(input: {
@@ -224,8 +284,7 @@ async function updateAndroidCredentialMetadata(input: {
     const profile =
       input.payload.storeAccountName !== undefined ||
       input.payload.linkStore !== undefined ||
-      input.payload.avatarUrl !== undefined ||
-      input.payload.supabaseUserId !== undefined
+      input.payload.avatarUrl !== undefined
         ? await updateAndroidStoreProfileMetadata(tx, input.target.storeProfileId, {
             ...profileMetadataPatch(input.payload),
             storeAccountName: patchStoreAccountName,

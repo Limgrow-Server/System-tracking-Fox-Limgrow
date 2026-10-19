@@ -1,18 +1,20 @@
 import "server-only";
 
+import { CACHE_TAGS, revalidateCacheTags } from "@/lib/server/cache-tags";
 import { requireAdminSession } from "@/lib/server/api/auth";
 import { badRequest } from "@/lib/server/api/errors";
+import { paginatedJson, paginationFromSearchParams } from "@/lib/server/api/pagination";
 import { errorJson, okJson } from "@/lib/server/api/responses";
 import {
   deleteAndroidCredentialConfig,
-  getAndroidCredentialConfigs,
+  getAndroidCredentialConfigsPage,
   getAndroidCredentialSecret,
   saveAndroidCredentialConfig,
   updateAndroidCredentialConfig,
 } from "@/lib/server/services/credentials/android-credential.service";
 import {
   deleteIosCredentialConfig,
-  getIosCredentialConfigs,
+  getIosCredentialConfigsPage,
   getIosCredentialSecret,
   saveIosCredentialConfig,
   updateIosCredentialConfig,
@@ -21,6 +23,7 @@ import {
   cleanText,
   parseCredentialPayload,
 } from "@/lib/server/services/credentials/credential.shared";
+import { assertCredentialSecretUnlocked } from "@/lib/server/services/credentials/credential-secret-otp.service";
 import type {
   CredentialPayload,
   CredentialPlatform,
@@ -28,6 +31,15 @@ import type {
 
 function platformFromSearch(value: string): CredentialPlatform | null {
   return value === "android" || value === "ios" ? value : null;
+}
+
+function searchText(value: string | null) {
+  return value?.trim() || undefined;
+}
+
+function knownTotalFromSearch(value: string | null) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function platformFromCredentialPayload(payload: CredentialPayload): CredentialPlatform {
@@ -42,7 +54,7 @@ function platformFromCredentialPayload(payload: CredentialPayload): CredentialPl
 
 export async function handleAdminCredentialsGet(request: Request) {
   try {
-    await requireAdminSession();
+    const admin = await requireAdminSession();
 
     const url = new URL(request.url);
     const platform = platformFromSearch(cleanText(url.searchParams.get("platform")));
@@ -57,6 +69,8 @@ export async function handleAdminCredentialsGet(request: Request) {
         credentialRef: cleanText(url.searchParams.get("credentialRef")),
       };
 
+      await assertCredentialSecretUnlocked(admin);
+
       return okJson(platform === "android" ? await getAndroidCredentialSecret(input) : await getIosCredentialSecret(input));
     }
 
@@ -64,7 +78,18 @@ export async function handleAdminCredentialsGet(request: Request) {
       throw badRequest("Credential platform is required.");
     }
 
-    return okJson(platform === "android" ? await getAndroidCredentialConfigs() : await getIosCredentialConfigs());
+    const pagination = paginationFromSearchParams(url.searchParams);
+    const query = {
+      ...pagination,
+      knownTotal: knownTotalFromSearch(url.searchParams.get("knownTotal")),
+      search: searchText(url.searchParams.get("search")),
+    };
+
+    return paginatedJson(
+      platform === "android"
+        ? await getAndroidCredentialConfigsPage(query)
+        : await getIosCredentialConfigsPage(query)
+    );
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }
@@ -74,11 +99,16 @@ export async function handleAdminCredentialsPost(request: Request) {
   try {
     const admin = await requireAdminSession();
     const payload = await parseCredentialPayload(request);
-    return okJson(
-      platformFromCredentialPayload(payload) === "android"
-        ? await saveAndroidCredentialConfig(payload, admin.email)
-        : await saveIosCredentialConfig(payload, admin.email)
-    );
+    const platform = platformFromCredentialPayload(payload);
+    const result = platform === "android"
+      ? await saveAndroidCredentialConfig(payload, admin.email)
+      : await saveIosCredentialConfig(payload, admin.email);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidCredentials
+        : CACHE_TAGS.iosCredentials,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }
@@ -88,11 +118,16 @@ export async function handleAdminCredentialsPatch(request: Request) {
   try {
     const admin = await requireAdminSession();
     const payload = await parseCredentialPayload(request);
-    return okJson(
-      platformFromCredentialPayload(payload) === "android"
-        ? await updateAndroidCredentialConfig(payload, admin.email)
-        : await updateIosCredentialConfig(payload, admin.email)
-    );
+    const platform = platformFromCredentialPayload(payload);
+    const result = platform === "android"
+      ? await updateAndroidCredentialConfig(payload, admin.email)
+      : await updateIosCredentialConfig(payload, admin.email);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidCredentials
+        : CACHE_TAGS.iosCredentials,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }
@@ -102,11 +137,16 @@ export async function handleAdminCredentialsDelete(request: Request) {
   try {
     await requireAdminSession();
     const payload = await parseCredentialPayload(request);
-    return okJson(
-      platformFromCredentialPayload(payload) === "android"
-        ? await deleteAndroidCredentialConfig(payload)
-        : await deleteIosCredentialConfig(payload)
-    );
+    const platform = platformFromCredentialPayload(payload);
+    const result = platform === "android"
+      ? await deleteAndroidCredentialConfig(payload)
+      : await deleteIosCredentialConfig(payload);
+    revalidateCacheTags([
+      platform === "android"
+        ? CACHE_TAGS.androidCredentials
+        : CACHE_TAGS.iosCredentials,
+    ]);
+    return okJson(result);
   } catch (error) {
     return errorJson(error, "Credential operation failed.");
   }

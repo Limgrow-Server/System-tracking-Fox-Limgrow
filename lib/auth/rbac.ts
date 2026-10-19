@@ -18,10 +18,9 @@ export const routeRoles: Record<string, StaffRole[]> = {
   "/dashboard": ["Admin", "Dev", "Marketing"],
   "/store-mapping": ["Admin"],
   "/configs": ["Admin"],
+  "/events": ["Admin", "Dev", "Marketing"],
+  "/analytics": ["Admin", "Dev", "Marketing"],
   "/iap": ["Admin", "Dev", "Marketing"],
-  "/comments": ["Admin", "Marketing"],
-  "/review": ["Admin", "Marketing"],
-  "/reply": ["Admin", "Marketing"],
   "/users": ["Admin"],
 };
 

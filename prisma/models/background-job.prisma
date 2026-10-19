@@ -1,0 +1,30 @@
+model BackgroundJob {
+  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  memberId         String              @map("member_id") @db.Uuid
+  createdBy        String              @map("created_by")
+  type             BackgroundJobType
+  status           BackgroundJobStatus @default(QUEUED)
+  title            String
+  description      String?             @db.Text
+  appId            String?             @map("app_id")
+  appName          String?             @map("app_name")
+  platform         String?
+  storeAccountName String?             @map("store_account_name")
+  sourceJobId      String?             @map("source_job_id") @db.Uuid
+  sourceRunIds     String[]            @default([]) @map("source_run_ids")
+  progressCurrent  Int                 @default(0) @map("progress_current")
+  progressTotal    Int?                @map("progress_total")
+  metadata         Json                @default("{}")
+  lastError        String?             @map("last_error") @db.Text
+  startedAt        DateTime?           @map("started_at") @db.Timestamptz(6)
+  finishedAt       DateTime?           @map("finished_at") @db.Timestamptz(6)
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([memberId, status, updatedAt], map: "background_jobs_member_status_updated_idx")
+  @@index([memberId, updatedAt], map: "background_jobs_member_updated_idx")
+  @@index([status, updatedAt], map: "background_jobs_status_updated_idx")
+  @@index([type, status, updatedAt], map: "background_jobs_type_status_updated_idx")
+  @@index([sourceJobId], map: "background_jobs_source_job_idx")
+  @@map("background_jobs")
+}

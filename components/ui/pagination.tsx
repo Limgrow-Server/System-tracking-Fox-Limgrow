@@ -3,6 +3,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ChevronLeftIcon, ChevronRightIcon, MoreHorizontalIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 
 function Pagination({ className, ...props }: React.ComponentProps<"nav">) {
   return (
@@ -63,9 +64,10 @@ function PaginationLink({
 
 function PaginationPrevious({
   className,
+  loading = false,
   text = "Previous",
   ...props
-}: React.ComponentProps<typeof PaginationLink> & { text?: string }) {
+}: React.ComponentProps<typeof PaginationLink> & { loading?: boolean; text?: string }) {
   return (
     <PaginationLink
       aria-label="Go to previous page"
@@ -73,7 +75,7 @@ function PaginationPrevious({
       className={cn("pl-1.5!", className)}
       {...props}
     >
-      <ChevronLeftIcon data-icon="inline-start" />
+      {loading ? <Spinner data-icon="inline-start" className="size-4" /> : <ChevronLeftIcon data-icon="inline-start" />}
       <span className="hidden sm:block">{text}</span>
     </PaginationLink>
   )
@@ -81,9 +83,10 @@ function PaginationPrevious({
 
 function PaginationNext({
   className,
+  loading = false,
   text = "Next",
   ...props
-}: React.ComponentProps<typeof PaginationLink> & { text?: string }) {
+}: React.ComponentProps<typeof PaginationLink> & { loading?: boolean; text?: string }) {
   return (
     <PaginationLink
       aria-label="Go to next page"
@@ -92,7 +95,7 @@ function PaginationNext({
       {...props}
     >
       <span className="hidden sm:block">{text}</span>
-      <ChevronRightIcon data-icon="inline-end" />
+      {loading ? <Spinner data-icon="inline-end" className="size-4" /> : <ChevronRightIcon data-icon="inline-end" />}
     </PaginationLink>
   )
 }

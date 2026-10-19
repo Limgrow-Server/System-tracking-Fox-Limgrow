@@ -1,0 +1,25 @@
+model MobileIngestEvent {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  endpoint      String
+  platform      String?
+  action        String?
+  dedupeKey     String    @unique @map("dedupe_key")
+  payload       Json
+  status        String    @default("queued")
+  attemptCount  Int       @default(0) @map("attempt_count")
+  maxAttempts   Int       @default(5) @map("max_attempts")
+  lockedAt      DateTime? @map("locked_at") @db.Timestamptz(6)
+  lockedBy      String?   @map("locked_by")
+  nextAttemptAt DateTime  @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  processedAt   DateTime? @map("processed_at") @db.Timestamptz(6)
+  resultPayload Json      @default("{}") @map("result_payload")
+  lastError     String?   @map("last_error") @db.Text
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, nextAttemptAt], map: "mobile_ingest_events_status_next_idx")
+  @@index([endpoint, status, nextAttemptAt], map: "mobile_ingest_events_endpoint_status_next_idx")
+  @@index([lockedAt], map: "mobile_ingest_events_locked_idx")
+  @@index([updatedAt], map: "mobile_ingest_events_updated_idx")
+  @@map("mobile_ingest_events")
+}

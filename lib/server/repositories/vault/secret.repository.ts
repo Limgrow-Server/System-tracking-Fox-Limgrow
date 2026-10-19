@@ -3,23 +3,19 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/prisma";
-import {
-  deleteVaultSecret,
-  getVaultSecret,
-  upsertVaultSecret,
-} from "@/lib/security/supabase-vault";
+import { deleteSecret, getSecret, upsertSecret } from "@/lib/security/postgres-secrets";
 
-type VaultUpsertInput = Parameters<typeof upsertVaultSecret>[1];
+type VaultUpsertInput = Parameters<typeof upsertSecret>[1];
 type VaultClient = Prisma.TransactionClient;
 
 export function getCredentialVaultSecret(vaultSecretId: string | null) {
-  return getVaultSecret(prisma, vaultSecretId);
+  return getSecret(prisma, vaultSecretId);
 }
 
 export function upsertCredentialVaultSecret(client: VaultClient, input: VaultUpsertInput) {
-  return upsertVaultSecret(client, input);
+  return upsertSecret(client, input);
 }
 
 export function deleteCredentialVaultSecret(client: VaultClient, vaultSecretId: string | null) {
-  return deleteVaultSecret(client, vaultSecretId);
+  return deleteSecret(client, vaultSecretId);
 }

@@ -3,9 +3,9 @@ import { getReplyStoreListPageDataLoader } from "@/lib/server/page-loaders/revie
 import { ReplyStoreListPage } from "@/components/tracking/pages/reviews/reply-store-list-page";
 
 export default async function ReplyRoutePage() {
-  await requireConsoleSession(["Admin", "Marketing"]);
+  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
-  const data = await getReplyStoreListPageDataLoader();
+  const data = await getReplyStoreListPageDataLoader(session);
 
   return <ReplyStoreListPage data={data} />;
 }

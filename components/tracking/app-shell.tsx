@@ -1,40 +1,51 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Apple,
-  Bell,
+  Activity,
+  BellRing,
   Cable,
-  CalendarClock,
+  ChartSpline,
   ChevronRight,
   Command,
   CreditCard,
   Gauge,
-  History,
+  ListChecks,
   LogOut,
   Menu,
-  MessageSquareReply,
-  MessageSquareText,
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
   Search,
-  Send,
   Smartphone,
   UserCog,
   UsersRound,
-  X,
 } from "lucide-react";
-import { ReactNode, useState } from "react";
-import { toast } from "sonner";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import {
+  Command as CommandMenu,
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import type { ConsoleSession } from "@/lib/auth/rbac";
+import { showToast } from "@/lib/client/toast";
 import { cn } from "@/lib/utils";
 import type { StaffRole } from "@/lib/tracking/types";
 
@@ -58,7 +69,7 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         roles: ["Admin", "Dev", "Marketing"],
       },
       {
-        title: "Users",
+        title: "User Management",
         href: "/users",
         icon: <UsersRound size={17} />,
         roles: ["Admin"],
@@ -96,6 +107,18 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         roles: ["Admin"],
         children: [
           {
+            title: "Event catalog & GA4",
+            href: "/configs/events",
+            icon: <Activity size={15} />,
+            roles: ["Admin"],
+          },
+          {
+            title: "Notification topics",
+            href: "/configs/notifications",
+            icon: <BellRing size={15} />,
+            roles: ["Admin"],
+          },
+          {
             title: "Android",
             href: "/configs/android",
             icon: <Smartphone size={15} />,
@@ -110,30 +133,16 @@ const navGroups: { title: string; items: NavItem[] }[] = [
         ],
       },
       {
-        title: "Notifications",
-        href: "/notifications/send",
-        icon: <Bell size={17} />,
-        roles: ["Admin"],
-        children: [
-          {
-            title: "Send",
-            href: "/notifications/send",
-            icon: <Send size={15} />,
-            roles: ["Admin"],
-          },
-          {
-            title: "Schedules",
-            href: "/notifications/schedules",
-            icon: <CalendarClock size={15} />,
-            roles: ["Admin"],
-          },
-          {
-            title: "History",
-            href: "/notifications/history",
-            icon: <History size={15} />,
-            roles: ["Admin"],
-          },
-        ],
+        title: "Incoming events",
+        href: "/events",
+        icon: <ListChecks size={17} />,
+        roles: ["Admin", "Dev", "Marketing"],
+      },
+      {
+        title: "Event analytics",
+        href: "/analytics/events",
+        icon: <ChartSpline size={17} />,
+        roles: ["Admin", "Dev", "Marketing"],
       },
     ],
   },
@@ -148,24 +157,57 @@ const navGroups: { title: string; items: NavItem[] }[] = [
       },
     ],
   },
-  {
-    title: "Comments & Reply",
-    items: [
-      {
-        title: "Comments",
-        href: "/comments",
-        icon: <MessageSquareText size={17} />,
-        roles: ["Admin", "Marketing"],
-      },
-      {
-        title: "Reply",
-        href: "/reply",
-        icon: <MessageSquareReply size={17} />,
-        roles: ["Admin", "Marketing"],
-      },
-    ],
-  },
 ];
+
+function visibleNavItems(items: NavItem[], role: StaffRole): NavItem[] {
+  return items
+    .filter((item) => item.roles.includes(role))
+    .map((item) => ({
+      ...item,
+      children: item.children
+        ? visibleNavItems(item.children, role)
+        : undefined,
+    }))
+    .filter((item) => !item.children || item.children.length > 0);
+}
+
+function visibleNavGroups(role: StaffRole) {
+  return navGroups
+    .map((group) => ({
+      ...group,
+      items: visibleNavItems(group.items, role),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function searchableItems(role: StaffRole) {
+  const items = visibleNavGroups(role).flatMap((group) =>
+    group.items.flatMap((item) => [
+      { ...item, group: group.title },
+      ...(item.children ?? []).map((child) => ({
+        ...child,
+        group: item.title,
+      })),
+    ]),
+  );
+
+  return Array.from(new Map(items.map((item) => [item.href, item])).values());
+}
+
+function NavPendingDot({ className }: { className?: string }) {
+  const { pending } = useLinkStatus();
+
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "ml-auto size-1.5 shrink-0 rounded-full bg-current opacity-0 transition-opacity delay-100",
+        pending && "animate-pulse opacity-70",
+        className,
+      )}
+    />
+  );
+}
 
 function SidebarContent({
   role,
@@ -185,6 +227,7 @@ function SidebarContent({
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>(
     {},
   );
+  const groups = visibleNavGroups(role);
 
   return (
     <div className="flex h-full flex-col">
@@ -226,11 +269,11 @@ function SidebarContent({
 
       <div
         className={cn(
-          "flex-1 overflow-y-auto p-3 transition-all duration-300",
+          "flex-1 overflow-y-auto overscroll-contain p-3 transition-all duration-300",
           collapsed ? "space-y-3 px-2" : "space-y-5",
         )}
       >
-        {navGroups.map((group) => (
+        {groups.map((group) => (
           <div key={group.title}>
             {!collapsed ? (
               <div className="mb-2 px-2 text-xs font-medium text-muted-foreground">
@@ -240,27 +283,26 @@ function SidebarContent({
             <div className="space-y-1">
               {group.items.map((item) => {
                 const hasChildren = Boolean(item.children?.length);
+                const activeChildHref = hasChildren
+                  ? item
+                      .children!.filter(
+                        (child) =>
+                          pathname === child.href ||
+                          pathname.startsWith(`${child.href}/`),
+                      )
+                      .sort((a, b) => b.href.length - a.href.length)[0]?.href
+                  : null;
                 const active = hasChildren
-                  ? item.children!.some(
-                      (c) =>
-                        pathname === c.href ||
-                        pathname.startsWith(`${c.href}/`),
-                    )
+                  ? Boolean(activeChildHref)
                   : pathname === item.href ||
                     pathname.startsWith(`${item.href}/`);
-                const allowed = item.roles.includes(role);
                 const expanded = hasChildren
                   ? !collapsed && (expandedItems[item.href] ?? active)
                   : false;
 
                 if (hasChildren) {
                   return (
-                    <div
-                      key={item.href}
-                      className={cn(
-                        !allowed && "pointer-events-none opacity-35",
-                      )}
-                    >
+                    <div key={item.href}>
                       <button
                         type="button"
                         onClick={() => {
@@ -276,7 +318,6 @@ function SidebarContent({
                           }));
                         }}
                         aria-expanded={expanded}
-                        aria-disabled={!allowed}
                         title={item.title}
                         className={cn(
                           "flex h-9 w-full items-center rounded-lg text-sm font-medium transition-all duration-200",
@@ -333,8 +374,7 @@ function SidebarContent({
                               ?.filter((child) => child.roles.includes(role))
                               .map((child) => {
                                 const childActive =
-                                  pathname === child.href ||
-                                  pathname.startsWith(`${child.href}/`);
+                                  child.href === activeChildHref;
 
                                 return (
                                   <Link
@@ -347,11 +387,15 @@ function SidebarContent({
                                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
                                     )}
+                                    aria-current={
+                                      childActive ? "page" : undefined
+                                    }
                                   >
                                     {child.icon}
                                     <span className="truncate">
                                       {child.title}
                                     </span>
+                                    <NavPendingDot />
                                   </Link>
                                 );
                               })}
@@ -365,9 +409,8 @@ function SidebarContent({
                 return (
                   <Link
                     key={item.href}
-                    href={allowed ? item.href : "#"}
+                    href={item.href}
                     onClick={onNavigate}
-                    aria-disabled={!allowed}
                     title={item.title}
                     className={cn(
                       "flex h-9 items-center rounded-lg text-sm font-medium transition-all duration-200",
@@ -377,8 +420,8 @@ function SidebarContent({
                       active
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                      !allowed && "pointer-events-none opacity-35",
                     )}
+                    aria-current={active ? "page" : undefined}
                   >
                     <span
                       className={cn(
@@ -391,13 +434,18 @@ function SidebarContent({
                         <span className="truncate">{item.title}</span>
                       ) : null}
                     </span>
-                    {!collapsed && item.badge ? (
-                      <Badge
-                        variant="secondary"
-                        className="h-5 rounded-md px-1.5 text-[11px]"
-                      >
-                        {item.badge}
-                      </Badge>
+                    {!collapsed ? (
+                      <span className="flex items-center gap-2">
+                        {item.badge ? (
+                          <Badge
+                            variant="secondary"
+                            className="h-5 rounded-md px-1.5 text-[11px]"
+                          >
+                            {item.badge}
+                          </Badge>
+                        ) : null}
+                        <NavPendingDot />
+                      </span>
                     ) : null}
                   </Link>
                 );
@@ -481,24 +529,45 @@ export function AppShell({
   session: ConsoleSession;
 }) {
   const role = session.role;
+  const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const searchItems = useMemo(() => searchableItems(role), [role]);
+
+  useEffect(() => {
+    function openSearch(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== "k" || (!event.metaKey && !event.ctrlKey))
+        return;
+      event.preventDefault();
+      setSearchOpen((current) => !current);
+    }
+
+    document.addEventListener("keydown", openSearch);
+    return () => document.removeEventListener("keydown", openSearch);
+  }, []);
 
   async function logout() {
     const response = await fetch("/api/auth/logout", { method: "POST" });
     if (!response.ok) {
-      toast.error("Sign out failed.");
+      await showToast("error", "Sign out failed.");
       return;
     }
 
-    toast.success("Signed out.");
+    await showToast("success", "Signed out.");
     router.replace("/login");
     router.refresh();
   }
 
   return (
     <div className="min-h-svh bg-muted/30 text-foreground">
+      <a
+        href="#main-content"
+        className="fixed left-3 top-3 z-50 -translate-y-20 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-transform focus:translate-y-0"
+      >
+        Skip to content
+      </a>
       <div
         className={cn(
           "grid min-h-svh transition-[grid-template-columns] duration-300 ease-in-out",
@@ -507,7 +576,7 @@ export function AppShell({
             : "lg:grid-cols-[16rem_1fr]",
         )}
       >
-        <aside className="sticky top-0 hidden h-svh self-start overflow-hidden border-r bg-sidebar lg:block">
+        <aside className="sticky top-0 hidden h-svh self-start overflow-hidden overscroll-contain border-r bg-sidebar lg:block">
           <SidebarContent
             role={role}
             session={session}
@@ -521,20 +590,23 @@ export function AppShell({
             <div className="flex h-full items-center gap-3 px-4">
               <Sheet open={open} onOpenChange={setOpen}>
                 <SheetTrigger asChild>
-                  <Button variant="outline" size="icon" className="lg:hidden">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="lg:hidden"
+                    aria-label="Open navigation"
+                  >
                     <Menu size={16} />
                   </Button>
                 </SheetTrigger>
-                <SheetContent side="left" className="w-72 p-0">
-                  <div className="absolute right-3 top-3 z-10">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => setOpen(false)}
-                    >
-                      <X size={15} />
-                    </Button>
-                  </div>
+                <SheetContent
+                  side="left"
+                  className="w-72 gap-0 bg-sidebar p-0 sm:max-w-72 lg:hidden"
+                >
+                  <SheetTitle className="sr-only">Navigation</SheetTitle>
+                  <SheetDescription className="sr-only">
+                    Primary navigation for the administration console.
+                  </SheetDescription>
                   <SidebarContent
                     role={role}
                     session={session}
@@ -561,29 +633,67 @@ export function AppShell({
 
               <div className="hidden h-6 w-px bg-border lg:block" />
 
-              <label className="relative min-w-0 flex-1 md:max-w-md">
-                <Search
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                  size={15}
-                />
-                <Input
-                  className="h-9 bg-muted/40 pl-9 pr-16"
-                  placeholder="Search app mappings, stores, credentials..."
-                />
-                <span className="absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground sm:flex">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 min-w-0 flex-1 justify-start bg-muted/40 text-muted-foreground md:max-w-md"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Search size={15} />
+                <span className="truncate">Search pages and operations</span>
+                <span className="ml-auto hidden items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground sm:flex">
                   <Command size={11} /> K
                 </span>
-              </label>
-
-              <Button variant="outline" size="icon">
-                <Bell size={16} />
               </Button>
             </div>
           </header>
 
-          <main className="flex-1 p-4 sm:p-6">{children}</main>
+          <main
+            id="main-content"
+            key={pathname}
+            tabIndex={-1}
+            className="mx-auto w-full max-w-[1600px] flex-1 p-4 outline-none motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 sm:p-6"
+          >
+            {children}
+          </main>
         </div>
       </div>
+
+      <CommandDialog
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        title="Navigate the tracking console"
+        description="Search pages and operational tools."
+        showCloseButton
+      >
+        <CommandMenu>
+          <CommandInput
+            autoFocus
+            placeholder="Search pages and operations..."
+          />
+          <CommandList>
+            <CommandEmpty>No matching page found.</CommandEmpty>
+            <CommandGroup heading="Navigation">
+              {searchItems.map((item) => (
+                <CommandItem
+                  key={item.href}
+                  value={`${item.title} ${item.group}`}
+                  onSelect={() => {
+                    setSearchOpen(false);
+                    router.push(item.href);
+                  }}
+                >
+                  {item.icon}
+                  <span className="flex-1">{item.title}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {item.group}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </CommandMenu>
+      </CommandDialog>
     </div>
   );
 }

@@ -190,7 +190,7 @@ Plaintext secret must never be stored in app tables.
 All Edge Functions should use:
 
 ```text
-supabase/functions/_shared/edge-config.ts
+system-tracking-server/supabase-legacy/functions/_shared/edge-config.ts
 ```
 
 Main helpers:

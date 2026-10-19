@@ -9,10 +9,10 @@ export default async function ReplyStoreRoutePage({
 }: {
   params: Promise<{ storeProfileId: string }>;
 }) {
-  await requireConsoleSession(["Admin", "Marketing"]);
+  const session = await requireConsoleSession(["Admin", "Dev", "Marketing"]);
 
   const { storeProfileId } = await params;
-  const data = await getReplyConfigPageDataLoader(storeProfileId);
+  const data = await getReplyConfigPageDataLoader(storeProfileId, session);
   if (!data) notFound();
 
   return <ReplyConfigPage data={data} />;

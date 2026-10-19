@@ -38,7 +38,6 @@ export function profileMetadata(payload: CredentialPayload) {
   return {
     linkStore: nullableText(payload.linkStore),
     avatarUrl: nullableText(payload.avatarUrl),
-    supabaseUserId: payload.supabaseUserId === undefined ? undefined : nullableText(payload.supabaseUserId),
   };
 }
 
@@ -46,7 +45,6 @@ export function profileMetadataPatch(payload: CredentialPayload) {
   return {
     linkStore: payload.linkStore === undefined ? undefined : nullableText(payload.linkStore),
     avatarUrl: payload.avatarUrl === undefined ? undefined : nullableText(payload.avatarUrl),
-    supabaseUserId: payload.supabaseUserId === undefined ? undefined : nullableText(payload.supabaseUserId),
   };
 }
 
@@ -67,7 +65,12 @@ export async function parseCredentialPayload(request: Request): Promise<Credenti
   const contentType = request.headers.get("content-type") ?? "";
 
   if (contentType.toLowerCase().includes("multipart/form-data")) {
-    const form = await request.formData();
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      throw badRequest("Invalid multipart form data.");
+    }
     const secretFile = form.get("secretFile");
 
     return {
@@ -87,7 +90,6 @@ export async function parseCredentialPayload(request: Request): Promise<Credenti
       projectId: formText(form, "projectId"),
       linkStore: formText(form, "linkStore"),
       avatarUrl: formText(form, "avatarUrl"),
-      supabaseUserId: formText(form, "supabaseUserId"),
       status: formText(form, "status") as CredentialPayload["status"],
       description: formText(form, "description"),
     };
